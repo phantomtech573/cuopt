@@ -1322,7 +1322,7 @@ def compile_model_treelite(
                     r"!\(data\[\d+\]\.missing != -1\)", "false", content
                 )
 
-                # If log_transform is used, wrap return values with exp()
+                # If log_transform is used, modify postprocess to apply exp/offset
                 if log_transform:
                     offset_literal = f"{log_transform_offset:.12g}"
                     if log_transform_offset != 0:
@@ -1348,26 +1348,35 @@ def compile_model_treelite(
                                 + content[insert_pos:]
                             )
 
-                    # Replace "return sum;" with "return std::exp(sum) - offset;"
-                    # Match various return patterns in the predict function
-                    content = re.sub(
-                        r"(\s+)return\s+(sum|result|pred)\s*;",
-                        rf"\1return std::exp(\2){offset_expr};",
-                        content,
+                    postprocess_pattern = re.compile(
+                        r"void\s+(\w+)::postprocess\s*\(\s*double\*\s*result\s*\)\s*\{\n.*?\n\}",
+                        re.DOTALL,
                     )
 
-                    # Also handle single-line returns like "return value;"
-                    content = re.sub(
-                        r"(\s+)return\s+([\w\.]+)\s*;",
-                        lambda m: f"{m.group(1)}return std::exp({m.group(2)}){offset_expr};"
-                        if m.group(2) not in ["true", "false", "0", "1"]
-                        else m.group(0),
-                        content,
+                    def replace_postprocess(match: re.Match) -> str:
+                        class_name = match.group(1)
+                        return (
+                            f"void {class_name}::postprocess(double* result)\n"
+                            "{\n"
+                            "  for (int i = 0; i < N_TARGET; ++i) {\n"
+                            f"    result[i] = std::exp(result[i]){offset_expr};\n"
+                            "  }\n"
+                            "}"
+                        )
+
+                    updated_content = postprocess_pattern.sub(
+                        replace_postprocess, content, count=1
                     )
 
-                    print(
-                        "  Added exp() transformation to convert log-space predictions to original space"
-                    )
+                    if updated_content != content:
+                        content = updated_content
+                        print(
+                            "  Updated postprocess to convert log-space predictions to original space"
+                        )
+                    else:
+                        print(
+                            "  Warning: Failed to update postprocess for log-transform"
+                        )
 
                 if content != original_content:
                     with open(main_path, "w") as f:
