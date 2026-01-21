@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
@@ -64,7 +64,16 @@ import pandas as pd
 from typing import List, Dict, Any, Optional
 
 
-SUPPORTED_ALGORITHMS = ["FP", "PDLP", "CP", "FJ", "CPUFJ", "BB", "DS"]
+SUPPORTED_ALGORITHMS = [
+    "FP",
+    "PDLP",
+    "CP",
+    "FJ",
+    "CPUFJ",
+    "BB",
+    "DS",
+    "BOUNDS_STRENGTH",
+]
 
 
 def parse_value(value_str: str) -> Any:
@@ -401,6 +410,8 @@ def parse_single_line_logs(
                 # Remove trailing commas
                 value = value.rstrip(",")
                 entry[key] = parse_value(value)
+                if key == "runtime":
+                    entry["runtime_ms"] = entry["runtime"] * 1000.0
 
         # Only add entry if it has more than just the filename
         if len(entry) > 1:
@@ -440,6 +451,18 @@ def parse_ds_logs(log_files: List[str]) -> List[Dict[str, Any]]:
     """Parse Dual Simplex feature logs."""
     return parse_single_line_logs(
         log_files, "DS_FEATURES:", "DS (Dual Simplex)", "DS_FEATURES:"
+    )
+
+
+def parse_bounds_strengthening_logs(
+    log_files: List[str],
+) -> List[Dict[str, Any]]:
+    """Parse Bounds Strengthening feature and result logs."""
+    return parse_single_line_logs(
+        log_files,
+        "BOUNDS_STRENGTH_FEATURES:",
+        "Bounds Strengthening",
+        "BOUNDS_STRENGTH_FEATURES:",
     )
 
 
@@ -495,6 +518,7 @@ Supported Algorithms:
   CPUFJ  - CPU Feasibility Jump (parses CPUFJ_FEATURES single-line logs)
   BB     - Branch and Bound (parses BB_NODE_FEATURES single-line logs)
   DS     - Dual Simplex (parses DS_FEATURES single-line logs)
+  BOUNDS_STRENGTH - Bounds Strengthening (parses BOUNDS_STRENGTHENING_FEATURES and BOUNDS_STRENGTHENING_RESULT logs)
 
 Examples:
   python determinism_logs_parse.py logs/ --algorithm FP -o fp_data.feather
@@ -504,6 +528,7 @@ Examples:
   python determinism_logs_parse.py logs/ --algorithm CPUFJ -o cpufj_data.feather
   python determinism_logs_parse.py logs/ --algorithm BB -o bb_data.feather
   python determinism_logs_parse.py logs/ --algorithm DS -o ds_data.feather
+  python determinism_logs_parse.py logs/ --algorithm BOUNDS_STRENGTH -o bounds_strengthening_data.feather
 
   # Limit to first 10 files for testing
   python determinism_logs_parse.py logs/ --algorithm FP --max-files 10
@@ -580,6 +605,8 @@ Examples:
         entries = parse_bb_logs(log_files)
     elif args.algorithm == "DS":
         entries = parse_ds_logs(log_files)
+    elif args.algorithm == "BOUNDS_STRENGTH":
+        entries = parse_bounds_strengthening_logs(log_files)
     else:
         print(f"Error: Unsupported algorithm: {args.algorithm}")
         return 1
@@ -607,6 +634,10 @@ Examples:
         elif args.algorithm == "DS":
             print(
                 "Make sure your logs contain DS_FEATURES: lines with key=value pairs"
+            )
+        elif args.algorithm == "BOUNDS_STRENGTH":
+            print(
+                "Make sure your logs contain BOUNDS_STRENGTH_FEATURES and BOUNDS_STRENGTH_RESULT lines"
             )
         return 1
 

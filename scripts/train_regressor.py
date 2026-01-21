@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
@@ -146,6 +146,7 @@ FEATURES_TO_EXCLUDE = [
     "iters",
     "nnz/s",
     "nnz/iter",
+    "runtime",
 ]
 
 # Alternatively, specify ONLY the features you want to use
@@ -779,6 +780,7 @@ def evaluate_model(
     log_transform: bool = False,
     y_train_original: pd.Series = None,
     y_test_original: pd.Series = None,
+    log_transform_offset: float = 0.0,
 ) -> Tuple[float, float]:
     """Evaluate model and print metrics. Returns (train_r2, test_r2).
 
@@ -789,6 +791,7 @@ def evaluate_model(
         log_transform: If True, predictions are in log-space and need inverse transform
         y_train_original: Original (non-log) training targets (if log_transform=True)
         y_test_original: Original (non-log) test targets (if log_transform=True)
+        log_transform_offset: Constant added before log transform (if log_transform=True)
     """
     # Cross-validation on training set (skip if using early stopping)
     if not skip_cv:
@@ -858,7 +861,7 @@ def evaluate_model(
 
                     # Predict and transform back
                     y_pred_log = model_fold.predict(X_val_fold)
-                    y_pred_original = np.exp(y_pred_log)
+                    y_pred_original = np.exp(y_pred_log) - log_transform_offset
 
                     # Compute metrics in original space
                     mape = (
@@ -909,9 +912,9 @@ def evaluate_model(
     # If log-transformed, also compute metrics in original space
     if log_transform:
         # Inverse transform predictions
-        y_train_pred_original = np.exp(y_train_pred)
+        y_train_pred_original = np.exp(y_train_pred) - log_transform_offset
         y_test_pred_log = model.predict(X_test)
-        y_test_pred_original = np.exp(y_test_pred_log)
+        y_test_pred_original = np.exp(y_test_pred_log) - log_transform_offset
 
         # Metrics in log-space
         train_mse_log = mean_squared_error(y_train, y_train_pred)
@@ -1101,6 +1104,7 @@ def compile_model_treelite(
     feature_names: List[str] = None,
     model_name: str = None,
     log_transform: bool = False,
+    log_transform_offset: float = 0.0,
 ) -> None:
     """Compile XGBoost/LightGBM model to C source files using TL2cgen.
 
@@ -1116,6 +1120,7 @@ def compile_model_treelite(
         feature_names: List of feature names in expected order (optional)
         model_name: Name prefix for functions (optional, derived from training file)
         log_transform: Whether model predicts in log-space (will add exp() wrapper)
+        log_transform_offset: Constant added before log transform (if log_transform=True)
     """
     if regressor_type not in ["xgboost", "lightgbm"]:
         print(
@@ -1319,6 +1324,11 @@ def compile_model_treelite(
 
                 # If log_transform is used, wrap return values with exp()
                 if log_transform:
+                    offset_literal = f"{log_transform_offset:.12g}"
+                    if log_transform_offset != 0:
+                        offset_expr = f" - ({offset_literal})"
+                    else:
+                        offset_expr = ""
                     # Add <cmath> include if not present
                     if (
                         "#include <cmath>" not in content
@@ -1338,18 +1348,18 @@ def compile_model_treelite(
                                 + content[insert_pos:]
                             )
 
-                    # Replace "return sum;" with "return std::exp(sum);"
+                    # Replace "return sum;" with "return std::exp(sum) - offset;"
                     # Match various return patterns in the predict function
                     content = re.sub(
                         r"(\s+)return\s+(sum|result|pred)\s*;",
-                        r"\1return std::exp(\2);",
+                        rf"\1return std::exp(\2){offset_expr};",
                         content,
                     )
 
                     # Also handle single-line returns like "return value;"
                     content = re.sub(
                         r"(\s+)return\s+([\w\.]+)\s*;",
-                        lambda m: f"{m.group(1)}return std::exp({m.group(2)});"
+                        lambda m: f"{m.group(1)}return std::exp({m.group(2)}){offset_expr};"
                         if m.group(2) not in ["true", "false", "0", "1"]
                         else m.group(0),
                         content,
@@ -1571,6 +1581,7 @@ def save_model(
     output_dir: str,
     feature_names: List[str],
     log_transform: bool = False,
+    log_transform_offset: float = 0.0,
 ) -> None:
     """Save trained model and preprocessing components to disk."""
     os.makedirs(output_dir, exist_ok=True)
@@ -1581,6 +1592,7 @@ def save_model(
         "feature_names": feature_names,
         "has_scaler": scaler is not None,
         "log_transform": log_transform,
+        "log_transform_offset": log_transform_offset,
     }
 
     metadata_path = os.path.join(output_dir, f"{regressor_type}_metadata.pkl")
@@ -1756,6 +1768,13 @@ Examples:
         action="store_true",
         help="Use log-transform on target variable to optimize for relative error instead of absolute error. Recommended when target values span multiple orders of magnitude.",
     )
+    parser.add_argument(
+        "--log-transform-offset",
+        type=float,
+        default=0.0,
+        metavar="C",
+        help="Add constant C to target values before log transform (useful to avoid non-positive values). Only used with --log-transform.",
+    )
 
     args = parser.parse_args()
 
@@ -1892,6 +1911,17 @@ Examples:
 
     # Apply log transform if requested (for relative error optimization)
     if args.log_transform:
+        log_transform_offset = args.log_transform_offset
+        y_train_original = y_train.copy()
+        y_test_original = y_test.copy()
+
+        if log_transform_offset != 0.0:
+            print(
+                f"  Applying log-transform offset: {log_transform_offset:+.6g}"
+            )
+            y_train = y_train + log_transform_offset
+            y_test = y_test + log_transform_offset
+
         # Check for non-positive values before log transform
         if np.any(y_train <= 0) or np.any(y_test <= 0):
             n_nonpositive_train = np.sum(y_train <= 0)
@@ -1905,16 +1935,13 @@ Examples:
                 f"   Target range: [{np.min(y_train):.2f}, {np.max(y_train):.2f}]"
             )
             print(
-                "\nSuggestion: Add a small constant (e.g., +1) to all target values before log"
+                "\nSuggestion: Use --log-transform-offset to add a small constant before log"
             )
             return 1
 
         print(
             "\nApplying log-transform to target variable (optimizes for relative error)"
         )
-        y_train_original = y_train.copy()
-        y_test_original = y_test.copy()
-
         y_train = np.log(y_train)
         y_test = np.log(y_test)
 
@@ -1927,6 +1954,7 @@ Examples:
     else:
         y_train_original = None
         y_test_original = None
+        log_transform_offset = 0.0
 
     # Enhanced diagnostics for XGBoost compatibility (only show if problems found)
     X_train_array = X_train.values if hasattr(X_train, "values") else X_train
@@ -2139,6 +2167,7 @@ Examples:
         log_transform=args.log_transform,
         y_train_original=y_train_original,
         y_test_original=y_test_original,
+        log_transform_offset=log_transform_offset,
     )
 
     # Save model
@@ -2149,6 +2178,7 @@ Examples:
         args.output_dir,
         feature_names,
         log_transform=args.log_transform,
+        log_transform_offset=log_transform_offset,
     )
 
     # Compile with TL2cgen if requested (with optimizations enabled by default)
@@ -2168,6 +2198,7 @@ Examples:
             feature_names=feature_names,
             model_name=model_name,
             log_transform=args.log_transform,
+            log_transform_offset=log_transform_offset,
         )
 
     print("\n" + "=" * 70)
