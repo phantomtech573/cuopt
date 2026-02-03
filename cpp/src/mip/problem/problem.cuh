@@ -222,7 +222,7 @@ class problem_t {
                      f_t,
                      f_t,
                      i_t,
-                     lp_solver_type_t)>
+                     method_t)>
     set_root_relaxation_solution_callback;
 
   typename mip_solver_settings_t<i_t, f_t>::tolerances_t tolerances{};

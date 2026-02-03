@@ -1354,7 +1354,7 @@ lp_status_t branch_and_bound_t<i_t, f_t>::solve_root_relaxation(
       root_status      = lp_status_t::OPTIMAL;
       user_objective   = root_crossover_soln_.user_objective;
       iter             = root_crossover_soln_.iterations;
-      solver_name      = root_relax_solved_by == lp_solver_type_t::Barrier ? "Barrier" : "PDLP";
+      solver_name      = method_to_string(root_relax_solved_by);
 
     } else {
       root_status    = root_status_future.get();

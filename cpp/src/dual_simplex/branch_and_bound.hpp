@@ -85,7 +85,7 @@ class branch_and_bound_t {
                                     f_t objective,
                                     f_t user_objective,
                                     i_t iterations,
-                                    lp_solver_type_t method)
+                                    method_t method)
   {
     if (!is_root_solution_set) {
       root_crossover_soln_.x              = primal;
@@ -164,7 +164,7 @@ class branch_and_bound_t {
   f_t root_objective_;
   lp_solution_t<i_t, f_t> root_relax_soln_;
   lp_solution_t<i_t, f_t> root_crossover_soln_;
-  lp_solver_type_t root_relax_solved_by;
+  method_t root_relax_solved_by;
   std::vector<f_t> edge_norms_;
   std::atomic<bool> root_crossover_solution_set_{false};
   bool enable_concurrent_lp_root_solve_{false};

@@ -10,6 +10,7 @@
 #include <cuopt/linear_programming/constants.h>
 #include <cuopt/error.hpp>
 #include <cuopt/linear_programming/pdlp/pdlp_warm_start_data.hpp>
+#include <cuopt/linear_programming/pdlp/solver_settings.hpp>
 #include <cuopt/linear_programming/utilities/internals.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
@@ -36,8 +37,15 @@ enum class pdlp_termination_status_t : int8_t {
   ConcurrentLimit  = CUOPT_TERMINATION_STATUS_CONCURRENT_LIMIT
 };
 
-// Indicate which solver was used for solving the LP
-enum class lp_solver_type_t : int8_t { Unset = 0, DualSimplex = 1, PDLP = 2, Barrier = 3 };
+inline std::string method_to_string(method_t method)
+{
+  switch (method) {
+    case method_t::DualSimplex: return "Dual Simplex";
+    case method_t::PDLP: return "PDLP";
+    case method_t::Barrier: return "Barrier";
+    default: return "Unset";
+  }
+}
 
 /**
  * @brief A container of PDLP solver output
@@ -91,8 +99,8 @@ class optimization_problem_solution_t : public base_solution_t {
     /** Solve time in seconds */
     double solve_time{std::numeric_limits<double>::signaling_NaN()};
 
-    /** Whether the problem was solved by PDLP or Dual Simplex */
-    lp_solver_type_t solved_by = lp_solver_type_t::Unset;
+    /** Whether the problem was solved by PDLP, Barrier or Dual Simplex */
+    method_t solved_by = method_t::Unset;
   };
 
   /**

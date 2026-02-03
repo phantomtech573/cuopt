@@ -769,7 +769,7 @@ pdlp_solver_t<i_t, f_t>::check_batch_termination(const timer_t& timer)
             pdlp_termination_status_t::ConcurrentLimit) {
           batch_solution_to_return_
             .get_additional_termination_informations()[climber_strategies_[i].original_index]
-            .solved_by = lp_solver_type_t::PDLP;
+            .solved_by = method_t::PDLP;
         }
       }
       current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_);
@@ -840,7 +840,7 @@ pdlp_solver_t<i_t, f_t>::check_batch_termination(const timer_t& timer)
             pdlp_termination_status_t::ConcurrentLimit) {
           batch_solution_to_return_
             .get_additional_termination_informations()[climber_strategies_[i].original_index]
-            .solved_by = lp_solver_type_t::PDLP;
+            .solved_by = method_t::PDLP;
         }
       }
     }
