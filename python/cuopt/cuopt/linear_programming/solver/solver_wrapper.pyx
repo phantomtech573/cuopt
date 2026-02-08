@@ -54,6 +54,7 @@ import cudf
 
 from cuopt.linear_programming.solver_settings.solver_settings import (
     PDLPSolverMode,
+    SolverMethod,
     SolverSettings,
 )
 from cuopt.utilities import InputValidationError, series_from_buf

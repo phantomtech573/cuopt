@@ -5,6 +5,7 @@ from cuopt.linear_programming.solver.solver_wrapper import (
     LPTerminationStatus,
     MILPTerminationStatus,
     ProblemCategory,
+    SolverMethod,
 )
 
 
@@ -193,7 +194,7 @@ class Solution:
         self.primal_objective = primal_objective
         self.dual_objective = dual_objective
         self.solve_time = solve_time
-        self.solved_by = solved_by
+        self.solved_by = SolverMethod(solved_by)
         self.vars = vars
         self.lp_stats = {
             "primal_residual": primal_residual,

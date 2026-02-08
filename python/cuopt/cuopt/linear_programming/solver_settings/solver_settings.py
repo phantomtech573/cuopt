@@ -57,6 +57,7 @@ class SolverMethod(IntEnum):
     PDLP = auto()
     DualSimplex = auto()
     Barrier = auto()
+    Unset = auto()
 
     def __str__(self):
         """Convert the solver method to a string.

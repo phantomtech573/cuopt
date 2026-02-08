@@ -598,7 +598,7 @@ pdlp_termination_strategy_t<i_t, f_t>::fill_return_problem_solution(
                stream_view_);
 
     if (termination_status[i] != pdlp_termination_status_t::ConcurrentLimit) {
-      term_stats_vector[i].solved_by = lp_solver_type_t::PDLP;
+      term_stats_vector[i].solved_by = method_t::PDLP;
     }
   }
 

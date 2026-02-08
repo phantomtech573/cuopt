@@ -29,6 +29,13 @@ cdef extern from "cuopt/linear_programming/pdlp/solver_settings.hpp" namespace "
         Fast1 "cuopt::linear_programming::pdlp_solver_mode_t::Fast1" # noqa
         Stable3 "cuopt::linear_programming::pdlp_solver_mode_t::Stable3" # noqa
 
+    ctypedef enum method_t "cuopt::linear_programming::method_t": # noqa
+        Concurrent "cuopt::linear_programming::method_t::Concurrent" # noqa
+        PDLP "cuopt::linear_programming::method_t::PDLP" # noqa
+        DualSimplex "cuopt::linear_programming::method_t::DualSimplex" # noqa
+        Barrier "cuopt::linear_programming::method_t::Barrier" # noqa
+        Unset "cuopt::linear_programming::method_t::Unset" # noqa
+        
 cdef extern from "cuopt/linear_programming/solver_settings.hpp" namespace "cuopt::linear_programming": # noqa
 
     cdef cppclass solver_settings_t[i_t, f_t]:
@@ -153,7 +160,7 @@ cdef extern from "cuopt/linear_programming/utilities/cython_solve.hpp" namespace
         double gap_
         int nb_iterations_
         double solve_time_
-        int solved_by_
+        method_t solved_by_
 
     cdef cppclass mip_ret_t:
         unique_ptr[device_buffer] solution_
