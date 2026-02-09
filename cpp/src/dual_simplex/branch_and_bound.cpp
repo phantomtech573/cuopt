@@ -2928,7 +2928,7 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
 
   if (settings_.deterministic) {
     // TEMP APPROXIMATION;
-    worker.work_context.record_work(worker.node_presolver.last_nnz_processed / 1e8);
+    worker.work_context.record_work_sync_on_horizon(worker.node_presolver.last_nnz_processed / 1e8);
   }
 #endif
 
@@ -3533,7 +3533,8 @@ void branch_and_bound_t<i_t, f_t>::deterministic_dive(determinism_diving_worker_
 
     if (settings_.deterministic) {
       // TEMP APPROXIMATION;
-      worker.work_context.record_work(worker.node_presolver.last_nnz_processed / 1e8);
+      worker.work_context.record_work_sync_on_horizon(worker.node_presolver.last_nnz_processed /
+                                                      1e8);
     }
 
     if (!feasible) {

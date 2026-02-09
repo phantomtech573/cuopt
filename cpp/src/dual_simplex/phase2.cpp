@@ -2749,7 +2749,7 @@ dual::status_t dual_phase2_with_advanced_basis(i_t phase,
 
     if (work_unit_context) {
       // TEMP;
-      work_unit_context->record_work((total_loads + total_stores) / 1e8);
+      work_unit_context->record_work_sync_on_horizon((total_loads + total_stores) / 1e8);
     }
   });
 
@@ -3462,7 +3462,7 @@ dual::status_t dual_phase2_with_advanced_basis(i_t phase,
 
       if (work_unit_context) {
         // TEMP;
-        work_unit_context->record_work((total_loads + total_stores) / 1e8);
+        work_unit_context->record_work_sync_on_horizon((total_loads + total_stores) / 1e8);
       }
 
       last_feature_log_iter = iter;

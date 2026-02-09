@@ -35,7 +35,7 @@ struct work_limit_context_t {
 
   work_limit_context_t(const std::string& name) : name(name) {}
 
-  void record_work(double work)
+  void record_work_sync_on_horizon(double work)
   {
     if (!deterministic) return;
     global_work_units_elapsed += work;
