@@ -20,6 +20,7 @@
 #pragma GCC diagnostic pop
 #endif
 #include <mip/mip_constants.hpp>
+#include <mip/presolve/bigm_indicator_aggregation.hpp>
 #include <mip/presolve/gf2_presolve.hpp>
 #include <mip/presolve/third_party_presolve.hpp>
 #include <utilities/logger.hpp>
@@ -496,8 +497,10 @@ void set_presolve_methods(papilo::Presolve<f_t>& presolver,
   using uptr = std::unique_ptr<papilo::PresolveMethod<f_t>>;
 
   if (category == problem_category_t::MIP) {
-    // cuOpt custom GF2 presolver
+    // cuOpt custom presolvers
     presolver.addPresolveMethod(uptr(new cuopt::linear_programming::detail::GF2Presolve<f_t>()));
+    presolver.addPresolveMethod(
+      uptr(new cuopt::linear_programming::detail::BigMIndicatorAggregation<f_t>()));
   }
   // fast presolvers
   presolver.addPresolveMethod(uptr(new papilo::SingletonCols<f_t>()));
