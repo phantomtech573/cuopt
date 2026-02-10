@@ -607,8 +607,9 @@ mip_solution_t<i_t, f_t> solution_t<i_t, f_t>::get_solution(bool output_feasible
 
   if (output_feasible) {
     // TODO we can streamline these info in class
-    f_t solution_bound               = stats.get_solution_bound();
-    f_t rel_mip_gap                  = compute_rel_mip_gap(h_user_obj, solution_bound);
+    f_t solution_bound = stats.get_solution_bound();
+    f_t rel_mip_gap    = compute_rel_mip_gap(h_user_obj, solution_bound);
+    if (h_user_obj < solution_bound) rel_mip_gap = 0;
     f_t abs_mip_gap                  = fabs(h_user_obj - solution_bound);
     f_t max_constraint_violation     = compute_max_constraint_violation();
     f_t max_int_violation            = compute_max_int_violation();
