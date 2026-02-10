@@ -15,6 +15,7 @@
 #include <mps_parser/writer.hpp>
 #include <utilities/copy_helpers.hpp>
 #include <utilities/logger.hpp>
+#include <utilities/sparse_matrix_helpers.hpp>
 
 #include <raft/core/copy.hpp>
 #include <raft/core/cuda_support.hpp>
