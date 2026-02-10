@@ -104,7 +104,7 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
     }
 
     if (!valid || master_col == -1) continue;
-    // M >= K: the big-M coefficient must be at least as large as the detail count.
+    // M >= K: the big-M coefficient must be at least as large as the detail count
     // This ensures that when y = 1, all K details can simultaneously be 1.
     if (master_coeff > -(f_t)n_positive_ones + num.getFeasTol()) continue;
 
