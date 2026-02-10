@@ -54,7 +54,7 @@ struct queued_integer_solution_t {
 };
 
 template <typename i_t, typename f_t>
-struct determinism_snapshot_t {
+struct deterministic_snapshot_t {
   f_t upper_bound;
   pseudo_cost_snapshot_t<i_t, f_t> pc_snapshot;
   std::vector<f_t> incumbent;
@@ -62,7 +62,7 @@ struct determinism_snapshot_t {
 };
 
 template <typename i_t, typename f_t, typename Derived>
-class determinism_worker_base_t : public branch_and_bound_worker_t<i_t, f_t> {
+class deterministic_worker_base_t : public branch_and_bound_worker_t<i_t, f_t> {
   using base_t = branch_and_bound_worker_t<i_t, f_t>;
 
  public:
@@ -84,18 +84,18 @@ class determinism_worker_base_t : public branch_and_bound_worker_t<i_t, f_t> {
   double total_runtime{0.0};
   double total_nowork_time{0.0};
 
-  determinism_worker_base_t(int id,
-                            const lp_problem_t<i_t, f_t>& original_lp,
-                            const csr_matrix_t<i_t, f_t>& Arow,
-                            const std::vector<variable_type_t>& var_types,
-                            const simplex_solver_settings_t<i_t, f_t>& settings,
-                            const std::string& context_name)
+  deterministic_worker_base_t(int id,
+                              const lp_problem_t<i_t, f_t>& original_lp,
+                              const csr_matrix_t<i_t, f_t>& Arow,
+                              const std::vector<variable_type_t>& var_types,
+                              const simplex_solver_settings_t<i_t, f_t>& settings,
+                              const std::string& context_name)
     : base_t(id, original_lp, Arow, var_types, settings), work_context(context_name)
   {
     work_context.deterministic = true;
   }
 
-  void set_snapshots(const determinism_snapshot_t<i_t, f_t>& snap)
+  void set_snapshots(const deterministic_snapshot_t<i_t, f_t>& snap)
   {
     local_upper_bound       = snap.upper_bound;
     pc_snapshot             = snap.pc_snapshot;
@@ -107,9 +107,9 @@ class determinism_worker_base_t : public branch_and_bound_worker_t<i_t, f_t> {
 };
 
 template <typename i_t, typename f_t>
-class determinism_bfs_worker_t
-  : public determinism_worker_base_t<i_t, f_t, determinism_bfs_worker_t<i_t, f_t>> {
-  using base_t = determinism_worker_base_t<i_t, f_t, determinism_bfs_worker_t<i_t, f_t>>;
+class deterministic_bfs_worker_t
+  : public deterministic_worker_base_t<i_t, f_t, deterministic_bfs_worker_t<i_t, f_t>> {
+  using base_t = deterministic_worker_base_t<i_t, f_t, deterministic_bfs_worker_t<i_t, f_t>>;
 
  public:
   // Node management
@@ -134,11 +134,11 @@ class determinism_bfs_worker_t
   i_t total_nodes_infeasible{0};
   i_t total_nodes_assigned{0};
 
-  explicit determinism_bfs_worker_t(int id,
-                                    const lp_problem_t<i_t, f_t>& original_lp,
-                                    const csr_matrix_t<i_t, f_t>& Arow,
-                                    const std::vector<variable_type_t>& var_types,
-                                    const simplex_solver_settings_t<i_t, f_t>& settings)
+  explicit deterministic_bfs_worker_t(int id,
+                                      const lp_problem_t<i_t, f_t>& original_lp,
+                                      const csr_matrix_t<i_t, f_t>& Arow,
+                                      const std::vector<variable_type_t>& var_types,
+                                      const simplex_solver_settings_t<i_t, f_t>& settings)
     : base_t(id, original_lp, Arow, var_types, settings, "BB_Worker_" + std::to_string(id))
   {
   }
@@ -268,9 +268,9 @@ struct dive_queue_entry_t {
 };
 
 template <typename i_t, typename f_t>
-class determinism_diving_worker_t
-  : public determinism_worker_base_t<i_t, f_t, determinism_diving_worker_t<i_t, f_t>> {
-  using base_t = determinism_worker_base_t<i_t, f_t, determinism_diving_worker_t<i_t, f_t>>;
+class deterministic_diving_worker_t
+  : public deterministic_worker_base_t<i_t, f_t, deterministic_diving_worker_t<i_t, f_t>> {
+  using base_t = deterministic_worker_base_t<i_t, f_t, deterministic_diving_worker_t<i_t, f_t>>;
 
  public:
   search_strategy_t diving_type{search_strategy_t::PSEUDOCOST_DIVING};
@@ -291,13 +291,13 @@ class determinism_diving_worker_t
   i_t total_dives{0};
   i_t lp_iters_this_dive{0};
 
-  explicit determinism_diving_worker_t(int id,
-                                       search_strategy_t type,
-                                       const lp_problem_t<i_t, f_t>& original_lp,
-                                       const csr_matrix_t<i_t, f_t>& Arow,
-                                       const std::vector<variable_type_t>& var_types,
-                                       const simplex_solver_settings_t<i_t, f_t>& settings,
-                                       const std::vector<f_t>* root_sol)
+  explicit deterministic_diving_worker_t(int id,
+                                         search_strategy_t type,
+                                         const lp_problem_t<i_t, f_t>& original_lp,
+                                         const csr_matrix_t<i_t, f_t>& Arow,
+                                         const std::vector<variable_type_t>& var_types,
+                                         const simplex_solver_settings_t<i_t, f_t>& settings,
+                                         const std::vector<f_t>* root_sol)
     : base_t(id, original_lp, Arow, var_types, settings, "Diving_Worker_" + std::to_string(id)),
       diving_type(type),
       root_solution(root_sol)
@@ -306,10 +306,10 @@ class determinism_diving_worker_t
     dive_upper = original_lp.upper;
   }
 
-  determinism_diving_worker_t(const determinism_diving_worker_t&)            = delete;
-  determinism_diving_worker_t& operator=(const determinism_diving_worker_t&) = delete;
-  determinism_diving_worker_t(determinism_diving_worker_t&&)                 = default;
-  determinism_diving_worker_t& operator=(determinism_diving_worker_t&&)      = default;
+  deterministic_diving_worker_t(const deterministic_diving_worker_t&)            = delete;
+  deterministic_diving_worker_t& operator=(const deterministic_diving_worker_t&) = delete;
+  deterministic_diving_worker_t(deterministic_diving_worker_t&&)                 = default;
+  deterministic_diving_worker_t& operator=(deterministic_diving_worker_t&&)      = default;
 
   bool has_work_impl() const { return !dive_queue.empty(); }
 
@@ -361,7 +361,7 @@ class determinism_diving_worker_t
 };
 
 template <typename i_t, typename f_t, typename WorkerT, typename Derived>
-class determinism_worker_pool_base_t {
+class deterministic_worker_pool_base_t {
  protected:
   std::vector<WorkerT> workers_;
 
@@ -404,22 +404,22 @@ class determinism_worker_pool_base_t {
 };
 
 template <typename i_t, typename f_t>
-class determinism_bfs_worker_pool_t
-  : public determinism_worker_pool_base_t<i_t,
-                                          f_t,
-                                          determinism_bfs_worker_t<i_t, f_t>,
-                                          determinism_bfs_worker_pool_t<i_t, f_t>> {
-  using base_t = determinism_worker_pool_base_t<i_t,
-                                                f_t,
-                                                determinism_bfs_worker_t<i_t, f_t>,
-                                                determinism_bfs_worker_pool_t<i_t, f_t>>;
+class deterministic_bfs_worker_pool_t
+  : public deterministic_worker_pool_base_t<i_t,
+                                            f_t,
+                                            deterministic_bfs_worker_t<i_t, f_t>,
+                                            deterministic_bfs_worker_pool_t<i_t, f_t>> {
+  using base_t = deterministic_worker_pool_base_t<i_t,
+                                                  f_t,
+                                                  deterministic_bfs_worker_t<i_t, f_t>,
+                                                  deterministic_bfs_worker_pool_t<i_t, f_t>>;
 
  public:
-  determinism_bfs_worker_pool_t(int num_workers,
-                                const lp_problem_t<i_t, f_t>& original_lp,
-                                const csr_matrix_t<i_t, f_t>& Arow,
-                                const std::vector<variable_type_t>& var_types,
-                                const simplex_solver_settings_t<i_t, f_t>& settings)
+  deterministic_bfs_worker_pool_t(int num_workers,
+                                  const lp_problem_t<i_t, f_t>& original_lp,
+                                  const csr_matrix_t<i_t, f_t>& Arow,
+                                  const std::vector<variable_type_t>& var_types,
+                                  const simplex_solver_settings_t<i_t, f_t>& settings)
   {
     this->workers_.reserve(num_workers);
     for (int i = 0; i < num_workers; ++i) {
@@ -427,7 +427,7 @@ class determinism_bfs_worker_pool_t
     }
   }
 
-  void collect_worker_events(determinism_bfs_worker_t<i_t, f_t>& worker,
+  void collect_worker_events(deterministic_bfs_worker_t<i_t, f_t>& worker,
                              bb_event_batch_t<i_t, f_t>& all_events)
   {
     for (auto& event : worker.events.events) {
@@ -438,24 +438,24 @@ class determinism_bfs_worker_pool_t
 };
 
 template <typename i_t, typename f_t>
-class determinism_diving_worker_pool_t
-  : public determinism_worker_pool_base_t<i_t,
-                                          f_t,
-                                          determinism_diving_worker_t<i_t, f_t>,
-                                          determinism_diving_worker_pool_t<i_t, f_t>> {
-  using base_t = determinism_worker_pool_base_t<i_t,
-                                                f_t,
-                                                determinism_diving_worker_t<i_t, f_t>,
-                                                determinism_diving_worker_pool_t<i_t, f_t>>;
+class deterministic_diving_worker_pool_t
+  : public deterministic_worker_pool_base_t<i_t,
+                                            f_t,
+                                            deterministic_diving_worker_t<i_t, f_t>,
+                                            deterministic_diving_worker_pool_t<i_t, f_t>> {
+  using base_t = deterministic_worker_pool_base_t<i_t,
+                                                  f_t,
+                                                  deterministic_diving_worker_t<i_t, f_t>,
+                                                  deterministic_diving_worker_pool_t<i_t, f_t>>;
 
  public:
-  determinism_diving_worker_pool_t(int num_workers,
-                                   const std::vector<search_strategy_t>& diving_types,
-                                   const lp_problem_t<i_t, f_t>& original_lp,
-                                   const csr_matrix_t<i_t, f_t>& Arow,
-                                   const std::vector<variable_type_t>& var_types,
-                                   const simplex_solver_settings_t<i_t, f_t>& settings,
-                                   const std::vector<f_t>* root_solution)
+  deterministic_diving_worker_pool_t(int num_workers,
+                                     const std::vector<search_strategy_t>& diving_types,
+                                     const lp_problem_t<i_t, f_t>& original_lp,
+                                     const csr_matrix_t<i_t, f_t>& Arow,
+                                     const std::vector<variable_type_t>& var_types,
+                                     const simplex_solver_settings_t<i_t, f_t>& settings,
+                                     const std::vector<f_t>* root_solution)
   {
     this->workers_.reserve(num_workers);
     for (int i = 0; i < num_workers; ++i) {
@@ -464,7 +464,9 @@ class determinism_diving_worker_pool_t
     }
   }
 
-  void collect_worker_events(determinism_diving_worker_t<i_t, f_t>&, bb_event_batch_t<i_t, f_t>&) {}
+  void collect_worker_events(deterministic_diving_worker_t<i_t, f_t>&, bb_event_batch_t<i_t, f_t>&)
+  {
+  }
 };
 
 }  // namespace cuopt::linear_programming::dual_simplex

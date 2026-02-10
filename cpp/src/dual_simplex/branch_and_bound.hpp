@@ -53,7 +53,7 @@ void upper_bound_callback(f_t upper_bound);
 template <typename i_t, typename f_t>
 struct nondeterministic_policy_t;
 template <typename i_t, typename f_t, typename WorkerT>
-struct determinism_policy_base_t;
+struct deterministic_policy_base_t;
 template <typename i_t, typename f_t>
 struct deterministic_bfs_policy_t;
 template <typename i_t, typename f_t>
@@ -293,67 +293,67 @@ class branch_and_bound_t {
   // Deterministic BSP (Bulk Synchronous Parallel) methods for deterministic parallel B&B
   // ============================================================================
 
-  // Main determinism coordinator loop
-  void run_determinism_coordinator(const csr_matrix_t<i_t, f_t>& Arow);
+  // Main deterministic coordinator loop
+  void run_deterministic_coordinator(const csr_matrix_t<i_t, f_t>& Arow);
 
   // Gather all events generated, sort by WU timestamp, apply
-  void determinism_sort_replay_events(const bb_event_batch_t<i_t, f_t>& events);
+  void deterministic_sort_replay_events(const bb_event_batch_t<i_t, f_t>& events);
 
   // Prune nodes held by workers based on new incumbent
-  void determinism_prune_worker_nodes_vs_incumbent();
+  void deterministic_prune_worker_nodes_vs_incumbent();
 
   // Balance worker loads - redistribute nodes only if significant imbalance detected
-  void determinism_balance_worker_loads();
+  void deterministic_balance_worker_loads();
 
-  node_status_t solve_node_deterministic(determinism_bfs_worker_t<i_t, f_t>& worker,
+  node_status_t solve_node_deterministic(deterministic_bfs_worker_t<i_t, f_t>& worker,
                                          mip_node_t<i_t, f_t>* node_ptr,
                                          search_tree_t<i_t, f_t>& search_tree);
 
-  f_t determinism_compute_lower_bound();
+  f_t deterministic_compute_lower_bound();
 
-  void run_deterministic_bfs_loop(determinism_bfs_worker_t<i_t, f_t>& worker,
+  void run_deterministic_bfs_loop(deterministic_bfs_worker_t<i_t, f_t>& worker,
                                   search_tree_t<i_t, f_t>& search_tree);
 
   // Executed when all workers reach barrier
   // Handles termination logic serially in deterministic mode
-  void determinism_sync_callback();
+  void deterministic_sync_callback();
 
-  void run_deterministic_diving_loop(determinism_diving_worker_t<i_t, f_t>& worker);
+  void run_deterministic_diving_loop(deterministic_diving_worker_t<i_t, f_t>& worker);
 
-  void deterministic_dive(determinism_diving_worker_t<i_t, f_t>& worker,
+  void deterministic_dive(deterministic_diving_worker_t<i_t, f_t>& worker,
                           dive_queue_entry_t<i_t, f_t> entry);
 
   // Populate diving heap from BFS worker backlogs at sync
-  void determinism_populate_diving_heap();
+  void deterministic_populate_diving_heap();
 
   // Assign starting nodes to diving workers from diving heap
-  void determinism_assign_diving_nodes();
+  void deterministic_assign_diving_nodes();
 
   // Collect and merge diving solutions at sync
   void deterministic_collect_diving_solutions_and_update_pseudocosts();
 
   template <typename PoolT, typename WorkerTypeGetter>
-  void determinism_process_worker_solutions(PoolT& pool, WorkerTypeGetter get_worker_type);
+  void deterministic_process_worker_solutions(PoolT& pool, WorkerTypeGetter get_worker_type);
 
   template <typename PoolT>
-  void determinism_merge_pseudo_cost_updates(PoolT& pool);
+  void deterministic_merge_pseudo_cost_updates(PoolT& pool);
 
   template <typename PoolT>
-  void determinism_broadcast_snapshots(PoolT& pool, const std::vector<f_t>& incumbent_snapshot);
+  void deterministic_broadcast_snapshots(PoolT& pool, const std::vector<f_t>& incumbent_snapshot);
 
   friend struct nondeterministic_policy_t<i_t, f_t>;
   friend struct deterministic_bfs_policy_t<i_t, f_t>;
   friend struct deterministic_diving_policy_t<i_t, f_t>;
 
  private:
-  // unique_ptr as we only want to initialize these if we're in the determinism codepath
-  std::unique_ptr<determinism_bfs_worker_pool_t<i_t, f_t>> determinism_workers_;
-  std::unique_ptr<cuopt::work_unit_scheduler_t> determinism_scheduler_;
-  mip_status_t determinism_global_termination_status_{mip_status_t::UNSET};
-  double determinism_horizon_step_{5.0};     // Work unit step per horizon (tunable)
-  double determinism_current_horizon_{0.0};  // Current horizon target
-  bool determinism_mode_enabled_{false};
-  int determinism_horizon_number_{0};  // Current horizon number (for debugging)
+  // unique_ptr as we only want to initialize these if we're in the deterministic codepath
+  std::unique_ptr<deterministic_bfs_worker_pool_t<i_t, f_t>> deterministic_workers_;
+  std::unique_ptr<cuopt::work_unit_scheduler_t> deterministic_scheduler_;
+  mip_status_t deterministic_global_termination_status_{mip_status_t::UNSET};
+  double deterministic_horizon_step_{5.0};     // Work unit step per horizon (tunable)
+  double deterministic_current_horizon_{0.0};  // Current horizon target
+  bool deterministic_mode_enabled_{false};
+  int deterministic_horizon_number_{0};  // Current horizon number (for debugging)
 
   // Producer synchronization for external heuristics (CPUFJ)
   // B&B waits for registered producers at each horizon sync
@@ -374,8 +374,8 @@ class branch_and_bound_t {
   // ============================================================================
 
   // Diving worker pool
-  // unique_ptr as we only want to initialize these if we're in the determinism codepath
-  std::unique_ptr<determinism_diving_worker_pool_t<i_t, f_t>> determinism_diving_workers_;
+  // unique_ptr as we only want to initialize these if we're in the deterministic codepath
+  std::unique_ptr<deterministic_diving_worker_pool_t<i_t, f_t>> deterministic_diving_workers_;
 
   // Diving heap - nodes available for diving, sorted by objective estimate
   struct diving_entry_t {
