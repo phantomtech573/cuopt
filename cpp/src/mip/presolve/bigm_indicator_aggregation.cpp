@@ -8,6 +8,7 @@
 #include "bigm_indicator_aggregation.hpp"
 
 #include <mip/mip_constants.hpp>
+#include <utilities/logger.hpp>
 
 #include <vector>
 
@@ -121,10 +122,12 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
   if (bigm_rows.empty()) return papilo::PresolveStatus::kUnchanged;
 
   // Build detail -> master mapping (only for details in exactly 1 big-M)
+  int detail_set_size = 0;
   for (size_t bi = 0; bi < bigm_rows.size(); ++bi) {
     for (int d : bigm_rows[bi].detail_cols) {
       detail_bigm_count[d]++;
       detail_master[d] = bigm_rows[bi].master_col;
+      ++detail_set_size;
     }
   }
 
@@ -192,6 +195,13 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
   }
 
   if (n_safe == 0) return papilo::PresolveStatus::kUnchanged;
+
+  CUOPT_LOG_INFO(
+    "BigM indicator aggregation: %d big-M constraints detected, %d detail variables "
+    "substituted out of %d candidates",
+    (int)bigm_rows.size(),
+    n_safe,
+    (int)detail_set_size);
 
   // Phase 3: Substitute safe details via replaceCol.
   //
