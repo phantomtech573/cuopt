@@ -2526,6 +2526,60 @@ Legend:  ▓▓▓ = actively working    ░░░ = waiting at barrier    [hash
 
 */
 
+/* Glossary for B&B Determinism:
+
+Tree Update Policy:
+  Class implementing the determinism_base_policy_t interface,
+  specifying operations to be executed based on the outcomes of the current node
+  in order to unify the deterministic and nondeterministic codepaths.
+Worker Pool:
+  Static structure containing worker types for deterministic B&B,
+  with a 1thread:1worker mapping.
+Work Unit Scheduler:
+  Class orchestrating the deterministic workers, handling periodic synchronization
+  after a set amount of work unit time is elapsed.
+Snapshots:
+  Local copy of the global state of the solver (incumbent, pseudocosts, upper bound)
+  renewed after every sync step in the deterministic codepath
+  in order to ensure deterministic playback
+  Local snapshots are updated by their respective worker within a horizon,
+  and then merged during the sync step, and broadcast to workers for the next horizon.
+Producer:
+  Independent thread which produces heuristic solutions without depending on the B&B state.
+  Therefore, its synchronization requirements are more lax: it can run "ahead" of B&B safely.
+Determinism Sync Callback:
+  Function that is executed serially (by a single thread) at each synchronization point
+  of the determinism codepath. Equivalent to the OpenMP 'single' directive.
+Event / BB Event:
+  Event susceptible of modifying the global state, recorded within each horizon to be
+  sorted and replayed at the sync callback in order to update the global state serially.
+Packed Id:
+  Unique representation of a node from its <worker_id, seq_id> tuple, packed as a 64bit integer.
+Producer Sync:
+  Synchronization point ensuring the produced is never running "in the past" wrt B&B.
+  Producing solutions in the past would break determinism, therefore this unidirectional sync
+ensures no such thing can occur. Instrumentation Aggregator: Collects multiple instrument vectors
+into a single aggregation point for estimating work from memory operations. Worker Context: Object
+representing the "context" (e.g.: the worker) that should register the amount of work recorded There
+is a 1context:1worker mapping. The Work Unit Scheduler registers such contexts and ensure they
+remained synchronized together. Queued Integer Solutions: New integer solutions found within
+horizons are queued with a work unit timestamp, in order to be sorted and played in order during the
+sync callback. Creation Sequence: In nondeterministic mode, a single global atomic integer is used
+to generate sequential IDs for the nodes. Since this is a global atomic, it is inherently
+nondeterministic. To fix this, in deterministic mode, nodes are addressed by a tuple <worker_id,
+seq_id>
+  where "worker_id" is the ID of the worker that created this node, and "seq_id" is a sequential ID
+local to the worker.\ This sequential ID is similar in principle to the global atomic ID sequence of
+the nondeterminsitic mode but since it is local to each worker, it is updated serially and thus is
+deterministic. worker IDs are unique, and sequence IDs are unique to their workers, therefor
+  <worker_id, seq_id> is a globally unique node identifier.
+Pseudocost Update:
+  Each worker updates its local pseudocosts when branching. These updates are queued within
+horizons. During the horizon sync, these updates are all played in order, and the newly updated
+global pseudocosts are broadcast to the worker's pseudocost snapshots for the coming horizon.
+
+*/
+
 template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::run_deterministic_coordinator(const csr_matrix_t<i_t, f_t>& Arow)
 {
