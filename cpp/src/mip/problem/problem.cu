@@ -1218,6 +1218,30 @@ void problem_t<i_t, f_t>::set_implied_integers(const std::vector<i_t>& implied_i
                                                   (v.variable_types[var_idx] == var_t::INTEGER ||
                                                    (v.var_flags[var_idx] & VAR_IMPLIED_INTEGER));
                                          });
+
+  bool objvars_all_integral =
+    thrust::all_of(handle_ptr->get_thrust_policy(),
+                   thrust::make_counting_iterator(0),
+                   thrust::make_counting_iterator(n_variables),
+                   [v = view()] __device__(i_t var_idx) -> bool {
+                     if (v.objective_coefficients[var_idx] == 0) return true;
+                     return (v.variable_types[var_idx] == var_t::INTEGER ||
+                             (v.var_flags[var_idx] & VAR_IMPLIED_INTEGER));
+                   });
+  if (objvars_all_integral && !objective_is_integral) {
+    // Copy objective coefficients to host
+    auto h_objective_coefficients =
+      cuopt::host_copy(objective_coefficients, handle_ptr->get_stream());
+    // Print all nonzero coefficients
+    CUOPT_LOG_DEBUG("Nonzero objective coefficients (index: value):\n");
+    for (i_t i = 0; i < n_variables; ++i) {
+      if (h_objective_coefficients[i] != 0) {
+        CUOPT_LOG_DEBUG(
+          "  %d: %g\n", static_cast<int>(i), static_cast<double>(h_objective_coefficients[i]));
+      }
+    }
+  }
+  exit(0);
 }
 
 template <typename i_t, typename f_t>
