@@ -1195,149 +1195,120 @@ void problem_t<i_t, f_t>::insert_constraints(constraints_delta_t<i_t, f_t>& h_co
   combine_constraint_bounds<i_t, f_t>(*this, combined_bounds);
 }
 
-/**
- * @brief Find best rational approximation p/q to x with q <= max_denom
- * Uses continued fractions algorithm which is numerically stable
- *
- * @param x Floating-point number to approximate
- * @param max_denom Maximum allowed denominator
- * @param tolerance Stop when |x - p/q| < tolerance
- * @return std::pair<int64_t, int64_t> (numerator, denominator)
- */
+// Best rational approximation p/q to x with q <= max_denom, via continued fractions.
+// Returns the last valid convergent if the denominator limit is reached.
 std::pair<int64_t, int64_t> rational_approximation(double x,
-                                                   int64_t max_denom = 10000,
-                                                   double tolerance  = 1e-10)
+                                                   int64_t max_denom,
+                                                   double mindelta,
+                                                   double maxdelta)
 {
-  // Handle edge cases
-  if (std::abs(x) < tolerance) { return {0, 1}; }
+  double ax = std::abs(x);
+  if (ax < maxdelta) { return {0, 1}; }
 
-  // Handle negative numbers
   if (x < 0) {
-    auto [p, q] = rational_approximation(-x, max_denom, tolerance);
+    auto [p, q] = rational_approximation(-x, max_denom, mindelta, maxdelta);
     return {-p, q};
   }
 
-  // Handle integers
-  if (std::abs(x - std::round(x)) < tolerance) { return {static_cast<int64_t>(std::round(x)), 1}; }
-
-  // Continued fractions using convergents
-  // Initialize: p_{-1}/q_{-1} = 1/0, p_0/q_0 = floor(x)/1
   int64_t p_prev2 = 1, q_prev2 = 0;
-  int64_t p_prev1 = static_cast<int64_t>(x), q_prev1 = 1;
+  int64_t p_prev1 = (int64_t)std::floor(x), q_prev1 = 1;
 
-  // Check if integer approximation is good enough
-  if (std::abs(x - p_prev1) < tolerance) { return {p_prev1, q_prev1}; }
+  double remainder = x - std::floor(x);
 
-  // Start continued fraction
-  double remainder = x - static_cast<int64_t>(x);
+  for (int iter = 0; iter < 100; ++iter) {
+    if (std::abs(remainder) < 1e-15) break;
 
-  // Safety limit on iterations
-  const int max_iterations = 100;
-  int iteration            = 0;
-
-  while (iteration++ < max_iterations) {
-    // Check for convergence
-    if (std::abs(remainder) < tolerance) { break; }
-
-    // Compute next term in continued fraction
     remainder = 1.0 / remainder;
-    int64_t a = static_cast<int64_t>(remainder);
+    int64_t a = (int64_t)std::floor(remainder);
+    remainder -= a;
 
-    // Compute next convergent using recurrence relation:
-    // p_n = a_n * p_{n-1} + p_{n-2}
-    // q_n = a_n * q_{n-1} + q_{n-2}
     int64_t p_curr = a * p_prev1 + p_prev2;
     int64_t q_curr = a * q_prev1 + q_prev2;
 
-    // Check if denominator exceeds limit
-    if (q_curr > max_denom) { return {0, 0}; }
+    if (q_curr > max_denom) break;
 
-    // Check if approximation is good enough
-    if (std::abs(x - static_cast<double>(p_curr) / q_curr) < tolerance) { return {p_curr, q_curr}; }
+    p_prev2 = p_prev1;
+    q_prev2 = q_prev1;
+    p_prev1 = p_curr;
+    q_prev1 = q_curr;
 
-    // Update for next iteration
-    p_prev2   = p_prev1;
-    q_prev2   = q_prev1;
-    p_prev1   = p_curr;
-    q_prev1   = q_curr;
-    remainder = remainder - a;
-
-    // Safety check
-    if (std::abs(remainder) < tolerance) { break; }
+    double approx_err = x - (double)p_curr / (double)q_curr;
+    if (approx_err > mindelta && approx_err < maxdelta) break;
   }
 
   return {p_prev1, q_prev1};
 }
 
-/**
- * @brief Compute LCM of multiple integers
- *
- * @param numbers Vector of integers
- * @return int64_t LCM of all numbers
- */
-int64_t lcm_multiple(const std::vector<int64_t>& numbers)
+// Brute-force: try scalars 1..max_brute and return the smallest that makes all coefficients
+// integral.
+double find_scaling_brute_force(const std::vector<double>& coefficients,
+                                int max_brute = 100,
+                                double tol    = 1e-6)
 {
-  if (numbers.empty()) { return 1; }
-
-  return std::reduce(numbers.begin() + 1, numbers.end(), numbers[0], [](int64_t a, int64_t b) {
-    return std::lcm(a, b);
-  });
+  for (int s = 1; s <= max_brute; ++s) {
+    bool ok = true;
+    for (double c : coefficients) {
+      double scaled = s * c;
+      if (std::abs(scaled - std::round(scaled)) > tol) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return (double)s;
+  }
+  return std::numeric_limits<double>::quiet_NaN();
 }
 
-/**
- * @brief Result of scaling factor computation
- */
-struct ScalingResult {
-  std::optional<int64_t> scaling_factor;               // None if exceeds max_S
-  std::vector<std::pair<int64_t, int64_t>> rationals;  // (p, q) pairs
-  double max_error;                                    // Maximum approximation error
-};
-
-/**
- * @brief Find integer scaling factor s such that s * sum(c_i * x_i) is always
- * integral when all x_i are integers, and s <= max_S
- *
- * @param coefficients Vector of floating-point coefficients
- * @param max_S Maximum allowed scaling factor
- * @param tolerance Tolerance for rational approximation
- * @return ScalingResult containing scaling factor, rationals, and error
- */
-ScalingResult find_scaling_factor(const std::vector<double>& coefficients,
-                                  int64_t max_S    = 1000,
-                                  double tolerance = 1e-9)
+// Continued-fractions approach: rationalize each coefficient, compute scm/gcd incrementally.
+double find_scaling_rational(const std::vector<double>& coefficients,
+                             double maxscale     = 1e6,
+                             int64_t maxdnom     = 10000000,
+                             double maxfinal     = 10000,
+                             double intcheck_tol = 1e-6)
 {
-  ScalingResult result;
-  result.scaling_factor = std::nullopt;
-  result.max_error      = 0.0;
+  constexpr double no_scaling = std::numeric_limits<double>::quiet_NaN();
+  double epsilon              = 1.0 / maxscale;
 
-  std::vector<int64_t> denominators;
+  int64_t gcd = 0;
+  int64_t scm = 1;
 
   for (double c : coefficients) {
-    // Find rational approximation
-    auto [p, q] = rational_approximation(c, max_S, tolerance);
-    if (q == 0) return result;  // no good scaling factor
+    auto [num, den] = rational_approximation(c, maxdnom, -epsilon, epsilon);
+    if (den == 0 || num == 0) continue;
 
-    // Track approximation error
-    double error     = std::abs(c - static_cast<double>(p) / q);
-    result.max_error = std::max(result.max_error, error);
+    int64_t abs_num = std::abs(num);
+    if (gcd == 0) {
+      gcd = abs_num;
+      scm = den;
+    } else {
+      gcd = std::gcd(gcd, abs_num);
+      scm *= den / std::gcd(scm, den);
+    }
 
-    // Store in reduced form
-    int64_t g = std::gcd(std::abs(p), q);
-    result.rationals.push_back({p / g, q / g});
-    denominators.push_back(q / g);
+    if ((double)scm / (double)gcd > maxscale) return no_scaling;
   }
 
-  // Compute LCM of all denominators
-  int64_t s = lcm_multiple(denominators);
+  if (gcd == 0) return 1.0;
 
-  // Check if scaling factor is within bound
-  if (s > max_S) {
-    result.scaling_factor = std::nullopt;
-  } else {
-    result.scaling_factor = s;
+  double intscalar = (double)scm / (double)gcd;
+  if (intscalar > maxfinal) return no_scaling;
+
+  for (double c : coefficients) {
+    double scaled = intscalar * c;
+    if (std::abs(scaled - std::round(scaled)) > intcheck_tol) return no_scaling;
   }
 
-  return result;
+  return intscalar;
+}
+
+// Finds the smallest integer scaling factor s such that s * c_i is integral for all i.
+// Tries a brute-force sweep first (cheap, numerically robust), then falls back to
+// continued fractions for larger scalars.
+double find_objective_scaling_factor(const std::vector<double>& coefficients)
+{
+  double s = find_scaling_brute_force(coefficients);
+  if (!std::isnan(s)) return s;
+  return find_scaling_rational(coefficients);
 }
 
 template <typename i_t, typename f_t>
@@ -1383,19 +1354,17 @@ void problem_t<i_t, f_t>::set_implied_integers(const std::vector<i_t>& implied_i
         h_nonzero_obj_coefs.push_back(h_objective_coefficients[i]);
       }
     }
-    auto scaling_result = find_scaling_factor(h_nonzero_obj_coefs);
-    if (scaling_result.scaling_factor) {
-      CUOPT_LOG_DEBUG("Scaling objective coefficients by %d to allow integrality",
-                      scaling_result.scaling_factor.value());
+    double scaling_factor = find_objective_scaling_factor(h_nonzero_obj_coefs);
+    if (!std::isnan(scaling_factor)) {
+      CUOPT_LOG_DEBUG("Scaling objective coefficients by %.0f to allow integrality",
+                      scaling_factor);
       thrust::for_each(
         handle_ptr->get_thrust_policy(),
         thrust::make_counting_iterator(0),
         thrust::make_counting_iterator(n_variables),
         [objective_coefficients = make_span(objective_coefficients),
-         scaling_factor         = scaling_result.scaling_factor.value()] __device__(i_t idx) {
-          objective_coefficients[idx] *= scaling_factor;
-        });
-      presolve_data.objective_scaling_factor /= scaling_result.scaling_factor.value();
+         scaling_factor] __device__(i_t idx) { objective_coefficients[idx] *= scaling_factor; });
+      presolve_data.objective_scaling_factor /= scaling_factor;
       objvars_all_integral = true;
     }
   }
