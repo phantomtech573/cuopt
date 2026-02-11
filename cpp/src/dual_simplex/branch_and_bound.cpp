@@ -487,7 +487,7 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
   if (is_feasible) { report_heuristic(obj); }
   if (attempt_repair) {
     mutex_repair_.lock();
-    repair_queue_.push_back(crushed_solution);
+    repair_queue_.push_back(solution);
     mutex_repair_.unlock();
   }
 }
@@ -520,9 +520,11 @@ void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
   mutex_original_lp_.unlock();
 
   if (!is_feasible) {
-    // Queue for repair
+    // Queue the uncrushed solution for repair; it will be crushed at
+    // consumption time so that the crush reflects the current LP state
+    // (which may have gained slack columns from cuts added after this point).
     mutex_repair_.lock();
-    repair_queue_.push_back(crushed_solution);
+    repair_queue_.push_back(solution);
     mutex_repair_.unlock();
     return;
   }
@@ -611,11 +613,14 @@ void branch_and_bound_t<i_t, f_t>::repair_heuristic_solutions()
 
   if (to_repair.size() > 0) {
     settings_.log.debug("Attempting to repair %ld injected solutions\n", to_repair.size());
-    for (const std::vector<f_t>& potential_solution : to_repair) {
+    for (const std::vector<f_t>& uncrushed_solution : to_repair) {
+      std::vector<f_t> crushed_solution;
+      crush_primal_solution<i_t, f_t>(
+        original_problem_, original_lp_, uncrushed_solution, new_slacks_, crushed_solution);
       std::vector<f_t> repaired_solution;
       f_t repaired_obj;
       bool is_feasible =
-        repair_solution(edge_norms_, potential_solution, repaired_obj, repaired_solution);
+        repair_solution(edge_norms_, crushed_solution, repaired_obj, repaired_solution);
       if (is_feasible) {
         mutex_upper_.lock();
 
@@ -3156,11 +3161,14 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
     if (to_repair.size() > 0) {
       settings_.log.debug("Deterministic sync: Attempting to repair %ld injected solutions\n",
                           to_repair.size());
-      for (const std::vector<f_t>& potential_solution : to_repair) {
+      for (const std::vector<f_t>& uncrushed_solution : to_repair) {
+        std::vector<f_t> crushed_solution;
+        crush_primal_solution<i_t, f_t>(
+          original_problem_, original_lp_, uncrushed_solution, new_slacks_, crushed_solution);
         std::vector<f_t> repaired_solution;
         f_t repaired_obj;
         bool success =
-          repair_solution(edge_norms_, potential_solution, repaired_obj, repaired_solution);
+          repair_solution(edge_norms_, crushed_solution, repaired_obj, repaired_solution);
         if (success) {
           // Queue repaired solution with work unit timestamp (...workstamp?)
           mutex_heuristic_queue_.lock();
