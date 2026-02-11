@@ -1198,7 +1198,7 @@ std::pair<node_status_t, rounding_direction_t> branch_and_bound_t<i_t, f_t>::upd
     policy.graphviz(search_tree, node_ptr, "lower bound", leaf_obj);
     policy.update_pseudo_costs(node_ptr, leaf_obj);
     node_ptr->lower_bound = leaf_obj;
-    if (settings_.objective_is_integral) {
+    if (original_lp_.objective_is_integral) {
       node_ptr->lower_bound = std::ceil(leaf_obj - settings_.integer_tol);
     }
     policy.on_optimal_callback(leaf_solution.x, leaf_obj);
@@ -1314,7 +1314,7 @@ dual::status_t branch_and_bound_t<i_t, f_t>::solve_node_lp(
 
   simplex_solver_settings_t lp_settings = settings_;
   lp_settings.set_log(false);
-  if (settings_.objective_is_integral) {
+  if (original_lp_.objective_is_integral) {
     lp_settings.cut_off = std::ceil(upper_bound_ - settings_.integer_tol) - 1 + settings_.dual_tol;
   } else {
     lp_settings.cut_off = upper_bound_ + settings_.dual_tol;
