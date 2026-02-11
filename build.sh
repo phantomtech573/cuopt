@@ -362,11 +362,7 @@ fi
 if buildAll || hasArg libcuopt; then
     # Enable nvcc --jobserver only when building through the Makefile,
     # which starts a GNU Make jobserver that nvcc can participate in.
-    if hasArg -n; then
-        USE_NVCC_JOBSERVER=ON
-    else
-        USE_NVCC_JOBSERVER=OFF
-    fi
+    USE_NVCC_JOBSERVER=${USE_NVCC_JOBSERVER:-OFF}
     mkdir -p "${LIBCUOPT_BUILD_DIR}"
     cd "${LIBCUOPT_BUILD_DIR}"
     cmake -DDEFINE_ASSERT=${DEFINE_ASSERT} \
