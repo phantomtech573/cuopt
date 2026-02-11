@@ -1551,8 +1551,6 @@ void problem_t<i_t, f_t>::substitute_variables(const std::vector<i_t>& var_indic
     });
   // sort indices so we can detect duplicates
   sort_rows_by_variables(handle_ptr);
-  // now remove the duplicate substituted variables by summing their coefficients on one and
-  // assigning a dummy variable on another
   thrust::for_each(handle_ptr->get_thrust_policy(),
                    thrust::make_counting_iterator(0),
                    thrust::make_counting_iterator(n_constraints),
@@ -1561,23 +1559,17 @@ void problem_t<i_t, f_t>::substitute_variables(const std::vector<i_t>& var_indic
                     offsets                = make_span(offsets),
                     objective_coefficients = make_span(objective_coefficients),
                     dummy_substituted_variable] __device__(i_t cstr_idx) {
-                     i_t offset_begin        = offsets[cstr_idx];
-                     i_t offset_end          = offsets[cstr_idx + 1];
-                     i_t duplicate_start_idx = -1;
-                     while (offset_begin < offset_end - 1) {
-                       i_t var_idx      = variables[offset_begin];
-                       i_t next_var_idx = variables[offset_begin + 1];
-                       if (var_idx == next_var_idx) {
-                         if (duplicate_start_idx == -1) { duplicate_start_idx = offset_begin; }
-                         coefficients[duplicate_start_idx] += coefficients[offset_begin + 1];
-                         variables[duplicate_start_idx] = variables[offset_begin + 1];
-                         // mark those for elimination
-                         variables[offset_begin + 1]    = dummy_substituted_variable;
-                         coefficients[offset_begin + 1] = 0.;
+                     i_t offset_begin = offsets[cstr_idx];
+                     i_t offset_end   = offsets[cstr_idx + 1];
+                     i_t run_start    = offset_begin;
+                     for (i_t j = offset_begin + 1; j < offset_end; ++j) {
+                       if (variables[j] == variables[run_start]) {
+                         coefficients[run_start] += coefficients[j];
+                         variables[j]    = dummy_substituted_variable;
+                         coefficients[j] = 0.;
                        } else {
-                         duplicate_start_idx = -1;
+                         run_start = j;
                        }
-                       offset_begin++;
                      }
                    });
   // in case we use this function in context other than propagation, it is possible that substituted
