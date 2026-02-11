@@ -360,6 +360,13 @@ fi
 ################################################################################
 # Configure, build, and install libcuopt
 if buildAll || hasArg libcuopt; then
+    # Enable nvcc --jobserver only when building through the Makefile,
+    # which starts a GNU Make jobserver that nvcc can participate in.
+    if hasArg -n; then
+        USE_NVCC_JOBSERVER=ON
+    else
+        USE_NVCC_JOBSERVER=OFF
+    fi
     mkdir -p "${LIBCUOPT_BUILD_DIR}"
     cd "${LIBCUOPT_BUILD_DIR}"
     cmake -DDEFINE_ASSERT=${DEFINE_ASSERT} \
@@ -381,12 +388,13 @@ if buildAll || hasArg libcuopt; then
           -DWRITE_FATBIN=${WRITE_FATBIN} \
           -DHOST_LINEINFO=${HOST_LINEINFO} \
           -DPARALLEL_LEVEL="${PARALLEL_LEVEL}" \
+          -DUSE_NVCC_JOBSERVER="${USE_NVCC_JOBSERVER}" \
           -DINSTALL_TARGET="${INSTALL_TARGET}" \
           "${CACHE_ARGS[@]}" \
           "${EXTRA_CMAKE_ARGS[@]}" \
           "${REPODIR}"/cpp
     JFLAG="${PARALLEL_LEVEL:+-j${PARALLEL_LEVEL}}"
-    if hasArg -n; then
+    if [ "${USE_NVCC_JOBSERVER}" = "ON" ]; then
         # Manual make invocation to start its jobserver
         make ${JFLAG} -C "${REPODIR}/cpp" LIBCUOPT_BUILD_DIR="${LIBCUOPT_BUILD_DIR}" VERBOSE_FLAG="${VERBOSE_FLAG}" PARALLEL_LEVEL="${PARALLEL_LEVEL}" ninja-build
     else
