@@ -7,7 +7,7 @@
 
 #include "bigm_indicator_aggregation.hpp"
 
-#include <mip/mip_constants.hpp>
+#include <mip_heuristics/mip_constants.hpp>
 #include <utilities/logger.hpp>
 
 #include <vector>
