@@ -1243,7 +1243,7 @@ std::pair<int64_t, int64_t> rational_approximation(double x,
 // integral.
 double find_scaling_brute_force(const std::vector<double>& coefficients,
                                 int max_brute = 100,
-                                double tol    = 1e-6)
+                                double tol    = 1e-9)
 {
   for (int s = 1; s <= max_brute; ++s) {
     bool ok = true;
@@ -1264,7 +1264,7 @@ double find_scaling_rational(const std::vector<double>& coefficients,
                              double maxscale     = 1e6,
                              int64_t maxdnom     = 10000000,
                              double maxfinal     = 10000,
-                             double intcheck_tol = 1e-6)
+                             double intcheck_tol = 1e-9)
 {
   constexpr double no_scaling = std::numeric_limits<double>::quiet_NaN();
   double epsilon              = 1.0 / maxscale;
