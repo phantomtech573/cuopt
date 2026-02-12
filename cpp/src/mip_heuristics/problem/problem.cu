@@ -1243,7 +1243,7 @@ std::pair<int64_t, int64_t> rational_approximation(double x,
 // integral.
 double find_scaling_brute_force(const std::vector<double>& coefficients,
                                 int max_brute = 100,
-                                double tol    = 1e-9)
+                                double tol    = 1e-6)
 {
   for (int s = 1; s <= max_brute; ++s) {
     bool ok = true;
@@ -1264,7 +1264,7 @@ double find_scaling_rational(const std::vector<double>& coefficients,
                              double maxscale     = 1e6,
                              int64_t maxdnom     = 10000000,
                              double maxfinal     = 10000,
-                             double intcheck_tol = 1e-9)
+                             double intcheck_tol = 1e-6)
 {
   constexpr double no_scaling = std::numeric_limits<double>::quiet_NaN();
   double epsilon              = 1.0 / maxscale;
@@ -1325,27 +1325,32 @@ void problem_t<i_t, f_t>::set_implied_integers(const std::vector<i_t>& implied_i
                      cuopt_assert(var_types[idx] == var_t::CONTINUOUS, "Variable is integer");
                      var_flags[idx] |= (i_t)VAR_IMPLIED_INTEGER;
                    });
+}
+
+template <typename i_t, typename f_t>
+void problem_t<i_t, f_t>::recompute_objective_integrality()
+{
+  // FIXME: we do not consider implied integers here
+  // because it incorrectly considers neos-827175 as having an integer optimal.
+  // need to figure out if Papilo is producing an incorrect flag.
   objective_is_integral = thrust::all_of(handle_ptr->get_thrust_policy(),
                                          thrust::make_counting_iterator(0),
                                          thrust::make_counting_iterator(n_variables),
                                          [v = view()] __device__(i_t var_idx) -> bool {
                                            if (v.objective_coefficients[var_idx] == 0) return true;
                                            return v.is_integer(v.objective_coefficients[var_idx]) &&
-                                                  (v.variable_types[var_idx] == var_t::INTEGER ||
-                                                   (v.var_flags[var_idx] & VAR_IMPLIED_INTEGER));
+                                                  (v.variable_types[var_idx] == var_t::INTEGER);
                                          });
 
-  bool objvars_all_integral =
-    thrust::all_of(handle_ptr->get_thrust_policy(),
-                   thrust::make_counting_iterator(0),
-                   thrust::make_counting_iterator(n_variables),
-                   [v = view()] __device__(i_t var_idx) -> bool {
-                     if (v.objective_coefficients[var_idx] == 0) return true;
-                     return (v.variable_types[var_idx] == var_t::INTEGER ||
-                             (v.var_flags[var_idx] & VAR_IMPLIED_INTEGER));
-                   });
+  bool objvars_all_integral = thrust::all_of(handle_ptr->get_thrust_policy(),
+                                             thrust::make_counting_iterator(0),
+                                             thrust::make_counting_iterator(n_variables),
+                                             [v = view()] __device__(i_t var_idx) -> bool {
+                                               if (v.objective_coefficients[var_idx] == 0)
+                                                 return true;
+                                               return (v.variable_types[var_idx] == var_t::INTEGER);
+                                             });
   if (objvars_all_integral && !objective_is_integral) {
-    // Copy objective coefficients to host
     auto h_objective_coefficients =
       cuopt::host_copy(objective_coefficients, handle_ptr->get_stream());
     std::vector<double> h_nonzero_obj_coefs;
@@ -1356,8 +1361,7 @@ void problem_t<i_t, f_t>::set_implied_integers(const std::vector<i_t>& implied_i
     }
     double scaling_factor = find_objective_scaling_factor(h_nonzero_obj_coefs);
     if (!std::isnan(scaling_factor)) {
-      CUOPT_LOG_DEBUG("Scaling objective coefficients by %.0f to allow integrality",
-                      scaling_factor);
+      CUOPT_LOG_INFO("Scaling objective coefficients by %.0f to allow integrality", scaling_factor);
       thrust::for_each(
         handle_ptr->get_thrust_policy(),
         thrust::make_counting_iterator(0),
@@ -1365,7 +1369,8 @@ void problem_t<i_t, f_t>::set_implied_integers(const std::vector<i_t>& implied_i
         [objective_coefficients = make_span(objective_coefficients),
          scaling_factor] __device__(i_t idx) { objective_coefficients[idx] *= scaling_factor; });
       presolve_data.objective_scaling_factor /= scaling_factor;
-      objvars_all_integral = true;
+      presolve_data.objective_offset *= scaling_factor;
+      objective_is_integral = true;
     }
   }
 }
@@ -1437,7 +1442,8 @@ void problem_t<i_t, f_t>::substitute_variables(const std::vector<i_t>& var_indic
      var_to_substitute_indices           = make_span(d_var_to_substitute_indices),
      objective_coefficients              = make_span(objective_coefficients),
      objective_offset_delta_per_variable = make_span(objective_offset_delta_per_variable),
-     objective_offset                    = objective_offset.data()] __device__(i_t idx) {
+     objective_offset                    = objective_offset.data(),
+     var_flags                           = make_span(presolve_data.var_flags)] __device__(i_t idx) {
       i_t var_idx                     = var_indices[idx];
       i_t substituting_var_idx        = var_to_substitute_indices[idx];
       variable_fix_mask[var_idx]      = idx;
@@ -1446,6 +1452,9 @@ void problem_t<i_t, f_t>::substitute_variables(const std::vector<i_t>& var_indic
       //  atomicAdd(objective_offset, objective_offset_difference);
       atomicAdd(&objective_coefficients[substituting_var_idx],
                 objective_coefficients[var_idx] * substitute_coefficient[idx]);
+      // Substitution changes the constraint coefficients on x_B, invalidating
+      // any implied-integrality proof that relied on the original structure.
+      var_flags[substituting_var_idx] &= ~(i_t)VAR_IMPLIED_INTEGER;
     });
   presolve_data.objective_offset += thrust::reduce(handle_ptr->get_thrust_policy(),
                                                    objective_offset_delta_per_variable.begin(),
