@@ -1223,6 +1223,8 @@ std::pair<int64_t, int64_t> rational_approximation(double x, int64_t max_denom, 
     int64_t q_curr = a * q_prev1 + q_prev2;
 
     if (q_curr > max_denom) break;
+    // overflow guard
+    if (std::abs(p_curr) < std::abs(p_prev1)) break;
 
     p_prev2 = p_prev1;
     q_prev2 = q_prev1;
@@ -1278,8 +1280,11 @@ double find_scaling_rational(const std::vector<double>& coefficients,
       gcd = abs_num;
       scm = den;
     } else {
-      gcd = std::gcd(gcd, abs_num);
-      scm *= den / std::gcd(scm, den);
+      gcd            = std::gcd(gcd, abs_num);
+      int64_t factor = den / std::gcd(scm, den);
+      int64_t new_scm;
+      if (__builtin_mul_overflow(scm, factor, &new_scm)) return no_scaling;
+      scm = new_scm;
     }
 
     if ((double)scm / (double)gcd > maxscale) return no_scaling;
