@@ -1197,16 +1197,13 @@ void problem_t<i_t, f_t>::insert_constraints(constraints_delta_t<i_t, f_t>& h_co
 
 // Best rational approximation p/q to x with q <= max_denom, via continued fractions.
 // Returns the last valid convergent if the denominator limit is reached.
-std::pair<int64_t, int64_t> rational_approximation(double x,
-                                                   int64_t max_denom,
-                                                   double mindelta,
-                                                   double maxdelta)
+std::pair<int64_t, int64_t> rational_approximation(double x, int64_t max_denom, double epsilon)
 {
   double ax = std::abs(x);
-  if (ax < maxdelta) { return {0, 1}; }
+  if (ax < epsilon) { return {0, 1}; }
 
   if (x < 0) {
-    auto [p, q] = rational_approximation(-x, max_denom, mindelta, maxdelta);
+    auto [p, q] = rational_approximation(-x, max_denom, epsilon);
     return {-p, q};
   }
 
@@ -1233,7 +1230,7 @@ std::pair<int64_t, int64_t> rational_approximation(double x,
     q_prev1 = q_curr;
 
     double approx_err = x - (double)p_curr / (double)q_curr;
-    if (approx_err > mindelta && approx_err < maxdelta) break;
+    if (std::abs(approx_err) < epsilon) break;
   }
 
   return {p_prev1, q_prev1};
@@ -1273,7 +1270,7 @@ double find_scaling_rational(const std::vector<double>& coefficients,
   int64_t scm = 1;
 
   for (double c : coefficients) {
-    auto [num, den] = rational_approximation(c, maxdnom, -epsilon, epsilon);
+    auto [num, den] = rational_approximation(c, maxdnom, epsilon);
     if (den == 0 || num == 0) continue;
 
     int64_t abs_num = std::abs(num);
