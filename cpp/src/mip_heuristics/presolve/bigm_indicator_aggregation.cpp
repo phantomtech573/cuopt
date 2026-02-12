@@ -33,36 +33,39 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
   const auto& upper_bounds      = domains.upper_bounds;
   const auto& objective         = problem.getObjective().coefficients;
 
-  const int nrows = constraint_matrix.getNRows();
-  const int ncols = problem.getNCols();
+  const int nrows   = constraint_matrix.getNRows();
+  const int ncols   = problem.getNCols();
+  const double tlim = problemUpdate.getPresolveOptions().tlim;
 
-  // Phase 1: Detect big-M indicator constraints.
+  // Phase 1: Detect big-M indicator constraints and build detail-master mapping.
   //
-  // Pattern: -M * y + x_1 + x_2 + ... + x_K <= 0   (M >= K)
-  //   - Exactly one variable y with negative coefficient -M
-  //   - All other K variables with coefficient exactly +1
-  //   - M >= K (big-M at least as large as detail count; need not be tight)
-  //   - All variables binary or implied binary
-  //   - Row is <= 0 (lhs = -inf, rhs = 0)
+  // Standard big-M (y=0 => x_i=0):
+  //   -M*y + a_1*x_1 + ... + a_K*x_K <= 0   with M >= sum(a_i), a_i > 0
+  //   Row form: lhs=-inf, rhs=0, one negative coeff (master), rest positive (details).
+  //
+  // Also detected in normalized form (Case B):
+  //   a_1*x_1 + ... + a_K*x_K - M*y >= 0   (one positive master, rest negative details)
+  //   Equivalent to: sum(|a_i|*x_i) <= M*y.
+  //
+  // The implication y=0 => x_i=0 holds for any positive a_i, since
+  // sum(a_i * x_i) <= 0 with a_i > 0 and x_i >= 0 forces all x_i = 0.
+  //
+  // All variables must be binary or implied binary.
 
-  struct bigm_info_t {
-    int row;
-    int master_col;
-    std::vector<int> detail_cols;
-  };
-  std::vector<bigm_info_t> bigm_rows;
-
-  // detail_col -> (bigm_index, master_col); only keep details in exactly 1 big-M
   std::vector<int> detail_bigm_count(ncols, 0);
   std::vector<int> detail_master(ncols, -1);
+  std::vector<bool> bigm_row_flag(nrows, false);
+  int n_bigm_rows     = 0;
+  int detail_set_size = 0;
 
   for (int row = 0; row < nrows; ++row) {
+    if (this->is_time_exceeded(timer, tlim)) return papilo::PresolveStatus::kUnchanged;
     if (row_flags[row].test(papilo::RowFlag::kRedundant)) continue;
 
-    // Must be <= 0: rhs finite and == 0, lhs infinite
-    if (!row_flags[row].test(papilo::RowFlag::kLhsInf)) continue;
-    if (row_flags[row].test(papilo::RowFlag::kRhsInf)) continue;
-    if (!num.isZero(rhs_values[row])) continue;
+    bool lhs_inf_row = row_flags[row].test(papilo::RowFlag::kLhsInf);
+    bool rhs_inf_row = row_flags[row].test(papilo::RowFlag::kRhsInf);
+    if (lhs_inf_row && rhs_inf_row) continue;
+    if (!lhs_inf_row && !rhs_inf_row) continue;
 
     auto row_coeff   = constraint_matrix.getRowCoefficients(row);
     const int* cols  = row_coeff.getIndices();
@@ -71,10 +74,13 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
 
     if (length < 2) continue;
 
-    int master_col      = -1;
-    f_t master_coeff    = 0;
-    int n_positive_ones = 0;
-    bool valid          = true;
+    int neg_count = 0;
+    int neg_last  = -1;
+    f_t sum_neg   = 0;
+    int pos_count = 0;
+    int pos_last  = -1;
+    f_t sum_pos   = 0;
+    bool valid    = true;
 
     for (int j = 0; j < length; ++j) {
       int col  = cols[j];
@@ -89,109 +95,102 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
         break;
       }
 
-      if (coef < -0.5) {
-        if (master_col != -1) {
-          valid = false;
-          break;
-        }
-        master_col   = col;
-        master_coeff = coef;
-      } else if (num.isEq(coef, f_t{1})) {
-        ++n_positive_ones;
+      if (coef < -num.getFeasTol()) {
+        neg_last = col;
+        ++neg_count;
+        sum_neg += coef;
+      } else if (coef > num.getFeasTol()) {
+        pos_last = col;
+        ++pos_count;
+        sum_pos += coef;
       } else {
         valid = false;
         break;
       }
     }
+    if (!valid) continue;
 
-    if (!valid || master_col == -1) continue;
-    // M >= K: the big-M coefficient must be at least as large as the detail count
-    // This ensures that when y = 1, all K details can simultaneously be 1.
-    if (master_coeff > -(f_t)n_positive_ones + num.getFeasTol()) continue;
+    bool is_leq = lhs_inf_row && !rhs_inf_row;
+    bool is_geq = !lhs_inf_row && rhs_inf_row;
+    f_t bound   = is_leq ? rhs_values[row] : lhs_values[row];
 
-    bigm_info_t info;
-    info.row        = row;
-    info.master_col = master_col;
-    info.detail_cols.reserve(n_positive_ones);
+    int master_col = -1;
+    bool detected  = false;
+
+    // Case A: one negative (master), rest positive (details), <= 0
+    if (neg_count == 1 && pos_count >= 1 && is_leq && num.isZero(bound)) {
+      f_t M = -sum_neg;
+      if (M + num.getFeasTol() >= sum_pos) {
+        master_col = neg_last;
+        detected   = true;
+      }
+    }
+    // Case B: one positive (master), rest negative (details), >= 0
+    // Normalized: sum(|a_i|*x_i) <= M*y
+    else if (pos_count == 1 && neg_count >= 1 && is_geq && num.isZero(bound)) {
+      f_t M = sum_pos;
+      if (M + num.getFeasTol() >= -sum_neg) {
+        master_col = pos_last;
+        detected   = true;
+      }
+    }
+
+    if (!detected || master_col == -1) continue;
+
+    bigm_row_flag[row] = true;
+    ++n_bigm_rows;
     for (int j = 0; j < length; ++j) {
-      if (cols[j] != master_col) info.detail_cols.push_back(cols[j]);
-    }
-    bigm_rows.push_back(std::move(info));
-  }
-
-  if (bigm_rows.empty()) return papilo::PresolveStatus::kUnchanged;
-
-  // Build detail -> master mapping (only for details in exactly 1 big-M)
-  int detail_set_size = 0;
-  for (size_t bi = 0; bi < bigm_rows.size(); ++bi) {
-    for (int d : bigm_rows[bi].detail_cols) {
-      detail_bigm_count[d]++;
-      detail_master[d] = bigm_rows[bi].master_col;
-      ++detail_set_size;
+      if (cols[j] != master_col) {
+        detail_bigm_count[cols[j]]++;
+        detail_master[cols[j]] = master_col;
+        ++detail_set_size;
+      }
     }
   }
 
-  // Phase 2: Safety check per detail.
+  if (n_bigm_rows == 0) return papilo::PresolveStatus::kUnchanged;
+
+  // Phase 2: Safety check per detail (row-major pass).
   //
-  // The substitution x_i = y is valid when, for any optimal (x*, y*),
-  // setting x_i = y_{m(i)} doesn't worsen the objective or violate any
-  // constraint. This holds when:
-  //   - c(x_i) <= 0 (non-positive cost: activating the detail is free or beneficial)
-  //   - Every non-big-M constraint containing x_i satisfies one of:
-  //     (a) >= constraint with coeff(x_i) > 0: substitution increases LHS, helping >=
-  //     (b) <= constraint with coeff(x_i) < 0: substitution decreases LHS, helping <=
-  //   - Unsafe cases (substitution makes constraint harder to satisfy):
-  //     (c) >= constraint with coeff(x_i) < 0
-  //     (d) <= constraint with coeff(x_i) > 0
-  //     (e) equality constraint (either direction could violate)
-  //     (f) range constraint with positive coeff (tightens the <= side)
+  // The substitution x_i = y INCREASES x_i from 0 to 1 when y=1. Safe when:
+  //   (a) >= constraint with coeff > 0: increasing x helps
+  //   (b) <= constraint with coeff < 0: increasing x helps
+  //   Objective: c(x_i) <= 0 (increasing x is free or beneficial)
 
-  std::vector<bool> bigm_row_flag(nrows, false);
-  for (const auto& bm : bigm_rows) {
-    bigm_row_flag[bm.row] = true;
+  std::vector<bool> detail_unsafe(ncols, false);
+
+  for (int row = 0; row < nrows; ++row) {
+    if (this->is_time_exceeded(timer, tlim)) return papilo::PresolveStatus::kUnchanged;
+    if (row_flags[row].test(papilo::RowFlag::kRedundant)) continue;
+    if (bigm_row_flag[row]) continue;
+
+    bool lhs_inf = row_flags[row].test(papilo::RowFlag::kLhsInf);
+    bool rhs_inf = row_flags[row].test(papilo::RowFlag::kRhsInf);
+    bool is_geq  = !lhs_inf && rhs_inf;
+    bool is_leq  = lhs_inf && !rhs_inf;
+
+    auto row_coeff   = constraint_matrix.getRowCoefficients(row);
+    const int* cols  = row_coeff.getIndices();
+    const f_t* vals  = row_coeff.getValues();
+    const int length = row_coeff.getLength();
+
+    for (int j = 0; j < length; ++j) {
+      int col = cols[j];
+      if (detail_bigm_count[col] != 1) continue;
+      if (detail_unsafe[col]) continue;
+
+      f_t cv         = vals[j];
+      bool safe_here = (is_geq && cv > 0) || (is_leq && cv < 0);
+      if (!safe_here) detail_unsafe[col] = true;
+    }
   }
 
-  std::vector<bool> detail_safe(ncols, false);
   int n_safe = 0;
-
   for (int col = 0; col < ncols; ++col) {
     if (detail_bigm_count[col] != 1) continue;
-
-    auto col_coeff    = constraint_matrix.getColumnCoefficients(col);
-    const int* rows   = col_coeff.getIndices();
-    const f_t* cvals  = col_coeff.getValues();
-    const int col_len = col_coeff.getLength();
-
-    // Detail must have non-positive objective cost (zero or beneficial)
+    if (detail_unsafe[col]) continue;
     if (objective[col] > num.getFeasTol()) continue;
-
-    bool safe = true;
-    for (int k = 0; k < col_len; ++k) {
-      int r  = rows[k];
-      f_t cv = cvals[k];
-
-      if (row_flags[r].test(papilo::RowFlag::kRedundant)) continue;
-
-      if (bigm_row_flag[r]) continue;
-
-      bool lhs_inf = row_flags[r].test(papilo::RowFlag::kLhsInf);
-      bool rhs_inf = row_flags[r].test(papilo::RowFlag::kRhsInf);
-
-      // >= constraint (lhs finite, rhs infinite) with positive coeff: safe
-      if (!lhs_inf && rhs_inf && cv > 0) continue;
-
-      // <= constraint (lhs infinite, rhs finite) with negative coeff: safe
-      if (lhs_inf && !rhs_inf && cv < 0) continue;
-
-      // Anything else (equality, range, or wrong-sign coefficient) is unsafe
-      safe = false;
-      break;
-    }
-
-    if (safe) {
-      detail_safe[col] = true;
-      ++n_safe;
-    }
+    ++n_safe;
   }
 
   if (n_safe == 0) return papilo::PresolveStatus::kUnchanged;
@@ -199,9 +198,9 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
   CUOPT_LOG_INFO(
     "BigM indicator aggregation: %d big-M constraints detected, %d detail variables "
     "substituted out of %d candidates",
-    (int)bigm_rows.size(),
+    n_bigm_rows,
     n_safe,
-    (int)detail_set_size);
+    detail_set_size);
 
   // Phase 3: Substitute safe details via replaceCol.
   //
@@ -209,10 +208,15 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
   // PaPILO substitutes the detail out of all constraints and stores
   // the relationship for postsolve.
 
+  if (this->is_time_exceeded(timer, tlim)) return papilo::PresolveStatus::kUnchanged;
+
   papilo::PresolveStatus status = papilo::PresolveStatus::kUnchanged;
 
   for (int col = 0; col < ncols; ++col) {
-    if (!detail_safe[col]) continue;
+    if (detail_bigm_count[col] != 1) continue;
+    if (detail_unsafe[col]) continue;
+    if (objective[col] > num.getFeasTol()) continue;
+    if (this->is_time_exceeded(timer, tlim)) break;
     int master = detail_master[col];
     reductions.replaceCol(col, master, f_t{1}, f_t{0});
     status = papilo::PresolveStatus::kReduced;
