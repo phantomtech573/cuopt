@@ -1526,6 +1526,8 @@ void problem_t<i_t, f_t>::substitute_variables(const std::vector<i_t>& var_indic
     });
   // sort indices so we can detect duplicates
   sort_rows_by_variables(handle_ptr);
+  // now remove the duplicate substituted variables by summing their coefficients on one and
+  // assigning a dummy variable on another
   thrust::for_each(handle_ptr->get_thrust_policy(),
                    thrust::make_counting_iterator(0),
                    thrust::make_counting_iterator(n_constraints),
