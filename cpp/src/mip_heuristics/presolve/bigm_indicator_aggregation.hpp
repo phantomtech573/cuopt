@@ -51,6 +51,19 @@ class BigMIndicatorAggregation : public papilo::PresolveMethod<f_t> {
     if (col_flags[col].test(papilo::ColFlag::kUbInf)) return false;
     return lower_bounds[col] == 0.0 && upper_bounds[col] == 1.0;
   }
+
+  // A detail variable can be binary, integer, or continuous, as long as
+  // it has lb=0 and a finite ub > 0. The substitution x = U*y maps it
+  // to {0, U} via the binary master.
+  bool is_valid_detail(int col,
+                       const papilo::Flags<papilo::ColFlag>* col_flags,
+                       const f_t* lower_bounds,
+                       const f_t* upper_bounds) const
+  {
+    if (col_flags[col].test(papilo::ColFlag::kLbInf)) return false;
+    if (col_flags[col].test(papilo::ColFlag::kUbInf)) return false;
+    return lower_bounds[col] == 0.0 && upper_bounds[col] > 0.0;
+  }
 };
 
 }  // namespace cuopt::linear_programming::detail
