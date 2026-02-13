@@ -272,6 +272,8 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
   struct reverse_bigm_t {
     int row;
     int master_col;
+    bool is_geq;  // true: lhs=0, rhs=inf (need changeRowRHS); false: lhs=-inf, rhs=0 (need
+                  // changeRowLHS)
     std::vector<int> detail_cols;
   };
   std::vector<reverse_bigm_t> reverse_rows;
@@ -357,6 +359,7 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
     reverse_bigm_t rbm;
     rbm.row        = row;
     rbm.master_col = master_col;
+    rbm.is_geq     = is_geq;
     for (int j = 0; j < length; ++j)
       if (cols[j] != master_col) rbm.detail_cols.push_back(cols[j]);
     reverse_rows.push_back(std::move(rbm));
@@ -368,11 +371,6 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
   //       (positive coeff in <=, negative coeff in >=)
   // If so, tighten the row from >= to equality.
   if (!reverse_rows.empty()) {
-    // Build a set of reverse row indices for skipping in the safety scan
-    std::vector<bool> reverse_row_flag(nrows, false);
-    for (const auto& rbm : reverse_rows)
-      reverse_row_flag[rbm.row] = true;
-
     // Per-column "decrease is unsafe" flag
     std::vector<bool> decrease_unsafe(ncols, false);
 
@@ -380,7 +378,9 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
       if (this->is_time_exceeded(timer, tlim)) break;
       if (row_flags[row].test(papilo::RowFlag::kRedundant)) continue;
       if (bigm_row_flag[row]) continue;
-      if (reverse_row_flag[row]) continue;
+      // Do NOT skip reverse_row_flag rows: a detail may appear in multiple
+      // reverse big-M rows with different masters, and its presence in one
+      // reverse row constrains it even if that row is a tightening candidate.
 
       bool lhs_inf = row_flags[row].test(papilo::RowFlag::kLhsInf);
       bool rhs_inf = row_flags[row].test(papilo::RowFlag::kRhsInf);
@@ -414,7 +414,12 @@ papilo::PresolveStatus BigMIndicatorAggregation<f_t>::execute(
 
       papilo::TransactionGuard tg{reductions};
       reductions.lockRow(rbm.row);
-      reductions.changeRowRHS(rbm.row, f_t{0});
+      // >= 0 row (lhs=0, rhs=inf): set rhs=0 to create equality 0 <= row <= 0
+      // <= 0 row (lhs=-inf, rhs=0): set lhs=0 to create equality 0 <= row <= 0
+      if (rbm.is_geq)
+        reductions.changeRowRHS(rbm.row, f_t{0});
+      else
+        reductions.changeRowLHS(rbm.row, f_t{0});
       ++n_reverse_tightened;
       status = papilo::PresolveStatus::kReduced;
     }
