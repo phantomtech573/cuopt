@@ -36,7 +36,8 @@ i_t factorize_basis(const csc_matrix_t<i_t, f_t>& A,
                     std::vector<i_t>& pinv,
                     std::vector<i_t>& q,
                     std::vector<i_t>& deficient,
-                    std::vector<i_t>& slacks_need);
+                    std::vector<i_t>& slacks_need,
+                    f_t start_time);
 
 // Repair the basis by bringing in slacks
 template <typename i_t, typename f_t>

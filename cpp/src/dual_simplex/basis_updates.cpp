@@ -2264,7 +2264,8 @@ int basis_update_mpf_t<i_t, f_t>::refactor_basis(
   const std::vector<f_t>& upper,
   std::vector<i_t>& basic_list,
   std::vector<i_t>& nonbasic_list,
-  std::vector<variable_status_t>& vstatus)
+  std::vector<variable_status_t>& vstatus,
+  f_t start_time)
 {
   raft::common::nvtx::range scope("LU::refactor_basis");
   std::vector<i_t> deficient;
@@ -2282,8 +2283,10 @@ int basis_update_mpf_t<i_t, f_t>::refactor_basis(
                                inverse_row_permutation_,
                                q,
                                deficient,
-                               slacks_needed);
+                               slacks_needed,
+                               start_time);
   if (status == CONCURRENT_HALT_RETURN) { return CONCURRENT_HALT_RETURN; }
+  if (status == TIME_LIMIT_RETURN) { return TIME_LIMIT_RETURN; }
   if (status == -1) {
     settings.log.debug("Initial factorization failed\n");
     basis_repair(A,
@@ -2323,8 +2326,10 @@ int basis_update_mpf_t<i_t, f_t>::refactor_basis(
                              inverse_row_permutation_,
                              q,
                              deficient,
-                             slacks_needed);
+                             slacks_needed,
+                             start_time);
     if (status == CONCURRENT_HALT_RETURN) { return CONCURRENT_HALT_RETURN; }
+    if (status == TIME_LIMIT_RETURN) { return TIME_LIMIT_RETURN; }
     if (status == -1) {
 #ifdef CHECK_L_FACTOR
       if (L0_.check_matrix() == -1) { settings.log.printf("Bad L after basis repair\n"); }

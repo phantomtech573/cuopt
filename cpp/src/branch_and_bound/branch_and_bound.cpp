@@ -1888,8 +1888,13 @@ lp_status_t branch_and_bound_t<i_t, f_t>::solve_root_relaxation(
                                                         original_lp_.upper,
                                                         basic_list,
                                                         nonbasic_list,
-                                                        crossover_vstatus_);
-      if (refactor_status != 0) {
+                                                        crossover_vstatus_,
+                                                        exploration_stats_.start_time);
+      if (refactor_status == TIME_LIMIT_RETURN) {
+        root_status = lp_status_t::TIME_LIMIT;
+      } else if (refactor_status == CONCURRENT_HALT_RETURN) {
+        root_status = lp_status_t::TIME_LIMIT;
+      } else if (refactor_status != 0) {
         settings_.log.printf("Failed to refactor basis. %d deficient columns.\n", refactor_status);
         assert(refactor_status == 0);
         root_status = lp_status_t::NUMERICAL_ISSUES;
@@ -1901,6 +1906,15 @@ lp_status_t branch_and_bound_t<i_t, f_t>::solve_root_relaxation(
       user_objective = root_crossover_soln_.user_objective;
       iter           = root_crossover_soln_.iterations;
       solver_name    = "Barrier/PDLP and Crossover";
+    } else if (crossover_status == crossover_status_t::TIME_LIMIT ||
+               toc(exploration_stats_.start_time) > settings_.time_limit) {
+      set_root_concurrent_halt(1);
+      root_status = root_status_future.get();
+      set_root_concurrent_halt(0);
+      root_status    = lp_status_t::TIME_LIMIT;
+      user_objective = root_relax_soln_.user_objective;
+      iter           = root_relax_soln_.iterations;
+      solver_name    = "Dual Simplex";
     } else {
       root_status    = root_status_future.get();
       user_objective = root_relax_soln_.user_objective;

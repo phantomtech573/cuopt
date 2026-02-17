@@ -165,7 +165,8 @@ i_t factorize_basis(const csc_matrix_t<i_t, f_t>& A,
                     std::vector<i_t>& pinv,
                     std::vector<i_t>& q,
                     std::vector<i_t>& deficient,
-                    std::vector<i_t>& slacks_needed)
+                    std::vector<i_t>& slacks_needed,
+                    f_t start_time)
 {
   raft::common::nvtx::range scope("LU::factorize_basis");
   const i_t m              = basic_list.size();
@@ -363,11 +364,12 @@ i_t factorize_basis(const csc_matrix_t<i_t, f_t>& A,
                                  S_col_perm,
                                  SL,
                                  SU,
-                                 S_perm_inv);
+                                 S_perm_inv,
+                                 start_time);
         if (settings.concurrent_halt != nullptr && *settings.concurrent_halt == 1) {
-          settings.log.printf("Concurrent halt\n");
           return CONCURRENT_HALT_RETURN;
         }
+        if (Srank < 0) { return Srank; }
         if (Srank != Sdim) {
           // Get the rank deficient columns
           deficient.clear();
@@ -568,7 +570,13 @@ i_t factorize_basis(const csc_matrix_t<i_t, f_t>& A,
   }
   q.resize(m);
   f_t fact_start = tic();
-  rank           = right_looking_lu(A, settings, medium_tol, basic_list, q, L, U, pinv);
+  rank           = right_looking_lu(A, settings, medium_tol, basic_list, q, L, U, pinv, start_time);
+  if (rank < 0) {
+    if (settings.concurrent_halt != nullptr && *settings.concurrent_halt == 1) {
+      return CONCURRENT_HALT_RETURN;
+    }
+    return rank;
+  }
   inverse_permutation(pinv, p);
   if (rank != m) {
     // Get the rank deficient columns
@@ -584,7 +592,6 @@ i_t factorize_basis(const csc_matrix_t<i_t, f_t>& A,
     }
   }
   if (settings.concurrent_halt != nullptr && *settings.concurrent_halt == 1) {
-    settings.log.printf("Concurrent halt\n");
     return CONCURRENT_HALT_RETURN;
   }
   if (verbose) {
@@ -874,7 +881,8 @@ template int factorize_basis<int>(const csc_matrix_t<int, double>& A,
                                   std::vector<int>& pinv,
                                   std::vector<int>& q,
                                   std::vector<int>& deficient,
-                                  std::vector<int>& slacks_needed);
+                                  std::vector<int>& slacks_needed,
+                                  double start_time);
 
 template int basis_repair<int, double>(const csc_matrix_t<int, double>& A,
                                        const simplex_solver_settings_t<int, double>& settings,

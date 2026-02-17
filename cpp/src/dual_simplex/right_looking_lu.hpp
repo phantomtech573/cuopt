@@ -22,7 +22,8 @@ i_t right_looking_lu(const csc_matrix_t<i_t, f_t>& A,
                      VectorI& q,
                      csc_matrix_t<i_t, f_t>& L,
                      csc_matrix_t<i_t, f_t>& U,
-                     VectorI& pinv);
+                     VectorI& pinv,
+                     f_t start_time);
 
 template <typename i_t, typename f_t>
 i_t right_looking_lu_row_permutation_only(const csc_matrix_t<i_t, f_t>& A,

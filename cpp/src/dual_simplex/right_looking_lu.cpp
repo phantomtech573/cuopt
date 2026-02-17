@@ -580,7 +580,8 @@ i_t right_looking_lu(const csc_matrix_t<i_t, f_t>& A,
                      VectorI& q,
                      csc_matrix_t<i_t, f_t>& L,
                      csc_matrix_t<i_t, f_t>& U,
-                     VectorI& pinv)
+                     VectorI& pinv,
+                     f_t start_time)
 {
   raft::common::nvtx::range scope("LU::right_looking_lu");
   const i_t n = column_list.size();
@@ -634,7 +635,10 @@ i_t right_looking_lu(const csc_matrix_t<i_t, f_t>& A,
 
   i_t pivots = 0;
   for (i_t k = 0; k < n; ++k) {
-    if (settings.concurrent_halt != nullptr && *settings.concurrent_halt == 1) { return -1; }
+    if (toc(start_time) > settings.time_limit) { return TIME_LIMIT_RETURN; }
+    if (settings.concurrent_halt != nullptr && *settings.concurrent_halt == 1) {
+      return CONCURRENT_HALT_RETURN;
+    }
     // Find pivot that satisfies
     // abs(pivot) >= abstol,
     // abs(pivot) >= threshold_tol * max abs[pivot column]
@@ -1114,11 +1118,7 @@ i_t right_looking_lu_row_permutation_only(const csc_matrix_t<i_t, f_t>& A,
         toc(factorization_start_time));
       last_print = tic();
     }
-    if (toc(factorization_start_time) > settings.time_limit) {
-      settings.log.printf("Right-looking LU factorization time exceeded\n");
-      return -1;
-    }
-
+    if (toc(start_time) > settings.time_limit) { return TIME_LIMIT_RETURN; }
     if (settings.concurrent_halt != nullptr && *settings.concurrent_halt == 1) {
       settings.log.printf("Concurrent halt\n");
       return CONCURRENT_HALT_RETURN;
@@ -1157,7 +1157,8 @@ template int right_looking_lu<int, double, std::vector<int>>(
   std::vector<int>& q,
   csc_matrix_t<int, double>& L,
   csc_matrix_t<int, double>& U,
-  std::vector<int>& pinv);
+  std::vector<int>& pinv,
+  double start_time);
 
 template int right_looking_lu<int, double, ins_vector<int>>(
   const csc_matrix_t<int, double>& A,
@@ -1167,7 +1168,8 @@ template int right_looking_lu<int, double, ins_vector<int>>(
   ins_vector<int>& q,
   csc_matrix_t<int, double>& L,
   csc_matrix_t<int, double>& U,
-  ins_vector<int>& pinv);
+  ins_vector<int>& pinv,
+  double start_time);
 
 template int right_looking_lu_row_permutation_only<int, double>(
   const csc_matrix_t<int, double>& A,
