@@ -97,7 +97,7 @@ f_t cut_pool_t<i_t, f_t>::cut_orthogonality(i_t i, i_t j)
 }
 
 template <typename i_t, typename f_t>
-void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax, f_t start_time)
+void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
 {
   const f_t min_cut_distance = 1e-4;
   cut_distances_.resize(cut_storage_.m, 0.0);
@@ -105,11 +105,6 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax, f_t start_time)
 
   const bool verbose = false;
   for (i_t i = 0; i < cut_storage_.m; i++) {
-    if (toc(start_time) >= settings_.time_limit) {
-      best_cuts_.clear();
-      scored_cuts_ = 0;
-      return;
-    }
     f_t violation;
     f_t cut_dist      = cut_distance(i, x_relax, violation, cut_norms_[i]);
     cut_distances_[i] = cut_dist <= min_cut_distance ? 0.0 : cut_dist;
@@ -140,7 +135,6 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax, f_t start_time)
   }
 
   while (scored_cuts_ < max_cuts && !sorted_indices.empty()) {
-    if (toc(start_time) >= settings_.time_limit) { return; }
     const i_t i = sorted_indices.back();
     sorted_indices.pop_back();
 
@@ -149,7 +143,6 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax, f_t start_time)
     f_t cut_ortho            = 1.0;
     const i_t best_cuts_size = best_cuts_.size();
     for (i_t k = 0; k < best_cuts_size; k++) {
-      if (toc(start_time) >= settings_.time_limit) { return; }
       const i_t j = best_cuts_[k];
       cut_ortho   = std::min(cut_ortho, cut_orthogonality(i, j));
     }
@@ -163,8 +156,7 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax, f_t start_time)
 template <typename i_t, typename f_t>
 i_t cut_pool_t<i_t, f_t>::get_best_cuts(csr_matrix_t<i_t, f_t>& best_cuts,
                                         std::vector<f_t>& best_rhs,
-                                        std::vector<cut_type_t>& best_cut_types,
-                                        f_t start_time)
+                                        std::vector<cut_type_t>& best_cut_types)
 {
   best_cuts.m = 0;
   best_cuts.n = original_vars_;
@@ -179,7 +171,6 @@ i_t cut_pool_t<i_t, f_t>::get_best_cuts(csr_matrix_t<i_t, f_t>& best_cuts,
   best_cut_types.reserve(scored_cuts_);
 
   for (i_t k = 0; k < static_cast<i_t>(best_cuts_.size()); ++k) {
-    if (toc(start_time) >= settings_.time_limit) { break; }
     const i_t i = best_cuts_[k];
     sparse_vector_t<i_t, f_t> cut(cut_storage_, i);
     cut.negate();
@@ -571,46 +562,33 @@ void cut_generation_t<i_t, f_t>::generate_cuts(const lp_problem_t<i_t, f_t>& lp,
                                                basis_update_mpf_t<i_t, f_t>& basis_update,
                                                const std::vector<f_t>& xstar,
                                                const std::vector<i_t>& basic_list,
-                                               const std::vector<i_t>& nonbasic_list,
-                                               f_t start_time)
+                                               const std::vector<i_t>& nonbasic_list)
 {
-  if (toc(start_time) >= settings.time_limit) { return; }
-
   // Generate Gomory and CG Cuts
   if (settings.mixed_integer_gomory_cuts != 0 || settings.strong_chvatal_gomory_cuts != 0) {
     f_t cut_start_time = tic();
-    generate_gomory_cuts(lp,
-                         settings,
-                         Arow,
-                         new_slacks,
-                         var_types,
-                         basis_update,
-                         xstar,
-                         basic_list,
-                         nonbasic_list,
-                         start_time);
+    generate_gomory_cuts(
+      lp, settings, Arow, new_slacks, var_types, basis_update, xstar, basic_list, nonbasic_list);
     f_t cut_generation_time = toc(cut_start_time);
     if (cut_generation_time > 1.0) {
       settings.log.debug("Gomory and CG cut generation time %.2f seconds\n", cut_generation_time);
     }
   }
-  if (toc(start_time) >= settings.time_limit) { return; }
 
   // Generate Knapsack cuts
   if (settings.knapsack_cuts != 0) {
     f_t cut_start_time = tic();
-    generate_knapsack_cuts(lp, settings, Arow, new_slacks, var_types, xstar, start_time);
+    generate_knapsack_cuts(lp, settings, Arow, new_slacks, var_types, xstar);
     f_t cut_generation_time = toc(cut_start_time);
     if (cut_generation_time > 1.0) {
       settings.log.debug("Knapsack cut generation time %.2f seconds\n", cut_generation_time);
     }
   }
-  if (toc(start_time) >= settings.time_limit) { return; }
 
   // Generate MIR and CG cuts
   if (settings.mir_cuts != 0 || settings.strong_chvatal_gomory_cuts != 0) {
     f_t cut_start_time = tic();
-    generate_mir_cuts(lp, settings, Arow, new_slacks, var_types, xstar, start_time);
+    generate_mir_cuts(lp, settings, Arow, new_slacks, var_types, xstar);
     f_t cut_generation_time = toc(cut_start_time);
     if (cut_generation_time > 1.0) {
       settings.log.debug("MIR and CG cut generation time %.2f seconds\n", cut_generation_time);
@@ -625,12 +603,10 @@ void cut_generation_t<i_t, f_t>::generate_knapsack_cuts(
   csr_matrix_t<i_t, f_t>& Arow,
   const std::vector<i_t>& new_slacks,
   const std::vector<variable_type_t>& var_types,
-  const std::vector<f_t>& xstar,
-  f_t start_time)
+  const std::vector<f_t>& xstar)
 {
   if (knapsack_generation_.num_knapsack_constraints() > 0) {
     for (i_t knapsack_row : knapsack_generation_.get_knapsack_constraints()) {
-      if (toc(start_time) >= settings.time_limit) { return; }
       sparse_vector_t<i_t, f_t> cut(lp.num_cols, 0);
       f_t cut_rhs;
       i_t knapsack_status = knapsack_generation_.generate_knapsack_cuts(
@@ -647,10 +623,8 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
   csr_matrix_t<i_t, f_t>& Arow,
   const std::vector<i_t>& new_slacks,
   const std::vector<variable_type_t>& var_types,
-  const std::vector<f_t>& xstar,
-  f_t start_time)
+  const std::vector<f_t>& xstar)
 {
-  if (toc(start_time) >= settings.time_limit) { return; }
   f_t mir_start_time = tic();
   mixed_integer_rounding_cut_t<i_t, f_t> mir(lp, settings, new_slacks, xstar);
   strong_cg_cut_t<i_t, f_t> cg(lp, var_types, xstar);
@@ -668,7 +642,6 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
   // Compute initial scores for all rows
   std::vector<f_t> score(lp.num_rows, 0.0);
   for (i_t i = 0; i < lp.num_rows; i++) {
-    if (toc(start_time) >= settings.time_limit) { return; }
     const i_t row_start = Arow.row_start[i];
     const i_t row_end   = Arow.row_start[i + 1];
 
@@ -718,7 +691,6 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
   const i_t max_cuts = std::min(lp.num_rows, 1000);
   f_t work_estimate  = 0.0;
   for (i_t h = 0; h < max_cuts; h++) {
-    if (toc(start_time) >= settings.time_limit) { return; }
     // Get the row with the highest score
     const i_t i = sorted_indices.back();
     sorted_indices.pop_back();
@@ -799,7 +771,6 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
     work_estimate += lp.num_cols;
 
     while (!add_cut && num_aggregated < max_aggregated) {
-      if (toc(start_time) >= settings.time_limit) { return; }
       sparse_vector_t<i_t, f_t> transformed_inequality;
       inequality.squeeze(transformed_inequality);
       f_t transformed_rhs = inequality_rhs;
@@ -1011,15 +982,13 @@ void cut_generation_t<i_t, f_t>::generate_gomory_cuts(
   basis_update_mpf_t<i_t, f_t>& basis_update,
   const std::vector<f_t>& xstar,
   const std::vector<i_t>& basic_list,
-  const std::vector<i_t>& nonbasic_list,
-  f_t start_time)
+  const std::vector<i_t>& nonbasic_list)
 {
   tableau_equality_t<i_t, f_t> tableau(lp, basis_update, nonbasic_list);
   mixed_integer_rounding_cut_t<i_t, f_t> mir(lp, settings, new_slacks, xstar);
   strong_cg_cut_t<i_t, f_t> cg(lp, var_types, xstar);
 
   for (i_t i = 0; i < lp.num_rows; i++) {
-    if (toc(start_time) >= settings.time_limit) { return; }
     sparse_vector_t<i_t, f_t> inequality(lp.num_cols, 0);
     f_t inequality_rhs;
     const i_t j = basic_list[i];
@@ -2346,13 +2315,9 @@ i_t add_cuts(const simplex_solver_settings_t<i_t, f_t>& settings,
              std::vector<i_t>& basic_list,
              std::vector<i_t>& nonbasic_list,
              std::vector<variable_status_t>& vstatus,
-             std::vector<f_t>& edge_norms,
-             f_t start_time)
+             std::vector<f_t>& edge_norms)
 
 {
-  constexpr i_t time_limit_status = -2;
-  if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
-
   // Given a set of cuts: C*x <= d that are currently violated
   // by the current solution x* (i.e. C*x* > d), this function
   // adds the cuts into the LP and solves again.
@@ -2380,7 +2345,6 @@ i_t add_cuts(const simplex_solver_settings_t<i_t, f_t>& settings,
   settings.log.debug("Original lp rows %d\n", lp.num_rows);
   settings.log.debug("Original lp cols %d\n", lp.num_cols);
 
-  if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
   csr_matrix_t<i_t, f_t> new_A_row(lp.num_rows, lp.num_cols, 1);
   lp.A.to_compressed_row(new_A_row);
 
@@ -2390,7 +2354,6 @@ i_t add_cuts(const simplex_solver_settings_t<i_t, f_t>& settings,
     assert(append_status == 0);
   }
 
-  if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
   csc_matrix_t<i_t, f_t> new_A_col(lp.num_rows + p, lp.num_cols, 1);
   new_A_row.to_compressed_col(new_A_col);
 
@@ -2445,7 +2408,6 @@ i_t add_cuts(const simplex_solver_settings_t<i_t, f_t>& settings,
   settings.log.debug("Done adding rhs\n");
 
   // Construct C_B = C(:, basic_list)
-  if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
   std::vector<i_t> C_col_degree(lp.num_cols, 0);
   i_t cuts_nz = cuts.row_start[p];
   for (i_t q = 0; q < cuts_nz; q++) {
@@ -2475,7 +2437,6 @@ i_t add_cuts(const simplex_solver_settings_t<i_t, f_t>& settings,
   }
   settings.log.debug("Done estimating C_B_nz\n");
 
-  if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
   csr_matrix_t<i_t, f_t> C_B(p, num_basic, C_B_nz);
   nz = 0;
   for (i_t i = 0; i < p; i++) {
@@ -2500,7 +2461,6 @@ i_t add_cuts(const simplex_solver_settings_t<i_t, f_t>& settings,
   settings.log.debug("C_B rows %d cols %d nz %d\n", C_B.m, C_B.n, nz);
 
   // Adjust the basis update to include the new cuts
-  if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
   basis_update.append_cuts(C_B);
 
   basic_list.resize(lp.num_rows, 0);
@@ -2538,7 +2498,6 @@ i_t add_cuts(const simplex_solver_settings_t<i_t, f_t>& settings,
   solution.y.resize(lp.num_rows, 0.0);
   solution.z.resize(lp.num_cols, 0.0);
 
-  if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
   return 0;
 }
 
@@ -2559,9 +2518,6 @@ i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
                 basis_update_mpf_t<i_t, f_t>& basis_update,
                 f_t start_time)
 {
-  constexpr i_t time_limit_status = -2;
-  if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
-
   std::vector<i_t> cuts_to_remove;
   cuts_to_remove.reserve(lp.num_rows - original_rows);
   std::vector<i_t> slacks_to_remove;
@@ -2570,7 +2526,6 @@ i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
 
   std::vector<i_t> is_slack(lp.num_cols, 0);
   for (i_t j : new_slacks) {
-    if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
     is_slack[j] = 1;
 #ifdef CHECK_SLACKS
     // Check that slack column length is 1
@@ -2585,14 +2540,12 @@ i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
   }
 
   for (i_t k = original_rows; k < lp.num_rows; k++) {
-    if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
     if (std::abs(y[k]) < dual_tol) {
       const i_t row_start = Arow.row_start[k];
       const i_t row_end   = Arow.row_start[k + 1];
       i_t last_slack      = -1;
       const f_t slack_tol = 1e-3;
       for (i_t p = row_start; p < row_end; p++) {
-        if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
         const i_t j = Arow.j[p];
         if (is_slack[j]) {
           if (vstatus[j] == variable_status_t::BASIC && x[j] > slack_tol) { last_slack = j; }
@@ -2606,7 +2559,6 @@ i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
   }
 
   if (cuts_to_remove.size() > 0) {
-    if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
     std::vector<i_t> marked_rows(lp.num_rows, 0);
     for (i_t i : cuts_to_remove) {
       marked_rows[i] = 1;
@@ -2620,7 +2572,6 @@ i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
     std::vector<f_t> new_solution_y(lp.num_rows - cuts_to_remove.size());
     i_t h = 0;
     for (i_t i = 0; i < lp.num_rows; i++) {
-      if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
       if (!marked_rows[i]) {
         new_rhs[h]        = lp.rhs[i];
         new_solution_y[h] = y[i];
@@ -2647,7 +2598,6 @@ i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
     std::vector<i_t> new_is_slacks(lp.num_cols - slacks_to_remove.size(), 0);
     h = 0;
     for (i_t k = 0; k < lp.num_cols; k++) {
-      if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
       if (!marked_cols[k]) {
         new_objective[h]  = lp.objective[k];
         new_lower[h]      = lp.lower[k];
@@ -2695,15 +2645,13 @@ i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
                        lp.num_cols,
                        lp.A.col_start[lp.A.n]);
 
-    if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
     basis_update.resize(lp.num_rows);
     i_t refactor_status = basis_update.refactor_basis(
       lp.A, settings, lp.lower, lp.upper, basic_list, nonbasic_list, vstatus, start_time);
     if (refactor_status == CONCURRENT_HALT_RETURN) { return CONCURRENT_HALT_RETURN; }
-    if (refactor_status == TIME_LIMIT_RETURN) { return time_limit_status; }
+    if (refactor_status == TIME_LIMIT_RETURN) { return TIME_LIMIT_RETURN; }
   }
 
-  if (toc(start_time) >= settings.time_limit) { return time_limit_status; }
   return 0;
 }
 
@@ -2849,8 +2797,7 @@ template int add_cuts(const simplex_solver_settings_t<int, double>& settings,
                       std::vector<int>& basic_list,
                       std::vector<int>& nonbasic_list,
                       std::vector<variable_status_t>& vstatus,
-                      std::vector<double>& edge_norms,
-                      double start_time);
+                      std::vector<double>& edge_norms);
 
 template int remove_cuts<int, double>(lp_problem_t<int, double>& lp,
                                       const simplex_solver_settings_t<int, double>& settings,

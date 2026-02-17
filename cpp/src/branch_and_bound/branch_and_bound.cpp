@@ -2139,8 +2139,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                    basis_update,
                                    root_relax_soln_.x,
                                    basic_list,
-                                   nonbasic_list,
-                                   exploration_stats_.start_time);
+                                   nonbasic_list);
       if (stop_for_time_limit()) { return solver_status_; }
       f_t cut_generation_time = toc(cut_start_time);
       if (cut_generation_time > 1.0) {
@@ -2149,7 +2148,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       // Score the cuts
       if (stop_for_time_limit()) { return solver_status_; }
       f_t score_start_time = tic();
-      cut_pool.score_cuts(root_relax_soln_.x, exploration_stats_.start_time);
+      cut_pool.score_cuts(root_relax_soln_.x);
       if (stop_for_time_limit()) { return solver_status_; }
       f_t score_time = toc(score_start_time);
       if (score_time > 1.0) { settings_.log.debug("Cut scoring time %.2f seconds\n", score_time); }
@@ -2157,8 +2156,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       csr_matrix_t<i_t, f_t> cuts_to_add(0, original_lp_.num_cols, 0);
       std::vector<f_t> cut_rhs;
       std::vector<cut_type_t> cut_types;
-      i_t num_cuts =
-        cut_pool.get_best_cuts(cuts_to_add, cut_rhs, cut_types, exploration_stats_.start_time);
+      i_t num_cuts = cut_pool.get_best_cuts(cuts_to_add, cut_rhs, cut_types);
       if (stop_for_time_limit()) { return solver_status_; }
       if (num_cuts == 0) { break; }
       cut_info.record_cut_types(cut_types);
@@ -2205,8 +2203,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                      basic_list,
                                      nonbasic_list,
                                      root_vstatus_,
-                                     edge_norms_,
-                                     exploration_stats_.start_time);
+                                     edge_norms_);
       var_types_.resize(original_lp_.num_cols, variable_type_t::CONTINUOUS);
       mutex_original_lp_.unlock();
       if (stop_for_time_limit()) { return solver_status_; }
@@ -2214,11 +2211,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       if (add_cuts_time > 1.0) {
         settings_.log.debug("Add cuts time %.2f seconds\n", add_cuts_time);
       }
-      if (add_cuts_status == -2) {
-        solver_status_ = mip_status_t::TIME_LIMIT;
-        set_final_solution(solution, root_objective_);
-        return solver_status_;
-      } else if (add_cuts_status != 0) {
+      if (add_cuts_status != 0) {
         settings_.log.printf("Failed to add cuts\n");
         return mip_status_t::NUMERICAL;
       }

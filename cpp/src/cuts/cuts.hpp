@@ -138,13 +138,12 @@ class cut_pool_t {
   // cut'*xstart < rhs
   void add_cut(cut_type_t cut_type, const sparse_vector_t<i_t, f_t>& cut, f_t rhs);
 
-  void score_cuts(std::vector<f_t>& x_relax, f_t start_time);
+  void score_cuts(std::vector<f_t>& x_relax);
 
   // We return the cuts in the form best_cuts*x <= best_rhs
   i_t get_best_cuts(csr_matrix_t<i_t, f_t>& best_cuts,
                     std::vector<f_t>& best_rhs,
-                    std::vector<cut_type_t>& best_cut_types,
-                    f_t start_time);
+                    std::vector<cut_type_t>& best_cut_types);
 
   void age_cuts();
 
@@ -240,8 +239,7 @@ class cut_generation_t {
                      basis_update_mpf_t<i_t, f_t>& basis_update,
                      const std::vector<f_t>& xstar,
                      const std::vector<i_t>& basic_list,
-                     const std::vector<i_t>& nonbasic_list,
-                     f_t start_time);
+                     const std::vector<i_t>& nonbasic_list);
 
  private:
   // Generate all mixed integer gomory cuts
@@ -253,8 +251,7 @@ class cut_generation_t {
                             basis_update_mpf_t<i_t, f_t>& basis_update,
                             const std::vector<f_t>& xstar,
                             const std::vector<i_t>& basic_list,
-                            const std::vector<i_t>& nonbasic_list,
-                            f_t start_time);
+                            const std::vector<i_t>& nonbasic_list);
 
   // Generate all mixed integer rounding cuts
   void generate_mir_cuts(const lp_problem_t<i_t, f_t>& lp,
@@ -262,8 +259,7 @@ class cut_generation_t {
                          csr_matrix_t<i_t, f_t>& Arow,
                          const std::vector<i_t>& new_slacks,
                          const std::vector<variable_type_t>& var_types,
-                         const std::vector<f_t>& xstar,
-                         f_t start_time);
+                         const std::vector<f_t>& xstar);
 
   // Generate all knapsack cuts
   void generate_knapsack_cuts(const lp_problem_t<i_t, f_t>& lp,
@@ -271,8 +267,7 @@ class cut_generation_t {
                               csr_matrix_t<i_t, f_t>& Arow,
                               const std::vector<i_t>& new_slacks,
                               const std::vector<variable_type_t>& var_types,
-                              const std::vector<f_t>& xstar,
-                              f_t start_time);
+                              const std::vector<f_t>& xstar);
 
   cut_pool_t<i_t, f_t>& cut_pool_;
   knapsack_generation_t<i_t, f_t> knapsack_generation_;
@@ -463,8 +458,7 @@ i_t add_cuts(const simplex_solver_settings_t<i_t, f_t>& settings,
              std::vector<i_t>& basic_list,
              std::vector<i_t>& nonbasic_list,
              std::vector<variable_status_t>& vstatus,
-             std::vector<f_t>& edge_norms,
-             f_t start_time);
+             std::vector<f_t>& edge_norms);
 
 template <typename i_t, typename f_t>
 i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
