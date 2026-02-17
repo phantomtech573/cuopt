@@ -1947,6 +1947,18 @@ lp_status_t branch_and_bound_t<i_t, f_t>::solve_root_relaxation(
 }
 
 template <typename i_t, typename f_t>
+bool branch_and_bound_t<i_t, f_t>::stop_for_time_limit(mip_solution_t<i_t, f_t>& solution)
+{
+  const f_t elapsed = toc(exploration_stats_.start_time);
+  if (elapsed > settings_.time_limit) {
+    solver_status_ = mip_status_t::TIME_LIMIT;
+    set_final_solution(solution, root_objective_);
+    return true;
+  }
+  return false;
+};
+
+template <typename i_t, typename f_t>
 mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range scope("BB::solve");
@@ -2099,19 +2111,10 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   f_t last_upper_bound     = std::numeric_limits<f_t>::infinity();
   f_t last_objective       = root_objective_;
   f_t root_relax_objective = root_objective_;
-  auto stop_for_time_limit = [&]() -> bool {
-    const f_t elapsed = toc(exploration_stats_.start_time);
-    if (elapsed > settings_.time_limit) {
-      solver_status_ = mip_status_t::TIME_LIMIT;
-      set_final_solution(solution, root_objective_);
-      return true;
-    }
-    return false;
-  };
 
   i_t cut_pool_size = 0;
   for (i_t cut_pass = 0; cut_pass < settings_.max_cut_passes; cut_pass++) {
-    if (stop_for_time_limit()) { return solver_status_; }
+    if (stop_for_time_limit(solution)) { return solver_status_; }
     if (num_fractional == 0) {
       set_solution_at_root(solution, cut_info);
       return mip_status_t::OPTIMAL;
@@ -2128,8 +2131,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       }
 #endif
 
-      // Generate cuts and add them to the cut pool
-      if (stop_for_time_limit()) { return solver_status_; }
       f_t cut_start_time = tic();
       cut_generation.generate_cuts(original_lp_,
                                    settings_,
@@ -2140,16 +2141,14 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                    root_relax_soln_.x,
                                    basic_list,
                                    nonbasic_list);
-      if (stop_for_time_limit()) { return solver_status_; }
       f_t cut_generation_time = toc(cut_start_time);
       if (cut_generation_time > 1.0) {
         settings_.log.debug("Cut generation time %.2f seconds\n", cut_generation_time);
       }
       // Score the cuts
-      if (stop_for_time_limit()) { return solver_status_; }
       f_t score_start_time = tic();
       cut_pool.score_cuts(root_relax_soln_.x);
-      if (stop_for_time_limit()) { return solver_status_; }
+      if (stop_for_time_limit(solution)) { return solver_status_; }
       f_t score_time = toc(score_start_time);
       if (score_time > 1.0) { settings_.log.debug("Cut scoring time %.2f seconds\n", score_time); }
       // Get the best cuts from the cut pool
@@ -2157,7 +2156,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       std::vector<f_t> cut_rhs;
       std::vector<cut_type_t> cut_types;
       i_t num_cuts = cut_pool.get_best_cuts(cuts_to_add, cut_rhs, cut_types);
-      if (stop_for_time_limit()) { return solver_status_; }
       if (num_cuts == 0) { break; }
       cut_info.record_cut_types(cut_types);
 #ifdef PRINT_CUT_POOL_TYPES
@@ -2190,7 +2188,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         cuts_to_add.m + original_lp_.num_rows);
       lp_settings.log.log = false;
 
-      if (stop_for_time_limit()) { return solver_status_; }
       f_t add_cuts_start_time = tic();
       mutex_original_lp_.lock();
       i_t add_cuts_status = add_cuts(settings_,
@@ -2206,7 +2203,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                      edge_norms_);
       var_types_.resize(original_lp_.num_cols, variable_type_t::CONTINUOUS);
       mutex_original_lp_.unlock();
-      if (stop_for_time_limit()) { return solver_status_; }
       f_t add_cuts_time = toc(add_cuts_start_time);
       if (add_cuts_time > 1.0) {
         settings_.log.debug("Add cuts time %.2f seconds\n", add_cuts_time);
@@ -2238,7 +2234,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 #endif
       original_lp_.A.to_compressed_row(Arow_);
 
-      if (stop_for_time_limit()) { return solver_status_; }
       f_t node_presolve_start_time = tic();
       bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
       std::vector<f_t> new_lower = original_lp_.lower;
@@ -2249,7 +2244,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       original_lp_.lower = new_lower;
       original_lp_.upper = new_upper;
       mutex_original_lp_.unlock();
-      if (stop_for_time_limit()) { return solver_status_; }
       f_t node_presolve_time = toc(node_presolve_start_time);
       if (node_presolve_time > 1.0) {
         settings_.log.debug("Node presolve time %.2f seconds\n", node_presolve_time);
@@ -2262,9 +2256,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       i_t iter                    = 0;
       bool initialize_basis       = false;
       lp_settings.concurrent_halt = NULL;
-      if (stop_for_time_limit()) { return solver_status_; }
-      f_t dual_phase2_start_time = tic();
-      dual::status_t cut_status  = dual_phase2_with_advanced_basis(2,
+      f_t dual_phase2_start_time  = tic();
+      dual::status_t cut_status   = dual_phase2_with_advanced_basis(2,
                                                                   0,
                                                                   initialize_basis,
                                                                   exploration_stats_.start_time,
@@ -2283,15 +2276,10 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       if (dual_phase2_time > 1.0) {
         settings_.log.debug("Dual phase2 time %.2f seconds\n", dual_phase2_time);
       }
-      if (stop_for_time_limit()) { return solver_status_; }
-      if (cut_status == dual::status_t::TIME_LIMIT) {
-        solver_status_ = mip_status_t::TIME_LIMIT;
-        set_final_solution(solution, root_objective_);
-        return solver_status_;
-      }
+
+      if (stop_for_time_limit(solution)) { return solver_status_; }
 
       if (cut_status != dual::status_t::OPTIMAL) {
-        if (stop_for_time_limit()) { return solver_status_; }
         settings_.log.printf("Numerical issue at root node. Resolving from scratch\n");
         lp_status_t scratch_status =
           solve_linear_program_with_advanced_basis(original_lp_,
@@ -2303,11 +2291,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                                    nonbasic_list,
                                                    root_vstatus_,
                                                    edge_norms_);
-        if (stop_for_time_limit() || scratch_status == lp_status_t::TIME_LIMIT) {
-          solver_status_ = mip_status_t::TIME_LIMIT;
-          set_final_solution(solution, root_objective_);
-          return solver_status_;
-        }
+        if (stop_for_time_limit(solution)) { return solver_status_; }
         if (scratch_status == lp_status_t::OPTIMAL) {
           // We recovered
           cut_status = convert_lp_status_to_dual_status(scratch_status);
@@ -2319,7 +2303,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         }
       }
 
-      if (stop_for_time_limit()) { return solver_status_; }
       f_t remove_cuts_start_time = tic();
       mutex_original_lp_.lock();
       i_t remove_cuts_status = remove_cuts(original_lp_,
@@ -2338,7 +2321,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                            basis_update,
                                            exploration_stats_.start_time);
       mutex_original_lp_.unlock();
-      if (stop_for_time_limit()) { return solver_status_; }
+      if (stop_for_time_limit(solution)) { return solver_status_; }
       f_t remove_cuts_time = toc(remove_cuts_start_time);
       if (remove_cuts_time > 1.0) {
         settings_.log.debug("Remove cuts time %.2f seconds\n", remove_cuts_time);
