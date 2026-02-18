@@ -20,6 +20,7 @@
 #include <dual_simplex/presolve.hpp>
 #include <dual_simplex/random.hpp>
 #include <dual_simplex/tic_toc.hpp>
+#include <dual_simplex/types.hpp>
 #include <dual_simplex/user_problem.hpp>
 
 #include <raft/common/nvtx.hpp>
@@ -1893,7 +1894,7 @@ lp_status_t branch_and_bound_t<i_t, f_t>::solve_root_relaxation(
       if (refactor_status == TIME_LIMIT_RETURN) {
         root_status = lp_status_t::TIME_LIMIT;
       } else if (refactor_status == CONCURRENT_HALT_RETURN) {
-        root_status = lp_status_t::TIME_LIMIT;
+        root_status = lp_status_t::CONCURRENT_LIMIT;
       } else if (refactor_status != 0) {
         settings_.log.printf("Failed to refactor basis. %d deficient columns.\n", refactor_status);
         assert(refactor_status == 0);
@@ -2373,7 +2374,12 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   set_uninitialized_steepest_edge_norms(original_lp_, basic_list, edge_norms_);
 
   pc_.resize(original_lp_.num_cols);
-  if (toc(exploration_stats_.start_time) < settings_.time_limit) {
+  if (toc(exploration_stats_.start_time) >= settings_.time_limit) {
+    solver_status_ = mip_status_t::TIME_LIMIT;
+    set_final_solution(solution, root_objective_);
+    return solver_status_;
+  }
+  {
     raft::common::nvtx::range scope_sb("BB::strong_branching");
     strong_branching<i_t, f_t>(original_problem_,
                                original_lp_,

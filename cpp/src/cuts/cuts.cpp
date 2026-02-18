@@ -170,8 +170,7 @@ i_t cut_pool_t<i_t, f_t>::get_best_cuts(csr_matrix_t<i_t, f_t>& best_cuts,
   best_cut_types.clear();
   best_cut_types.reserve(scored_cuts_);
 
-  for (i_t k = 0; k < static_cast<i_t>(best_cuts_.size()); ++k) {
-    const i_t i = best_cuts_[k];
+  for (i_t i : best_cuts_) {
     sparse_vector_t<i_t, f_t> cut(cut_storage_, i);
     cut.negate();
     best_cuts.append_row(cut);
