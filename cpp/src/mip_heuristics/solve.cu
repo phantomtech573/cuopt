@@ -8,13 +8,13 @@
 #include <cuopt/error.hpp>
 
 #include <mip_heuristics/mip_constants.hpp>
+#include <mip_heuristics/mip_scaling_strategy.cuh>
 #include <mip_heuristics/presolve/third_party_presolve.hpp>
 #include <mip_heuristics/presolve/trivial_presolve.cuh>
 #include <mip_heuristics/solver.cuh>
 #include <mip_heuristics/utilities/sort_csr.cuh>
 #include <mip_heuristics/utils.cuh>
 
-#include <pdlp/initial_scaling_strategy/initial_scaling.cuh>
 #include <pdlp/pdlp.cuh>
 #include <pdlp/restart_strategy/pdlp_restart_strategy.cuh>
 #include <pdlp/step_size_strategy/adaptive_step_size_strategy.hpp>
@@ -26,7 +26,6 @@
 
 #include <cuopt/linear_programming/mip/solver_settings.hpp>
 #include <cuopt/linear_programming/mip/solver_solution.hpp>
-#include <cuopt/linear_programming/pdlp/pdlp_hyper_params.cuh>
 #include <cuopt/linear_programming/solve.hpp>
 #include <cuopt/linear_programming/utilities/internals.hpp>
 
@@ -57,12 +56,7 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
                                  timer_t& timer)
 {
   raft::common::nvtx::range fun_scope("run_mip");
-  auto constexpr const running_mip = true;
 
-  // TODO ask Akif and Alice how was this passed down?
-  auto hyper_params                                     = settings.hyper_params;
-  hyper_params.update_primal_weight_on_initial_solution = false;
-  hyper_params.update_step_size_on_initial_solution     = true;
   if (settings.get_mip_callbacks().size() > 0) {
     auto callback_num_variables = problem.original_problem_ptr->get_n_variables();
     if (problem.has_papilo_presolve_data()) {
@@ -126,47 +120,27 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
                "Size mismatch");
   cuopt_assert(problem.original_problem_ptr->get_n_constraints() == scaled_problem.n_constraints,
                "Size mismatch");
-  detail::pdlp_initial_scaling_strategy_t<i_t, f_t> scaling(
-    scaled_problem.handle_ptr,
-    scaled_problem,
-    hyper_params.default_l_inf_ruiz_iterations,
-    (f_t)hyper_params.default_alpha_pock_chambolle_rescaling,
-    scaled_problem.reverse_coefficients,
-    scaled_problem.reverse_offsets,
-    scaled_problem.reverse_constraints,
-    nullptr,
-    hyper_params,
-    running_mip);
+  detail::mip_scaling_strategy_t<i_t, f_t> scaling(scaled_problem);
 
-  cuopt_func_call(auto saved_problem = scaled_problem);
-  if (settings.mip_scaling) {
-    scaling.scale_problem();
-    if (settings.initial_solutions.size() > 0) {
-      for (const auto& initial_solution : settings.initial_solutions) {
-        scaling.scale_primal(*initial_solution);
-      }
-    }
-  }
   // only call preprocess on scaled problem, so we can compute feasibility on the original problem
   scaled_problem.preprocess_problem();
-  // cuopt_func_call((check_scaled_problem<i_t, f_t>(scaled_problem, saved_problem)));
   detail::trivial_presolve(scaled_problem);
 
   detail::mip_solver_t<i_t, f_t> solver(scaled_problem, settings, scaling, timer);
-  auto scaled_sol                 = solver.run_solver();
-  bool is_feasible_before_scaling = scaled_sol.get_feasible();
-  scaled_sol.problem_ptr          = &problem;
-  if (settings.mip_scaling) { scaling.unscale_solutions(scaled_sol); }
-  // at this point we need to compute the feasibility on the original problem not the presolved one
-  bool is_feasible_after_unscaling = scaled_sol.compute_feasibility();
-  if (!scaled_problem.empty && is_feasible_before_scaling != is_feasible_after_unscaling) {
+  auto scaled_sol                      = solver.run_solver();
+  bool is_feasible_on_scaled_problem   = scaled_sol.get_feasible();
+  scaled_sol.problem_ptr               = &problem;
+  bool is_feasible_on_original_problem = scaled_sol.compute_feasibility();
+  if (!scaled_problem.empty && is_feasible_on_scaled_problem != is_feasible_on_original_problem) {
     CUOPT_LOG_WARN(
-      "The feasibility does not match on scaled and unscaled problems. To overcome this issue, "
+      "The feasibility does not match on scaled and original problems. To overcome this issue, "
       "please provide a more numerically stable problem.");
   }
 
-  auto sol = scaled_sol.get_solution(
-    is_feasible_before_scaling || is_feasible_after_unscaling, solver.get_solver_stats(), false);
+  auto sol =
+    scaled_sol.get_solution(is_feasible_on_scaled_problem || is_feasible_on_original_problem,
+                            solver.get_solver_stats(),
+                            false);
 
   int hidesol =
     std::getenv("CUOPT_MIP_HIDE_SOLUTION") ? atoi(std::getenv("CUOPT_MIP_HIDE_SOLUTION")) : 0;

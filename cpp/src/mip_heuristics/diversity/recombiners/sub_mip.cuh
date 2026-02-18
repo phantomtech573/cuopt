@@ -71,18 +71,7 @@ class sub_mip_recombiner_t : public recombiner_t<i_t, f_t> {
       "n_vars_from_guiding %d n_vars_from_other %d", n_vars_from_guiding, n_vars_from_other);
     this->compute_vars_to_fix(offspring, vars_to_fix, n_vars_from_other, n_vars_from_guiding);
     auto [fixed_problem, fixed_assignment, variable_map] = offspring.fix_variables(vars_to_fix);
-    // TODO ask Akif and Alice if this is ok
-    pdlp_initial_scaling_strategy_t<i_t, f_t> scaling(
-      fixed_problem.handle_ptr,
-      fixed_problem,
-      context.settings.hyper_params.default_l_inf_ruiz_iterations,
-      (f_t)context.settings.hyper_params.default_alpha_pock_chambolle_rescaling,
-      fixed_problem.reverse_coefficients,
-      fixed_problem.reverse_offsets,
-      fixed_problem.reverse_constraints,
-      nullptr,
-      context.settings.hyper_params,
-      true);
+    mip_scaling_strategy_t<i_t, f_t> scaling(fixed_problem);
     scaling.scale_problem();
     fixed_problem.presolve_data.reset_additional_vars(fixed_problem, offspring.handle_ptr);
     fixed_problem.presolve_data.initialize_var_mapping(fixed_problem, offspring.handle_ptr);
@@ -141,8 +130,6 @@ class sub_mip_recombiner_t : public recombiner_t<i_t, f_t> {
       offspring.handle_ptr->sync_stream();
     }
     if (solution_vector.size() > 0) {
-      rmm::device_uvector<f_t> dummy(0, offspring.handle_ptr->get_stream());
-      scaling.unscale_solutions(fixed_assignment, dummy);
       // unfix the assignment on given result no matter if it is feasible
       offspring.unfix_variables(fixed_assignment, variable_map);
       offspring
@@ -174,8 +161,6 @@ class sub_mip_recombiner_t : public recombiner_t<i_t, f_t> {
                  solution.size(),
                  offspring.handle_ptr->get_stream());
       fixed_problem.post_process_assignment(fixed_assignment, false);
-      rmm::device_uvector<f_t> dummy(0, offspring.handle_ptr->get_stream());
-      scaling.unscale_solutions(fixed_assignment, dummy);
       sol.unfix_variables(fixed_assignment, variable_map);
       sol.clamp_within_bounds();  // Scaling might bring some very slight variable bound violations
       sol.compute_feasibility();
