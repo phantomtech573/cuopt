@@ -463,6 +463,7 @@ i_t add_cuts(const simplex_solver_settings_t<i_t, f_t>& settings,
 template <typename i_t, typename f_t>
 i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
                 const simplex_solver_settings_t<i_t, f_t>& settings,
+                f_t start_time,
                 csr_matrix_t<i_t, f_t>& Arow,
                 std::vector<i_t>& new_slacks,
                 i_t original_rows,
@@ -474,7 +475,6 @@ i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
                 std::vector<f_t>& z,
                 std::vector<i_t>& basic_list,
                 std::vector<i_t>& nonbasic_list,
-                basis_update_mpf_t<i_t, f_t>& basis_update,
-                f_t start_time);
+                basis_update_mpf_t<i_t, f_t>& basis_update);
 
 }  // namespace cuopt::linear_programming::dual_simplex

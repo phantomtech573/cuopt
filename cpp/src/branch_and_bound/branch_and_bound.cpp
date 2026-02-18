@@ -20,7 +20,6 @@
 #include <dual_simplex/presolve.hpp>
 #include <dual_simplex/random.hpp>
 #include <dual_simplex/tic_toc.hpp>
-#include <dual_simplex/types.hpp>
 #include <dual_simplex/user_problem.hpp>
 
 #include <raft/common/nvtx.hpp>
@@ -1957,7 +1956,7 @@ bool branch_and_bound_t<i_t, f_t>::stop_for_time_limit(mip_solution_t<i_t, f_t>&
     return true;
   }
   return false;
-};
+}
 
 template <typename i_t, typename f_t>
 mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solution)
@@ -2115,7 +2114,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 
   i_t cut_pool_size = 0;
   for (i_t cut_pass = 0; cut_pass < settings_.max_cut_passes; cut_pass++) {
-    if (stop_for_time_limit(solution)) { return solver_status_; }
     if (num_fractional == 0) {
       set_solution_at_root(solution, cut_info);
       return mip_status_t::OPTIMAL;
@@ -2132,6 +2130,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       }
 #endif
 
+      // Generate cuts and add them to the cut pool
       f_t cut_start_time = tic();
       cut_generation.generate_cuts(original_lp_,
                                    settings_,
@@ -2306,23 +2305,22 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 
       f_t remove_cuts_start_time = tic();
       mutex_original_lp_.lock();
-      i_t remove_cuts_status = remove_cuts(original_lp_,
-                                           settings_,
-                                           Arow_,
-                                           new_slacks_,
-                                           original_rows,
-                                           var_types_,
-                                           root_vstatus_,
-                                           edge_norms_,
-                                           root_relax_soln_.x,
-                                           root_relax_soln_.y,
-                                           root_relax_soln_.z,
-                                           basic_list,
-                                           nonbasic_list,
-                                           basis_update,
-                                           exploration_stats_.start_time);
+      remove_cuts(original_lp_,
+                  settings_,
+                  exploration_stats_.start_time,
+                  Arow_,
+                  new_slacks_,
+                  original_rows,
+                  var_types_,
+                  root_vstatus_,
+                  edge_norms_,
+                  root_relax_soln_.x,
+                  root_relax_soln_.y,
+                  root_relax_soln_.z,
+                  basic_list,
+                  nonbasic_list,
+                  basis_update);
       mutex_original_lp_.unlock();
-      if (stop_for_time_limit(solution)) { return solver_status_; }
       f_t remove_cuts_time = toc(remove_cuts_start_time);
       if (remove_cuts_time > 1.0) {
         settings_.log.debug("Remove cuts time %.2f seconds\n", remove_cuts_time);

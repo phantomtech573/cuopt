@@ -577,11 +577,11 @@ i_t right_looking_lu(const csc_matrix_t<i_t, f_t>& A,
                      const simplex_solver_settings_t<i_t, f_t>& settings,
                      f_t tol,
                      const VectorI& column_list,
+                     f_t start_time,
                      VectorI& q,
                      csc_matrix_t<i_t, f_t>& L,
                      csc_matrix_t<i_t, f_t>& U,
-                     VectorI& pinv,
-                     f_t start_time)
+                     VectorI& pinv)
 {
   raft::common::nvtx::range scope("LU::right_looking_lu");
   const i_t n = column_list.size();
@@ -635,10 +635,10 @@ i_t right_looking_lu(const csc_matrix_t<i_t, f_t>& A,
 
   i_t pivots = 0;
   for (i_t k = 0; k < n; ++k) {
-    if (toc(start_time) > settings.time_limit) { return TIME_LIMIT_RETURN; }
     if (settings.concurrent_halt != nullptr && *settings.concurrent_halt == 1) {
       return CONCURRENT_HALT_RETURN;
     }
+    if (toc(start_time) > settings.time_limit) { return TIME_LIMIT_RETURN; }
     // Find pivot that satisfies
     // abs(pivot) >= abstol,
     // abs(pivot) >= threshold_tol * max abs[pivot column]
@@ -1154,22 +1154,22 @@ template int right_looking_lu<int, double, std::vector<int>>(
   const simplex_solver_settings_t<int, double>& settings,
   double tol,
   const std::vector<int>& column_list,
+  double start_time,
   std::vector<int>& q,
   csc_matrix_t<int, double>& L,
   csc_matrix_t<int, double>& U,
-  std::vector<int>& pinv,
-  double start_time);
+  std::vector<int>& pinv);
 
 template int right_looking_lu<int, double, ins_vector<int>>(
   const csc_matrix_t<int, double>& A,
   const simplex_solver_settings_t<int, double>& settings,
   double tol,
   const ins_vector<int>& column_list,
+  double start_time,
   ins_vector<int>& q,
   csc_matrix_t<int, double>& L,
   csc_matrix_t<int, double>& U,
-  ins_vector<int>& pinv,
-  double start_time);
+  ins_vector<int>& pinv);
 
 template int right_looking_lu_row_permutation_only<int, double>(
   const csc_matrix_t<int, double>& A,

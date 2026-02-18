@@ -19,11 +19,11 @@ i_t right_looking_lu(const csc_matrix_t<i_t, f_t>& A,
                      const simplex_solver_settings_t<i_t, f_t>& settings,
                      f_t tol,
                      const VectorI& column_list,
+                     f_t start_time,
                      VectorI& q,
                      csc_matrix_t<i_t, f_t>& L,
                      csc_matrix_t<i_t, f_t>& U,
-                     VectorI& pinv,
-                     f_t start_time);
+                     VectorI& pinv);
 
 template <typename i_t, typename f_t>
 i_t right_looking_lu_row_permutation_only(const csc_matrix_t<i_t, f_t>& A,
