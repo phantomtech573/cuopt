@@ -1886,15 +1886,11 @@ lp_status_t branch_and_bound_t<i_t, f_t>::solve_root_relaxation(
                                                         root_crossover_settings,
                                                         original_lp_.lower,
                                                         original_lp_.upper,
+                                                        exploration_stats_.start_time,
                                                         basic_list,
                                                         nonbasic_list,
-                                                        crossover_vstatus_,
-                                                        exploration_stats_.start_time);
-      if (refactor_status == TIME_LIMIT_RETURN) {
-        root_status = lp_status_t::TIME_LIMIT;
-      } else if (refactor_status == CONCURRENT_HALT_RETURN) {
-        root_status = lp_status_t::CONCURRENT_LIMIT;
-      } else if (refactor_status != 0) {
+                                                        crossover_vstatus_);
+      if (refactor_status != 0) {
         settings_.log.printf("Failed to refactor basis. %d deficient columns.\n", refactor_status);
         assert(refactor_status == 0);
         root_status = lp_status_t::NUMERICAL_ISSUES;
@@ -1906,15 +1902,6 @@ lp_status_t branch_and_bound_t<i_t, f_t>::solve_root_relaxation(
       user_objective = root_crossover_soln_.user_objective;
       iter           = root_crossover_soln_.iterations;
       solver_name    = "Barrier/PDLP and Crossover";
-    } else if (crossover_status == crossover_status_t::TIME_LIMIT ||
-               toc(exploration_stats_.start_time) > settings_.time_limit) {
-      set_root_concurrent_halt(1);
-      root_status = root_status_future.get();
-      set_root_concurrent_halt(0);
-      root_status    = lp_status_t::TIME_LIMIT;
-      user_objective = root_relax_soln_.user_objective;
-      iter           = root_relax_soln_.iterations;
-      solver_name    = "Dual Simplex";
     } else {
       root_status    = root_status_future.get();
       user_objective = root_relax_soln_.user_objective;
@@ -1944,18 +1931,6 @@ lp_status_t branch_and_bound_t<i_t, f_t>::solve_root_relaxation(
   is_root_solution_set = true;
 
   return root_status;
-}
-
-template <typename i_t, typename f_t>
-bool branch_and_bound_t<i_t, f_t>::stop_for_time_limit(mip_solution_t<i_t, f_t>& solution)
-{
-  const f_t elapsed = toc(exploration_stats_.start_time);
-  if (elapsed > settings_.time_limit) {
-    solver_status_ = mip_status_t::TIME_LIMIT;
-    set_final_solution(solution, root_objective_);
-    return true;
-  }
-  return false;
 }
 
 template <typename i_t, typename f_t>
@@ -2029,9 +2004,12 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 
   if (root_status == lp_status_t::INFEASIBLE) {
     settings_.log.printf("MIP Infeasible\n");
-    if (settings_.heuristic_preemption_callback != nullptr) {
-      settings_.heuristic_preemption_callback();
-    }
+    // FIXME: rarely dual simplex detects infeasible whereas it is feasible.
+    // to add a small safety net, check if there is a primal solution already.
+    // Uncomment this if the issue with cost266-UUE is resolved
+    // if (settings.heuristic_preemption_callback != nullptr) {
+    //   settings.heuristic_preemption_callback();
+    // }
     return mip_status_t::INFEASIBLE;
   }
   if (root_status == lp_status_t::UNBOUNDED) {
@@ -2148,7 +2126,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       // Score the cuts
       f_t score_start_time = tic();
       cut_pool.score_cuts(root_relax_soln_.x);
-      if (stop_for_time_limit(solution)) { return solver_status_; }
       f_t score_time = toc(score_start_time);
       if (score_time > 1.0) { settings_.log.debug("Cut scoring time %.2f seconds\n", score_time); }
       // Get the best cuts from the cut pool
@@ -2276,8 +2253,11 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       if (dual_phase2_time > 1.0) {
         settings_.log.debug("Dual phase2 time %.2f seconds\n", dual_phase2_time);
       }
-
-      if (stop_for_time_limit(solution)) { return solver_status_; }
+      if (cut_status == dual::status_t::TIME_LIMIT) {
+        solver_status_ = mip_status_t::TIME_LIMIT;
+        set_final_solution(solution, root_objective_);
+        return solver_status_;
+      }
 
       if (cut_status != dual::status_t::OPTIMAL) {
         settings_.log.printf("Numerical issue at root node. Resolving from scratch\n");
@@ -2291,7 +2271,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                                    nonbasic_list,
                                                    root_vstatus_,
                                                    edge_norms_);
-        if (stop_for_time_limit(solution)) { return solver_status_; }
         if (scratch_status == lp_status_t::OPTIMAL) {
           // We recovered
           cut_status = convert_lp_status_to_dual_status(scratch_status);
@@ -2372,11 +2351,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   set_uninitialized_steepest_edge_norms(original_lp_, basic_list, edge_norms_);
 
   pc_.resize(original_lp_.num_cols);
-  if (toc(exploration_stats_.start_time) >= settings_.time_limit) {
-    solver_status_ = mip_status_t::TIME_LIMIT;
-    set_final_solution(solution, root_objective_);
-    return solver_status_;
-  }
   {
     raft::common::nvtx::range scope_sb("BB::strong_branching");
     strong_branching<i_t, f_t>(original_problem_,

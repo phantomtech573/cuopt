@@ -2646,7 +2646,7 @@ i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
 
     basis_update.resize(lp.num_rows);
     i_t refactor_status = basis_update.refactor_basis(
-      lp.A, settings, lp.lower, lp.upper, basic_list, nonbasic_list, vstatus, start_time);
+      lp.A, settings, lp.lower, lp.upper, start_time, basic_list, nonbasic_list, vstatus);
     if (refactor_status == CONCURRENT_HALT_RETURN) { return CONCURRENT_HALT_RETURN; }
     if (refactor_status == TIME_LIMIT_RETURN) { return TIME_LIMIT_RETURN; }
   }

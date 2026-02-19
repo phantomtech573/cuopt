@@ -159,14 +159,14 @@ template <typename i_t, typename f_t>
 i_t factorize_basis(const csc_matrix_t<i_t, f_t>& A,
                     const simplex_solver_settings_t<i_t, f_t>& settings,
                     const std::vector<i_t>& basic_list,
+                    f_t start_time,
                     csc_matrix_t<i_t, f_t>& L,
                     csc_matrix_t<i_t, f_t>& U,
                     std::vector<i_t>& p,
                     std::vector<i_t>& pinv,
                     std::vector<i_t>& q,
                     std::vector<i_t>& deficient,
-                    std::vector<i_t>& slacks_needed,
-                    f_t start_time)
+                    std::vector<i_t>& slacks_needed)
 {
   raft::common::nvtx::range scope("LU::factorize_basis");
   const i_t m              = basic_list.size();
@@ -875,14 +875,14 @@ template void get_basis_from_vstatus<int>(int m,
 template int factorize_basis<int>(const csc_matrix_t<int, double>& A,
                                   const simplex_solver_settings_t<int, double>& settings,
                                   const std::vector<int>& basis_list,
+                                  double start_time,
                                   csc_matrix_t<int, double>& L,
                                   csc_matrix_t<int, double>& U,
                                   std::vector<int>& p,
                                   std::vector<int>& pinv,
                                   std::vector<int>& q,
                                   std::vector<int>& deficient,
-                                  std::vector<int>& slacks_needed,
-                                  double start_time);
+                                  std::vector<int>& slacks_needed);
 
 template int basis_repair<int, double>(const csc_matrix_t<int, double>& A,
                                        const simplex_solver_settings_t<int, double>& settings,

@@ -380,10 +380,10 @@ class basis_update_mpf_t {
                      const simplex_solver_settings_t<i_t, f_t>& settings,
                      const std::vector<f_t>& lower,
                      const std::vector<f_t>& upper,
+                     f_t start_time,
                      std::vector<i_t>& basic_list,
                      std::vector<i_t>& nonbasic_list,
-                     std::vector<variable_status_t>& vstatus,
-                     f_t start_time);
+                     std::vector<variable_status_t>& vstatus);
 
   void set_refactor_frequency(i_t new_frequency) { refactor_frequency_ = new_frequency; }
 

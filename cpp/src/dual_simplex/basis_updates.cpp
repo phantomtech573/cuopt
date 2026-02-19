@@ -2262,10 +2262,10 @@ int basis_update_mpf_t<i_t, f_t>::refactor_basis(
   const simplex_solver_settings_t<i_t, f_t>& settings,
   const std::vector<f_t>& lower,
   const std::vector<f_t>& upper,
+  f_t start_time,
   std::vector<i_t>& basic_list,
   std::vector<i_t>& nonbasic_list,
-  std::vector<variable_status_t>& vstatus,
-  f_t start_time)
+  std::vector<variable_status_t>& vstatus)
 {
   raft::common::nvtx::range scope("LU::refactor_basis");
   std::vector<i_t> deficient;
@@ -2277,14 +2277,14 @@ int basis_update_mpf_t<i_t, f_t>::refactor_basis(
   i_t status = factorize_basis(A,
                                settings,
                                basic_list,
+                               start_time,
                                L0_,
                                U0_,
                                row_permutation_,
                                inverse_row_permutation_,
                                q,
                                deficient,
-                               slacks_needed,
-                               start_time);
+                               slacks_needed);
   if (status == CONCURRENT_HALT_RETURN) { return CONCURRENT_HALT_RETURN; }
   if (status == TIME_LIMIT_RETURN) { return TIME_LIMIT_RETURN; }
   if (status == -1) {
@@ -2320,14 +2320,14 @@ int basis_update_mpf_t<i_t, f_t>::refactor_basis(
     status = factorize_basis(A,
                              settings,
                              basic_list,
+                             start_time,
                              L0_,
                              U0_,
                              row_permutation_,
                              inverse_row_permutation_,
                              q,
                              deficient,
-                             slacks_needed,
-                             start_time);
+                             slacks_needed);
     if (status == CONCURRENT_HALT_RETURN) { return CONCURRENT_HALT_RETURN; }
     if (status == TIME_LIMIT_RETURN) { return TIME_LIMIT_RETURN; }
     if (status == -1) {
