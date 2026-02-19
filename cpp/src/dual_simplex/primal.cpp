@@ -325,7 +325,8 @@ primal::status_t primal_phase2(i_t phase,
                  basic_list,
                  nonbasic_list,
                  superbasic_list,
-                 vstatus);
+                 vstatus,
+                 work_estimate);
     rank = factorize_basis(lp.A,
                            settings,
                            basic_list,

@@ -533,7 +533,8 @@ i_t dual_push(const lp_problem_t<i_t, f_t>& lp,
                        basic_list,
                        nonbasic_list,
                        superbasic_list,
-                       vstatus);
+                       vstatus,
+                       work_estimate);
           rank = factorize_basis(lp.A,
                                  settings,
                                  basic_list,
@@ -1293,7 +1294,8 @@ crossover_status_t crossover(const lp_problem_t<i_t, f_t>& lp,
                  basic_list,
                  nonbasic_list,
                  superbasic_list,
-                 vstatus);
+                 vstatus,
+                 work_estimate);
     rank = factorize_basis(lp.A,
                            settings,
                            basic_list,
@@ -1485,7 +1487,8 @@ crossover_status_t crossover(const lp_problem_t<i_t, f_t>& lp,
                      basic_list,
                      nonbasic_list,
                      superbasic_list,
-                     vstatus);
+                     vstatus,
+                     work_estimate);
         rank = factorize_basis(lp.A,
                                settings,
                                basic_list,
