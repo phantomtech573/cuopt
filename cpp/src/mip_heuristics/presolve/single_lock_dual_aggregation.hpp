@@ -22,11 +22,11 @@
 namespace cuopt::linear_programming::detail {
 
 template <typename f_t>
-class BigMIndicatorAggregation : public papilo::PresolveMethod<f_t> {
+class SingleLockDualAggregation : public papilo::PresolveMethod<f_t> {
  public:
-  BigMIndicatorAggregation() : papilo::PresolveMethod<f_t>()
+  SingleLockDualAggregation() : papilo::PresolveMethod<f_t>()
   {
-    this->setName("bigm_indicator_aggregation");
+    this->setName("single_lock_dual_aggregation");
     this->setType(papilo::PresolverType::kIntegralCols);
     this->setTiming(papilo::PresolverTiming::kMedium);
   }
@@ -52,9 +52,7 @@ class BigMIndicatorAggregation : public papilo::PresolveMethod<f_t> {
     return lower_bounds[col] == 0.0 && upper_bounds[col] == 1.0;
   }
 
-  // A detail variable can be binary, integer, or continuous, as long as
-  // it has lb=0 and a finite ub > 0. The substitution x = U*y maps it
-  // to {0, U} via the binary master.
+  // Detail can be binary, integer, or continuous with lb=0 and finite ub > 0.
   bool is_valid_detail(int col,
                        const papilo::Flags<papilo::ColFlag>* col_flags,
                        const f_t* lower_bounds,
