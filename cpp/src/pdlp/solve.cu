@@ -950,6 +950,35 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
   global_concurrent_halt        = 0;
   settings_pdlp.concurrent_halt = &global_concurrent_halt;
 
+  detail::problem_t<i_t, f_t>* concurrent_problem = &problem;
+  std::unique_ptr<detail::problem_t<i_t, f_t>> pre_scaled_problem_ptr;
+  std::unique_ptr<detail::pdlp_initial_scaling_strategy_t<i_t, f_t>> concurrent_scaling_ptr;
+
+  // For MIP concurrent solves (PDLP + Barrier), pre-scale once with PDLP scaling and run both
+  // methods on the same scaled problem.
+  if (settings.inside_mip) {
+    pre_scaled_problem_ptr =
+      std::make_unique<detail::problem_t<i_t, f_t>>(problem, false /* no_deep_copy */);
+    concurrent_scaling_ptr = std::make_unique<detail::pdlp_initial_scaling_strategy_t<i_t, f_t>>(
+      problem.handle_ptr,
+      *pre_scaled_problem_ptr,
+      settings_pdlp.hyper_params.default_l_inf_ruiz_iterations,
+      static_cast<f_t>(settings_pdlp.hyper_params.default_alpha_pock_chambolle_rescaling),
+      pre_scaled_problem_ptr->reverse_coefficients,
+      pre_scaled_problem_ptr->reverse_offsets,
+      pre_scaled_problem_ptr->reverse_constraints,
+      nullptr,
+      settings_pdlp.hyper_params,
+      true);
+    concurrent_scaling_ptr->scale_problem();
+    concurrent_problem = pre_scaled_problem_ptr.get();
+
+    // Avoid scaling twice on the PDLP branch once the shared pre-scaling has been applied.
+    settings_pdlp.hyper_params.do_ruiz_scaling           = false;
+    settings_pdlp.hyper_params.do_pock_chambolle_scaling = false;
+    settings_pdlp.hyper_params.bound_objective_rescaling = false;
+  }
+
   // Make sure allocations are done on the original stream
   problem.handle_ptr->sync_stream();
 
@@ -965,7 +994,7 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
   // Otherwise, CUDA API calls to the problem stream may occur in both threads and throw graph
   // capture off
   dual_simplex::user_problem_t<i_t, f_t> dual_simplex_problem =
-    cuopt_problem_to_simplex_problem<i_t, f_t>(problem.handle_ptr, problem);
+    cuopt_problem_to_simplex_problem<i_t, f_t>(problem.handle_ptr, *concurrent_problem);
   // Create a thread for dual simplex
   std::unique_ptr<
     std::tuple<dual_simplex::lp_solution_t<i_t, f_t>, dual_simplex::lp_status_t, f_t, f_t, f_t>>
@@ -1010,7 +1039,7 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
     CUOPT_LOG_DEBUG("PDLP device: %d", raft::device_setter::get_current_device());
   }
   // Run pdlp in the main thread
-  auto sol_pdlp = run_pdlp(problem, settings_pdlp, timer, is_batch_mode);
+  auto sol_pdlp = run_pdlp(*concurrent_problem, settings_pdlp, timer, is_batch_mode);
 
   // Wait for dual simplex thread to finish
   if (!settings.inside_mip) { dual_simplex_thread.join(); }
@@ -1020,7 +1049,7 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
   // copy the dual simplex solution to the device
   auto sol_dual_simplex =
     !settings.inside_mip
-      ? convert_dual_simplex_sol(problem,
+      ? convert_dual_simplex_sol(*concurrent_problem,
                                  std::get<0>(*sol_dual_simplex_ptr),
                                  std::get<1>(*sol_dual_simplex_ptr),
                                  std::get<2>(*sol_dual_simplex_ptr),
@@ -1031,13 +1060,24 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
                                                   problem.handle_ptr->get_stream()};
 
   // copy the barrier solution to the device
-  auto sol_barrier = convert_dual_simplex_sol(problem,
+  auto sol_barrier = convert_dual_simplex_sol(*concurrent_problem,
                                               std::get<0>(*sol_barrier_ptr),
                                               std::get<1>(*sol_barrier_ptr),
                                               std::get<2>(*sol_barrier_ptr),
                                               std::get<3>(*sol_barrier_ptr),
                                               std::get<4>(*sol_barrier_ptr),
                                               1);
+
+  if (concurrent_scaling_ptr) {
+    concurrent_scaling_ptr->unscale_solutions(
+      sol_pdlp.get_primal_solution(), sol_pdlp.get_dual_solution(), sol_pdlp.get_reduced_cost());
+    concurrent_scaling_ptr->unscale_solutions(sol_dual_simplex.get_primal_solution(),
+                                              sol_dual_simplex.get_dual_solution(),
+                                              sol_dual_simplex.get_reduced_cost());
+    concurrent_scaling_ptr->unscale_solutions(sol_barrier.get_primal_solution(),
+                                              sol_barrier.get_dual_solution(),
+                                              sol_barrier.get_reduced_cost());
+  }
 
   f_t end_time = timer.elapsed_time();
   CUOPT_LOG_CONDITIONAL_INFO(!settings.inside_mip, "Concurrent time: %.3fs", end_time);

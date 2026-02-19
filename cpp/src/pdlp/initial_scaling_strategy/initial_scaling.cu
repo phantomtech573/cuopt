@@ -14,6 +14,7 @@
 #include <pdlp/initial_scaling_strategy/initial_scaling.cuh>
 #include <pdlp/pdlp_constants.hpp>
 #include <pdlp/utils.cuh>
+#include <utilities/logger.hpp>
 
 #include <raft/common/nvtx.hpp>
 #include <raft/linalg/binary_op.cuh>
@@ -417,6 +418,15 @@ template <typename i_t, typename f_t>
 void pdlp_initial_scaling_strategy_t<i_t, f_t>::scale_problem()
 {
   raft::common::nvtx::range fun_scope("scale_problem");
+  CUOPT_LOG_INFO(
+    "PDLP initial scaling start: rows=%d cols=%d ruiz=%d pock_chambolle=%d "
+    "bound_objective_rescaling=%d running_mip=%d",
+    dual_size_h_,
+    primal_size_h_,
+    static_cast<int>(hyper_params_.do_ruiz_scaling),
+    static_cast<int>(hyper_params_.do_pock_chambolle_scaling),
+    static_cast<int>(hyper_params_.bound_objective_rescaling && !running_mip_),
+    static_cast<int>(running_mip_));
 
   // scale A
   i_t number_of_blocks = op_problem_scaled_.n_constraints / block_size;
@@ -565,6 +575,7 @@ void pdlp_initial_scaling_strategy_t<i_t, f_t>::scale_problem()
   if (!running_mip_) {
     scale_solutions(pdhg_solver_ptr_->get_primal_solution(), pdhg_solver_ptr_->get_dual_solution());
   }
+  CUOPT_LOG_INFO("PDLP initial scaling completed");
 }
 
 template <typename i_t, typename f_t>

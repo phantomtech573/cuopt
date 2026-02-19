@@ -7,6 +7,7 @@
 
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/mip_scaling_strategy.cuh>
+#include <utilities/logger.hpp>
 
 #include <raft/common/nvtx.hpp>
 #include <raft/util/cudart_utils.hpp>
@@ -200,6 +201,17 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
     <<<row_scaling_blocks, scaling_threads, 0, stream_view_>>>(
       problem_view, row_inf_norm.data(), row_skip_scaling.data());
   RAFT_CUDA_TRY(cudaPeekAtLastError());
+  i_t skipped_big_m_rows = thrust::reduce(handle_ptr_->get_thrust_policy(),
+                                          row_skip_scaling.begin(),
+                                          row_skip_scaling.end(),
+                                          i_t(0),
+                                          thrust::plus<i_t>());
+
+  CUOPT_LOG_INFO("MIP row scaling start: rows=%d cols=%d iterations=%d skip_big_m_rows=%d",
+                 n_rows,
+                 n_cols,
+                 row_scaling_num_iterations,
+                 skipped_big_m_rows);
 
   for (int iteration = 0; iteration < row_scaling_num_iterations; ++iteration) {
     compute_row_inf_norm_kernel<i_t, f_t>
@@ -250,6 +262,7 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
   }
 
   op_problem_scaled_.is_scaled_ = true;
+  CUOPT_LOG_INFO("MIP row scaling completed");
 }
 
 #define INSTANTIATE(F_TYPE) template class mip_scaling_strategy_t<int, F_TYPE>;
