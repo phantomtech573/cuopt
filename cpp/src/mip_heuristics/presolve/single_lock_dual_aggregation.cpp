@@ -249,8 +249,12 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
     if (this->is_time_exceeded(timer, tlim)) return papilo::PresolveStatus::kUnchanged;
     if (col_flags[col].test(papilo::ColFlag::kFixed, papilo::ColFlag::kSubstituted)) continue;
 
+    // Upward candidates must be binary/implied-binary. For continuous variables,
+    // the probe proves y=0 => x_j=0, but the substitution x_j = ub*y uses the
+    // column upper bound which may far exceed the actual VUB from the locking row.
+    // Continuous VUB substitution requires algebraic extraction (Extension 1).
     if (effective_up_locks[col] == 1 && objective[col] <= tol &&
-        is_valid_detail(col, col_flags.data(), lower_bounds.data(), upper_bounds.data())) {
+        is_binary_or_implied(col, col_flags.data(), lower_bounds.data(), upper_bounds.data())) {
       candidates.push_back({col, effective_up_lock_row[col], true});
     } else if (effective_down_locks[col] == 1 && objective[col] >= -tol &&
                is_binary_or_implied(
@@ -336,64 +340,7 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
     bool has_lhs = !row_flags[r].test(papilo::RowFlag::kLhsInf);
     bool has_rhs = !row_flags[r].test(papilo::RowFlag::kRhsInf);
 
-    // --- Extension 1: 2-variable row algebraic VUB extraction ---
-    // For a 2-variable <= row: a_j * x_j + a_y * y <= b
-    // with a_j > 0 (up-lock for x_j): x_j <= (-a_y/a_j) * y + b/a_j
-    // For a 2-variable >= row: a_j * x_j + a_y * y >= b
-    // with a_j < 0 (up-lock for x_j): x_j <= (-a_y/a_j) * y + b/a_j  (dividing by negative flips)
-    if (length == 2) {
-      for (auto ci = cand_it; ci != row_end; ++ci) {
-        int cand = ci->col;
-        if (!ci->is_upward) continue;  // algebraic VUB only for upward
-
-        int y_col     = -1;
-        f_t cand_coef = 0, y_coef = 0;
-        for (int j = 0; j < 2; ++j) {
-          if (cols[j] == cand)
-            cand_coef = vals[j];
-          else {
-            y_col  = cols[j];
-            y_coef = vals[j];
-          }
-        }
-
-        if (y_col < 0) continue;
-        if (col_flags[y_col].test(papilo::ColFlag::kFixed, papilo::ColFlag::kSubstituted)) continue;
-        if (std::abs(cand_coef) < tol) continue;
-
-        f_t factor, offset;
-        if (has_rhs && !has_lhs && cand_coef > tol) {
-          // <= row: x_j <= (-y_coef / cand_coef) * y + rhs / cand_coef
-          factor = -y_coef / cand_coef;
-          offset = rhs_values[r] / cand_coef;
-        } else if (has_lhs && !has_rhs && cand_coef < -tol) {
-          // >= row: divide by negative cand_coef flips the inequality
-          factor = -y_coef / cand_coef;
-          offset = lhs_values[r] / cand_coef;
-        } else {
-          continue;
-        }
-
-        // Verify the substitution respects x_j's bounds for all feasible y
-        f_t y_lb = col_flags[y_col].test(papilo::ColFlag::kLbInf) ? -1e20 : lower_bounds[y_col];
-        f_t y_ub = col_flags[y_col].test(papilo::ColFlag::kUbInf) ? 1e20 : upper_bounds[y_col];
-        f_t xj_at_ylb = factor * y_lb + offset;
-        f_t xj_at_yub = factor * y_ub + offset;
-        f_t xj_min    = std::min(xj_at_ylb, xj_at_yub);
-        f_t xj_max    = std::max(xj_at_ylb, xj_at_yub);
-
-        if (xj_min < lower_bounds[cand] - tol) continue;
-        if (xj_max > upper_bounds[cand] + tol) continue;
-
-        substitutions.push_back({cand, y_col, factor, offset});
-      }
-
-      // Clean up and advance (no dense array used for 2-var rows)
-      cand_it = row_end;
-      continue;
-    }
-
-    // --- Standard probing for rows with 3+ variables ---
+    // --- Standard probing ---
     f_t A_min = 0, A_max = 0;
     bool can_reach_neg_inf = false, can_reach_pos_inf = false;
 
@@ -486,6 +433,90 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
         if (evaluate(cand_coeff, cand, is_upward, y, yc)) {
           proven     = true;
           master_col = y;
+        }
+      }
+
+      // The probe proves a one-directional implication (e.g. y=0 => x=0).
+      // The substitution x=y also asserts the reverse (y=1 => x=1), which is
+      // only safe if forcing x to its bound doesn't starve other variables of
+      // capacity in the locking row. Verify the row becomes globally non-binding
+      // when y is in its favorable state.
+      if (proven) {
+        f_t y_coef_val     = dense_row_vals[master_col];
+        f_t fav_y_val      = is_upward ? f_t{1} : f_t{0};
+        f_t fav_y_contrib  = y_coef_val * fav_y_val;
+        f_t orig_y_max_val = std::max(f_t{0}, y_coef_val);
+        f_t orig_y_min_val = std::min(f_t{0}, y_coef_val);
+
+        if (has_rhs) {
+          if (can_reach_pos_inf) {
+            proven = false;
+          } else {
+            f_t fav_max = A_max - orig_y_max_val + fav_y_contrib;
+            if (fav_max > rhs_values[r] + tol) proven = false;
+          }
+        }
+        if (proven && has_lhs) {
+          if (can_reach_neg_inf) {
+            proven = false;
+          } else {
+            f_t fav_min = A_min - orig_y_min_val + fav_y_contrib;
+            if (fav_min < lhs_values[r] - tol) proven = false;
+          }
+        }
+      }
+
+      // Extension 1: algebraic VUB extraction for 2-variable rows.
+      // When the standard probing + non-binding path rejects (binding row),
+      // we can still substitute if the objective strictly drives x against the
+      // lock, guaranteeing the row is tight at optimality. For 2-variable rows
+      // there is no capacity starvation (no third variable to starve).
+      if (!proven && length == 2) {
+        bool obj_ok = is_upward ? (objective[cand] < -tol) : (objective[cand] > tol);
+        if (obj_ok) {
+          int y_col = -1;
+          f_t a_x = 0, a_y = 0;
+          for (int j = 0; j < 2; ++j) {
+            if (cols[j] == cand)
+              a_x = vals[j];
+            else {
+              y_col = cols[j];
+              a_y   = vals[j];
+            }
+          }
+          if (y_col >= 0 && std::abs(a_x) > tol &&
+              !col_flags[y_col].test(papilo::ColFlag::kFixed, papilo::ColFlag::kSubstituted)) {
+            bool use_rhs = (a_x > tol) == is_upward;
+            bool side_ok = use_rhs ? (has_rhs && !has_lhs) : (has_lhs && !has_rhs);
+            if (side_ok) {
+              f_t bound  = use_rhs ? rhs_values[r] : lhs_values[r];
+              f_t factor = -a_y / a_x;
+              f_t offset = bound / a_x;
+
+              f_t y_lb =
+                col_flags[y_col].test(papilo::ColFlag::kLbInf) ? f_t{-1e20} : lower_bounds[y_col];
+              f_t y_ub =
+                col_flags[y_col].test(papilo::ColFlag::kUbInf) ? f_t{1e20} : upper_bounds[y_col];
+              f_t xj_at_ylb = factor * y_lb + offset;
+              f_t xj_at_yub = factor * y_ub + offset;
+              f_t xj_min    = std::min(xj_at_ylb, xj_at_yub);
+              f_t xj_max    = std::max(xj_at_ylb, xj_at_yub);
+
+              bool bounds_ok =
+                xj_min >= lower_bounds[cand] - tol && xj_max <= upper_bounds[cand] + tol;
+              bool int_ok = true;
+              if (bounds_ok && col_flags[cand].test(papilo::ColFlag::kIntegral)) {
+                if (!col_flags[y_col].test(papilo::ColFlag::kIntegral) ||
+                    std::abs(factor - std::round(factor)) > tol ||
+                    std::abs(offset - std::round(offset)) > tol)
+                  int_ok = false;
+              }
+              if (bounds_ok && int_ok) {
+                substitutions.push_back({cand, y_col, factor, offset});
+                continue;
+              }
+            }
+          }
         }
       }
 
