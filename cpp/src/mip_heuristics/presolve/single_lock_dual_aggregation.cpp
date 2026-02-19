@@ -68,14 +68,12 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
     const int length = row_coeff.getLength();
 
     if (!lhs_inf && !rhs_inf) {
-      // Equality or range: every nonzero is both an up-lock and a down-lock
       for (int j = 0; j < length; ++j) {
         int col = cols[j];
         if (up_locks[col]++ == 0) first_up_lock_row[col] = row;
         if (down_locks[col]++ == 0) first_down_lock_row[col] = row;
       }
     } else if (lhs_inf && !rhs_inf) {
-      // <= row: positive coeff = up-lock, negative coeff = down-lock
       for (int j = 0; j < length; ++j) {
         int col = cols[j];
         if (vals[j] > tol) {
@@ -85,7 +83,6 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
         }
       }
     } else if (!lhs_inf && rhs_inf) {
-      // >= row: positive coeff = down-lock, negative coeff = up-lock
       for (int j = 0; j < length; ++j) {
         int col = cols[j];
         if (vals[j] > tol) {
@@ -107,14 +104,12 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
   // Downward candidate: binary, c>=0, down_locks==1.
   //   Solver wants x_j=0; one constraint blocks it.
   //   Probe proves y=1 => x_j=1. Substitution: x_j = y.
-  //
-  // Both directions share the same candidate structure: (col, locking_row).
   // =========================================================================
 
   struct candidate_t {
     int col;
     int lock_row;
-    bool is_upward;  // true: up-lock, substitute x=U*y; false: down-lock, substitute x=y
+    bool is_upward;
   };
   std::vector<candidate_t> candidates;
   candidates.reserve(std::min(ncols, nrows));
@@ -123,15 +118,12 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
     if (this->is_time_exceeded(timer, tlim)) return papilo::PresolveStatus::kUnchanged;
     if (col_flags[col].test(papilo::ColFlag::kFixed, papilo::ColFlag::kSubstituted)) continue;
 
-    // Upward: lb=0, ub>0 finite, c<=0, up_locks==1
     if (up_locks[col] == 1 && objective[col] <= tol &&
         is_valid_detail(col, col_flags.data(), lower_bounds.data(), upper_bounds.data())) {
       candidates.push_back({col, first_up_lock_row[col], true});
-    }
-    // Downward: binary, c>=0, down_locks==1
-    else if (down_locks[col] == 1 && objective[col] >= -tol &&
-             is_binary_or_implied(
-               col, col_flags.data(), lower_bounds.data(), upper_bounds.data())) {
+    } else if (down_locks[col] == 1 && objective[col] >= -tol &&
+               is_binary_or_implied(
+                 col, col_flags.data(), lower_bounds.data(), upper_bounds.data())) {
       candidates.push_back({col, first_down_lock_row[col], false});
     }
   }
@@ -139,46 +131,94 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
   if (candidates.empty()) return papilo::PresolveStatus::kUnchanged;
 
   // =========================================================================
-  // Step 3: Localized Mini-Probing — O(nnz) total
+  // Step 3: Localized Mini-Probing with Top-2 Extrema — O(K + L) per row
   //
-  // Candidates are sorted by locking row so that A_min/A_max are computed
-  // once per row, then all candidates in that row are tested in O(1) each.
+  // Candidates are sorted by locking row. For each row group, a single O(L)
+  // sweep computes A_min, A_max, and the Top-2 binary master candidates.
+  // Each candidate is then evaluated in O(1) using the precomputed extrema.
   //
-  // For an upward candidate (positive coeff in <= row, or negative in >= row):
-  //   Fix y=0, x_j=ub_j. If min-activity > rhs (<=) or max-activity < lhs
-  //   (>=), proven y=0 => x_j=0.
+  // Master selection depends on direction and row sense:
   //
-  // For a downward candidate (positive coeff in >= row, or negative in <= row):
-  //   Fix y=1, x_j=0. If min-activity > rhs (<=) or max-activity < lhs
-  //   (>=), proven y=1 => x_j=1.
+  //   | Lock type            | Upward (y=0)       | Downward (y=1)     |
+  //   |----------------------|--------------------|--------------------|
+  //   | <= row (pos coeff)   | most negative a_y  | —                  |
+  //   | >= row (neg coeff)   | most positive a_y  | —                  |
+  //   | >= row (pos coeff)   | —                  | most negative a_y  |
+  //   | <= row (neg coeff)   | —                  | most positive a_y  |
+  //
+  // Intuition: we pick the master whose removal from the activity bound
+  // creates the largest "swing" toward constraint violation.
+  //
+  //   <= check: probed_min = A_min - orig_cand_min - orig_y_min + test
+  //     The "swing" from y is delta = -min(0, a_y) for y=0, or
+  //     a_y - min(0, a_y) for y=1. Maximized by most negative (y=0)
+  //     or most positive (y=1) a_y respectively.
+  //
+  //   >= check: probed_max = A_max - orig_cand_max - orig_y_max + test
+  //     The "swing" is -max(0, a_y) for y=0, or a_y - max(0, a_y) for y=1.
+  //     Minimized by most positive (y=0) or most negative (y=1) a_y.
   // =========================================================================
 
   std::sort(candidates.begin(), candidates.end(), [](const candidate_t& a, const candidate_t& b) {
     return a.lock_row < b.lock_row;
   });
 
+  // Top-2 tracker: keeps the two best binary variable indices by coefficient.
+  struct top2_t {
+    int idx1 = -1, idx2 = -1;
+    f_t val1 = 0, val2 = 0;
+
+    void update(int idx, f_t val, bool want_min)
+    {
+      if (want_min) {
+        if (idx1 == -1 || val < val1) {
+          idx2 = idx1;
+          val2 = val1;
+          idx1 = idx;
+          val1 = val;
+        } else if (idx2 == -1 || val < val2) {
+          idx2 = idx;
+          val2 = val;
+        }
+      } else {
+        if (idx1 == -1 || val > val1) {
+          idx2 = idx1;
+          val2 = val1;
+          idx1 = idx;
+          val1 = val;
+        } else if (idx2 == -1 || val > val2) {
+          idx2 = idx;
+          val2 = val;
+        }
+      }
+    }
+
+    int best(int exclude) const { return (idx1 != exclude) ? idx1 : idx2; }
+  };
+
   struct substitution_t {
     int cand;
     int master;
-    f_t factor;  // ub for upward, 1 for downward
+    f_t factor;
   };
   std::vector<substitution_t> substitutions;
+  std::vector<f_t> dense_row_vals(ncols, f_t{0});
 
-  auto it = candidates.begin();
-  while (it != candidates.end()) {
+  auto cand_it = candidates.begin();
+  while (cand_it != candidates.end()) {
     if (this->is_time_exceeded(timer, tlim)) break;
 
-    int r = it->lock_row;
+    int r = cand_it->lock_row;
     if (r < 0) {
-      ++it;
+      ++cand_it;
       continue;
     }
 
-    // Find all candidates sharing this locking row
-    auto row_end =
-      std::find_if(it, candidates.end(), [r](const candidate_t& c) { return c.lock_row != r; });
+    auto row_end = cand_it;
+    while (row_end != candidates.end() && row_end->lock_row == r)
+      ++row_end;
 
-    // Compute A_min and A_max once for this row
+    // --- Single O(L) sweep over this row ---
     auto row_coeff   = constraint_matrix.getRowCoefficients(r);
     const int* cols  = row_coeff.getIndices();
     const f_t* vals  = row_coeff.getValues();
@@ -190,11 +230,16 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
     f_t A_min = 0, A_max = 0;
     bool can_reach_neg_inf = false, can_reach_pos_inf = false;
 
+    top2_t neg_y;  // most negative binary coefficients (for <= with y=0, >= with y=1)
+    top2_t pos_y;  // most positive binary coefficients (for >= with y=0, <= with y=1)
+
     for (int j = 0; j < length; ++j) {
       int col     = cols[j];
       f_t coef    = vals[j];
       bool lb_inf = col_flags[col].test(papilo::ColFlag::kLbInf);
       bool ub_inf = col_flags[col].test(papilo::ColFlag::kUbInf);
+
+      dense_row_vals[col] = coef;
 
       if (coef > 0) {
         if (lb_inf)
@@ -215,83 +260,99 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
         else
           A_max += coef * lower_bounds[col];
       }
+
+      if (col_flags[col].test(papilo::ColFlag::kFixed, papilo::ColFlag::kSubstituted)) continue;
+      if (!is_binary_or_implied(col, col_flags.data(), lower_bounds.data(), upper_bounds.data()))
+        continue;
+
+      neg_y.update(col, coef, true);
+      pos_y.update(col, coef, false);
     }
 
-    // Probe each candidate locked by this row
-    for (auto cand_it = it; cand_it != row_end; ++cand_it) {
-      int cand       = cand_it->col;
-      bool is_upward = cand_it->is_upward;
+    // Build a coefficient lookup for candidates in this row.
+    // This avoids O(L) scans per candidate; instead O(L) once + O(1) per cand.
+    // We temporarily store cand->coeff in a local array indexed by position
+    // in the candidate group (which is small).
+    bool use_leq_check = has_rhs && !can_reach_neg_inf;
+    bool use_geq_check = has_lhs && !can_reach_pos_inf;
 
-      // Find cand's coefficient in this row
-      f_t cand_coeff = 0;
-      for (int j = 0; j < length; ++j) {
-        if (cols[j] == cand) {
-          cand_coeff = vals[j];
-          break;
+    // Helper: evaluate a (cand_coeff, y_col, y_coef) triple.
+    auto evaluate = [&](f_t cand_coeff, int cand, bool is_upward, int y_col, f_t y_coef) -> bool {
+      if (y_col < 0 || y_col == cand) return false;
+
+      f_t orig_cand_min =
+        (cand_coeff > 0) ? cand_coeff * lower_bounds[cand] : cand_coeff * upper_bounds[cand];
+      f_t orig_cand_max =
+        (cand_coeff > 0) ? cand_coeff * upper_bounds[cand] : cand_coeff * lower_bounds[cand];
+      f_t cand_test = cand_coeff * (is_upward ? upper_bounds[cand] : f_t{0});
+
+      f_t orig_y_min = std::min(f_t{0}, y_coef);
+      f_t orig_y_max = std::max(f_t{0}, y_coef);
+      f_t y_test     = y_coef * (is_upward ? f_t{0} : f_t{1});
+      f_t test       = cand_test + y_test;
+
+      if (use_leq_check) {
+        f_t probed_min = A_min - orig_cand_min - orig_y_min + test;
+        if (probed_min > rhs_values[r] + tol) return true;
+      }
+      if (use_geq_check) {
+        f_t probed_max = A_max - orig_cand_max - orig_y_max + test;
+        if (probed_max < lhs_values[r] - tol) return true;
+      }
+      return false;
+    };
+
+    // Retrieve the coefficient and value for a top2 entry, handling the
+    // fallback when the best entry is the candidate itself.
+    auto pick_master = [](const top2_t& t, int exclude) -> std::pair<int, f_t> {
+      if (t.idx1 != exclude) return {t.idx1, t.val1};
+      return {t.idx2, t.val2};
+    };
+
+    // --- O(1) evaluation per candidate ---
+    for (auto ci = cand_it; ci != row_end; ++ci) {
+      int cand       = ci->col;
+      bool is_upward = ci->is_upward;
+
+      f_t cand_coeff = dense_row_vals[cand];
+
+      bool proven    = false;
+      int master_col = -1;
+
+      // <= check: upward wants neg_y, downward wants pos_y
+      if (!proven && use_leq_check) {
+        auto [y, yc] = pick_master(is_upward ? neg_y : pos_y, cand);
+        if (evaluate(cand_coeff, cand, is_upward, y, yc)) {
+          proven     = true;
+          master_col = y;
+        }
+      }
+      // >= check: upward wants pos_y, downward wants neg_y
+      if (!proven && use_geq_check) {
+        auto [y, yc] = pick_master(is_upward ? pos_y : neg_y, cand);
+        if (evaluate(cand_coeff, cand, is_upward, y, yc)) {
+          proven     = true;
+          master_col = y;
         }
       }
 
-      // Precompute cand's original contribution to A_min/A_max
-      f_t orig_cand_min, orig_cand_max;
-      if (cand_coeff > 0) {
-        orig_cand_min = cand_coeff * lower_bounds[cand];
-        orig_cand_max = cand_coeff * upper_bounds[cand];
-      } else {
-        orig_cand_min = cand_coeff * upper_bounds[cand];
-        orig_cand_max = cand_coeff * lower_bounds[cand];
-      }
-
-      // Test value for the candidate under the probe assumption
-      f_t cand_test_val     = is_upward ? upper_bounds[cand] : f_t{0};
-      f_t cand_test_contrib = cand_coeff * cand_test_val;
-
-      // Try each binary variable in the row as a potential master y
-      for (int j = 0; j < length; ++j) {
-        int y_col = cols[j];
-        if (y_col == cand) continue;
-        if (col_flags[y_col].test(papilo::ColFlag::kFixed, papilo::ColFlag::kSubstituted)) continue;
-        if (!is_binary_or_implied(
-              y_col, col_flags.data(), lower_bounds.data(), upper_bounds.data()))
-          continue;
-
-        f_t y_coef     = vals[j];
-        f_t orig_y_min = std::min(f_t{0}, y_coef);
-        f_t orig_y_max = std::max(f_t{0}, y_coef);
-
-        // Master test value: y=0 for upward, y=1 for downward
-        f_t y_test_val     = is_upward ? f_t{0} : f_t{1};
-        f_t y_test_contrib = y_coef * y_test_val;
-        f_t test_contrib   = cand_test_contrib + y_test_contrib;
-
-        bool proven = false;
-
-        // Check if fixing (cand=test_val, y=y_test_val) violates either bound.
-        // <= bound violated if min-possible-activity > rhs
-        if (!proven && has_rhs && !can_reach_neg_inf) {
-          f_t probed_min = A_min - orig_cand_min - orig_y_min + test_contrib;
-          if (probed_min > rhs_values[r] + tol) proven = true;
-        }
-        // >= bound violated if max-possible-activity < lhs
-        if (!proven && has_lhs && !can_reach_pos_inf) {
-          f_t probed_max = A_max - orig_cand_max - orig_y_max + test_contrib;
-          if (probed_max < lhs_values[r] - tol) proven = true;
-        }
-
-        if (proven) {
-          f_t factor = is_upward ? upper_bounds[cand] : f_t{1};
-          substitutions.push_back({cand, y_col, factor});
-          break;
-        }
+      if (proven) {
+        f_t factor = is_upward ? upper_bounds[cand] : f_t{1};
+        substitutions.push_back({cand, master_col, factor});
       }
     }
 
-    it = row_end;
+    // O(L) cleanup: reset dense array for the next row
+    for (int j = 0; j < length; ++j)
+      dense_row_vals[cols[j]] = f_t{0};
+
+    cand_it = row_end;
   }
 
   if (substitutions.empty()) return papilo::PresolveStatus::kUnchanged;
 
   // =========================================================================
-  // Step 4: Substitution — replaceCol(j, y, factor, 0)
+  // Step 4: Substitution — replaceCol(cand, master, factor, 0)
   // =========================================================================
 
   CUOPT_LOG_INFO("Single-lock dual aggregation: %d candidates, %d substitutions",
