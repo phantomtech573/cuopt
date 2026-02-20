@@ -29,7 +29,6 @@ class SingleLockDualAggregation : public papilo::PresolveMethod<f_t> {
     this->setName("single_lock_dual_aggregation");
     this->setType(papilo::PresolverType::kIntegralCols);
     this->setTiming(papilo::PresolverTiming::kMedium);
-    this->setArgument(papilo::ArgumentType::kDual);
   }
 
   papilo::PresolveStatus execute(const papilo::Problem<f_t>& problem,
