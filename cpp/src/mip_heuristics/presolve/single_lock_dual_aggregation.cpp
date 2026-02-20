@@ -16,7 +16,14 @@
 
 namespace cuopt::linear_programming::detail {
 
+// #define SLDA_ENABLE_SHADOW_LOCKS
+// #define SLDA_ENABLE_EXTENSION_1
+
+#ifdef SLDA_ENABLE_SHADOW_LOCKS
 static constexpr int MAX_LOCKS = 3;
+#else
+static constexpr int MAX_LOCKS = 1;
+#endif
 
 template <typename f_t>
 papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
@@ -114,12 +121,12 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
   // by j, so it's not a real lock.
   // =========================================================================
 
-  // effective_up_lock_row[col]: the single "real" up-lock row after shadows removed
   std::vector<int> effective_up_lock_row(ncols, -1);
   std::vector<int> effective_up_locks(ncols, 0);
   std::vector<int> effective_down_lock_row(ncols, -1);
   std::vector<int> effective_down_locks(ncols, 0);
 
+#ifdef SLDA_ENABLE_SHADOW_LOCKS
   auto is_shadow_lock = [&](int col, int row) -> bool {
     if (row < 0) return true;
     if (row_flags[row].test(papilo::RowFlag::kRedundant)) return true;
@@ -132,7 +139,6 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
     bool has_rhs = !row_flags[row].test(papilo::RowFlag::kRhsInf);
     bool has_lhs = !row_flags[row].test(papilo::RowFlag::kLhsInf);
 
-    // Compute max activity of the row WITHOUT col's contribution
     f_t max_without = 0;
     f_t min_without = 0;
     bool max_inf = false, min_inf = false;
@@ -164,19 +170,6 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
       }
     }
 
-    // A row is a shadow lock for col iff col CANNOT cause a violation:
-    // even with col at its worst bound AND all other variables at THEIR
-    // worst bounds (maximizing the chance of violation), the constraint
-    // is still satisfied.
-    //
-    // For <= row with positive col coeff (up-lock):
-    //   shadow iff max_without + a_col * ub_col <= rhs + tol
-    //   (even worst-case other vars + col at max doesn't exceed rhs)
-    //
-    // For >= row with negative col coeff (up-lock):
-    //   shadow iff min_without + a_col * ub_col >= lhs - tol
-    //   (even worst-case other vars + col at max doesn't go below lhs)
-
     f_t col_coeff = 0;
     for (int j = 0; j < rlen; ++j) {
       if (rcols[j] == col) {
@@ -185,11 +178,9 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
       }
     }
 
-    // <= row, positive coeff: shadow if max(others) + a*ub <= rhs
     if (has_rhs && col_coeff > tol && !max_inf) {
       if (max_without + col_coeff * upper_bounds[col] <= rhs_values[row] + tol) return true;
     }
-    // >= row, negative coeff: shadow if min(others) + a*ub >= lhs
     if (has_lhs && col_coeff < -tol && !min_inf) {
       if (min_without + col_coeff * upper_bounds[col] >= lhs_values[row] - tol) return true;
     }
@@ -230,6 +221,14 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
       effective_down_lock_row[col] = -1;
     }
   }
+#else
+  for (int col = 0; col < ncols; ++col) {
+    effective_up_locks[col]      = up_locks[col];
+    effective_up_lock_row[col]   = (up_locks[col] == 1) ? up_lock_rows[col][0] : -1;
+    effective_down_locks[col]    = down_locks[col];
+    effective_down_lock_row[col] = (down_locks[col] == 1) ? down_lock_rows[col][0] : -1;
+  }
+#endif
 
   // =========================================================================
   // Step 2: Candidate Identification — O(ncols)
@@ -466,6 +465,7 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
         }
       }
 
+#ifdef SLDA_ENABLE_EXTENSION_1
       // Extension 1: algebraic VUB extraction for 2-variable rows.
       // When the standard probing + non-binding path rejects (binding row),
       // we can still substitute if the objective strictly drives x against the
@@ -519,6 +519,7 @@ papilo::PresolveStatus SingleLockDualAggregation<f_t>::execute(
           }
         }
       }
+#endif
 
       if (proven) {
         f_t factor = is_upward ? upper_bounds[cand] : f_t{1};
