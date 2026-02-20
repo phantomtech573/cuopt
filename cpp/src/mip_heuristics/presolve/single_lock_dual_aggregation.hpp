@@ -29,6 +29,7 @@ class SingleLockDualAggregation : public papilo::PresolveMethod<f_t> {
     this->setName("single_lock_dual_aggregation");
     this->setType(papilo::PresolverType::kIntegralCols);
     this->setTiming(papilo::PresolverTiming::kMedium);
+    this->setArgument(papilo::ArgumentType::kDual);
   }
 
   papilo::PresolveStatus execute(const papilo::Problem<f_t>& problem,
@@ -50,17 +51,6 @@ class SingleLockDualAggregation : public papilo::PresolveMethod<f_t> {
     if (col_flags[col].test(papilo::ColFlag::kLbInf)) return false;
     if (col_flags[col].test(papilo::ColFlag::kUbInf)) return false;
     return lower_bounds[col] == 0.0 && upper_bounds[col] == 1.0;
-  }
-
-  // Detail can be binary, integer, or continuous with lb=0 and finite ub > 0.
-  bool is_valid_detail(int col,
-                       const papilo::Flags<papilo::ColFlag>* col_flags,
-                       const f_t* lower_bounds,
-                       const f_t* upper_bounds) const
-  {
-    if (col_flags[col].test(papilo::ColFlag::kLbInf)) return false;
-    if (col_flags[col].test(papilo::ColFlag::kUbInf)) return false;
-    return lower_bounds[col] == 0.0 && upper_bounds[col] > 0.0;
   }
 };
 
