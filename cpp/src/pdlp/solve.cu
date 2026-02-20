@@ -956,9 +956,12 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
 
   // For MIP concurrent solves (PDLP + Barrier), pre-scale once with PDLP scaling and run both
   // methods on the same scaled problem.
-  if (settings.inside_mip) {
-    pre_scaled_problem_ptr =
-      std::make_unique<detail::problem_t<i_t, f_t>>(problem, false /* no_deep_copy */);
+  const bool apply_shared_scaling =
+    settings.inside_mip && (settings_pdlp.hyper_params.do_ruiz_scaling ||
+                            settings_pdlp.hyper_params.do_pock_chambolle_scaling ||
+                            settings_pdlp.hyper_params.bound_objective_rescaling);
+  if (apply_shared_scaling) {
+    pre_scaled_problem_ptr = std::make_unique<detail::problem_t<i_t, f_t>>(problem);
     concurrent_scaling_ptr = std::make_unique<detail::pdlp_initial_scaling_strategy_t<i_t, f_t>>(
       problem.handle_ptr,
       *pre_scaled_problem_ptr,
@@ -971,6 +974,8 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
       settings_pdlp.hyper_params,
       true);
     concurrent_scaling_ptr->scale_problem();
+    // Keep CSR/transpose exactly consistent for strict debug validity checks.
+    pre_scaled_problem_ptr->compute_transpose_of_problem();
     concurrent_problem = pre_scaled_problem_ptr.get();
 
     // Avoid scaling twice on the PDLP branch once the shared pre-scaling has been applied.
@@ -990,11 +995,17 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
       device_count > 1, error_type_t::RuntimeError, "Multi-GPU mode requires at least 2 GPUs");
   }
 
-  // Initialize the dual simplex structures before we run PDLP.
+  // Initialize simplex/barrier structures before we run PDLP.
   // Otherwise, CUDA API calls to the problem stream may occur in both threads and throw graph
-  // capture off
+  // capture off.
+  // Keep dual simplex on the original unscaled model to preserve vertex solution semantics.
   dual_simplex::user_problem_t<i_t, f_t> dual_simplex_problem =
-    cuopt_problem_to_simplex_problem<i_t, f_t>(problem.handle_ptr, *concurrent_problem);
+    cuopt_problem_to_simplex_problem<i_t, f_t>(problem.handle_ptr, problem);
+  // Barrier shares the same model as PDLP (scaled in MIP concurrent mode, original otherwise).
+  dual_simplex::user_problem_t<i_t, f_t> barrier_problem =
+    apply_shared_scaling
+      ? cuopt_problem_to_simplex_problem<i_t, f_t>(problem.handle_ptr, *concurrent_problem)
+      : dual_simplex_problem;
   // Create a thread for dual simplex
   std::unique_ptr<
     std::tuple<dual_simplex::lp_solution_t<i_t, f_t>, dual_simplex::lp_status_t, f_t, f_t, f_t>>
@@ -1007,7 +1018,6 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
                                       std::ref(sol_dual_simplex_ptr),
                                       std::ref(timer));
   }
-  dual_simplex::user_problem_t<i_t, f_t> barrier_problem = dual_simplex_problem;
   // Create a thread for barrier
   std::unique_ptr<
     std::tuple<dual_simplex::lp_solution_t<i_t, f_t>, dual_simplex::lp_status_t, f_t, f_t, f_t>>
@@ -1016,10 +1026,10 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
     auto call_barrier_thread = [&]() {
       rmm::cuda_stream_view barrier_stream = rmm::cuda_stream_per_thread;
       auto barrier_handle                  = raft::handle_t(barrier_stream);
-      auto barrier_problem                 = dual_simplex_problem;
-      barrier_problem.handle_ptr           = &barrier_handle;
+      auto barrier_problem_local           = barrier_problem;
+      barrier_problem_local.handle_ptr     = &barrier_handle;
 
-      run_barrier_thread<i_t, f_t>(std::ref(barrier_problem),
+      run_barrier_thread<i_t, f_t>(std::ref(barrier_problem_local),
                                    std::ref(settings_pdlp),
                                    std::ref(sol_barrier_ptr),
                                    std::ref(timer));
@@ -1049,7 +1059,7 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
   // copy the dual simplex solution to the device
   auto sol_dual_simplex =
     !settings.inside_mip
-      ? convert_dual_simplex_sol(*concurrent_problem,
+      ? convert_dual_simplex_sol(problem,
                                  std::get<0>(*sol_dual_simplex_ptr),
                                  std::get<1>(*sol_dual_simplex_ptr),
                                  std::get<2>(*sol_dual_simplex_ptr),
@@ -1071,9 +1081,6 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
   if (concurrent_scaling_ptr) {
     concurrent_scaling_ptr->unscale_solutions(
       sol_pdlp.get_primal_solution(), sol_pdlp.get_dual_solution(), sol_pdlp.get_reduced_cost());
-    concurrent_scaling_ptr->unscale_solutions(sol_dual_simplex.get_primal_solution(),
-                                              sol_dual_simplex.get_dual_solution(),
-                                              sol_dual_simplex.get_reduced_cost());
     concurrent_scaling_ptr->unscale_solutions(sol_barrier.get_primal_solution(),
                                               sol_barrier.get_dual_solution(),
                                               sol_barrier.get_reduced_cost());

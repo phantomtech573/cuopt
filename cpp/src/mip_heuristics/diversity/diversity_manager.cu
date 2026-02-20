@@ -407,6 +407,15 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     pdlp_settings.presolver                            = presolver_t::None;
     set_pdlp_solver_mode(pdlp_settings);
 
+    bool enable_concurrent_root_pdlp_scaling = true;
+
+    if (!enable_concurrent_root_pdlp_scaling) {
+      // Keep this toggle local to concurrent-root LP solve (not part of solver settings API).
+      pdlp_settings.hyper_params.do_ruiz_scaling           = false;
+      pdlp_settings.hyper_params.do_pock_chambolle_scaling = false;
+      pdlp_settings.hyper_params.bound_objective_rescaling = false;
+    }
+
     timer_t lp_timer(lp_time_limit);
     auto lp_result = solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);
 
