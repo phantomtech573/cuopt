@@ -976,6 +976,9 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
     concurrent_scaling_ptr->scale_problem();
     // Keep CSR/transpose exactly consistent for strict debug validity checks.
     pre_scaled_problem_ptr->compute_transpose_of_problem();
+    // Keep combined bounds consistent with scaled lower/upper bounds.
+    detail::combine_constraint_bounds(*pre_scaled_problem_ptr,
+                                      pre_scaled_problem_ptr->combined_bounds);
     concurrent_problem = pre_scaled_problem_ptr.get();
 
     // Avoid scaling twice on the PDLP branch once the shared pre-scaling has been applied.

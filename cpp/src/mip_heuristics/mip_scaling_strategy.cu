@@ -89,8 +89,9 @@ void compute_row_inf_norm_with_cub(const problem_t<i_t, f_t>& op_problem,
 {
   auto coeff_abs_iter =
     thrust::make_transform_iterator(op_problem.coefficients.data(), abs_value_transform_t<f_t>{});
+  size_t current_bytes = temp_storage_bytes;
   RAFT_CUDA_TRY(cub::DeviceSegmentedReduce::Reduce(temp_storage.data(),
-                                                   temp_storage_bytes,
+                                                   current_bytes,
                                                    coeff_abs_iter,
                                                    row_inf_norm.data(),
                                                    op_problem.n_constraints,
@@ -117,8 +118,9 @@ void compute_big_m_skip_rows_with_cub(const problem_t<i_t, f_t>& op_problem,
   auto coeff_nonzero_count_iter = thrust::make_transform_iterator(
     op_problem.coefficients.data(), nonzero_count_transform_t<i_t, f_t>{});
 
+  size_t max_bytes = temp_storage_bytes;
   RAFT_CUDA_TRY(cub::DeviceSegmentedReduce::Reduce(temp_storage.data(),
-                                                   temp_storage_bytes,
+                                                   max_bytes,
                                                    coeff_abs_iter,
                                                    row_inf_norm.data(),
                                                    op_problem.n_constraints,
@@ -127,8 +129,9 @@ void compute_big_m_skip_rows_with_cub(const problem_t<i_t, f_t>& op_problem,
                                                    max_op_t<f_t>{},
                                                    f_t(0),
                                                    op_problem.handle_ptr->get_stream()));
+  size_t min_bytes = temp_storage_bytes;
   RAFT_CUDA_TRY(cub::DeviceSegmentedReduce::Reduce(temp_storage.data(),
-                                                   temp_storage_bytes,
+                                                   min_bytes,
                                                    coeff_nonzero_min_iter,
                                                    row_min_nonzero.data(),
                                                    op_problem.n_constraints,
@@ -137,8 +140,9 @@ void compute_big_m_skip_rows_with_cub(const problem_t<i_t, f_t>& op_problem,
                                                    min_op_t<f_t>{},
                                                    std::numeric_limits<f_t>::infinity(),
                                                    op_problem.handle_ptr->get_stream()));
+  size_t count_bytes = temp_storage_bytes;
   RAFT_CUDA_TRY(cub::DeviceSegmentedReduce::Reduce(temp_storage.data(),
-                                                   temp_storage_bytes,
+                                                   count_bytes,
                                                    coeff_nonzero_count_iter,
                                                    row_nonzero_count.data(),
                                                    op_problem.n_constraints,
