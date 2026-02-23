@@ -57,6 +57,7 @@ class early_heuristic_t {
  protected:
   ~early_heuristic_t() = default;
 
+  // NOT thread-safe
   void try_update_best(f_t user_obj, const std::vector<f_t>& assignment)
   {
     if (user_obj >= best_objective_) { return; }

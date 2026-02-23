@@ -34,6 +34,7 @@ void early_cpufj_t<i_t, f_t>::start()
 {
   if (cpu_fj_thread_) { return; }
 
+  this->preemption_flag_.store(false);
   this->start_time_ = std::chrono::steady_clock::now();
 
   cpu_fj_thread_ = std::make_unique<cpu_fj_thread_t<i_t, f_t>>();

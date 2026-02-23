@@ -174,10 +174,7 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
   detail::trivial_presolve(scaled_problem);
 
   detail::mip_solver_t<i_t, f_t> solver(scaled_problem, settings, scaling, timer);
-  auto scaled_sol                 = solver.run_solver();
-  bool is_feasible_before_scaling = scaled_sol.get_feasible();
-  scaled_sol.problem_ptr          = &problem;
-  solver.context.initial_cutoff   = initial_cutoff;
+  solver.context.initial_cutoff = initial_cutoff;
 
   // Run early CPUFJ on papilo-presolved problem during cuOpt presolve (probing cache).
   // Stopped by run_solver after presolve completes; its best objective feeds into initial_cutoff.
@@ -201,6 +198,10 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
     solver.context.early_cpufj_ptr = early_cpufj.get();
     CUOPT_LOG_DEBUG("Started early CPUFJ on papilo-presolved problem during cuOpt presolve");
   }
+
+  auto scaled_sol                 = solver.run_solver();
+  bool is_feasible_before_scaling = scaled_sol.get_feasible();
+  scaled_sol.problem_ptr          = &problem;
 
   if (settings.mip_scaling) { scaling.unscale_solutions(scaled_sol); }
   // at this point we need to compute the feasibility on the original problem not the presolved one
