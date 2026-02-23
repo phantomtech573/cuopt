@@ -7,6 +7,7 @@
 
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/mip_scaling_strategy.cuh>
+#include <pdlp/utils.cuh>
 #include <utilities/logger.hpp>
 
 #include <raft/common/nvtx.hpp>
