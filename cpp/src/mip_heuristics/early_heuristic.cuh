@@ -25,7 +25,7 @@ namespace cuopt::linear_programming::detail {
 
 template <typename f_t>
 using early_incumbent_callback_t =
-  std::function<void(f_t objective, const std::vector<f_t>& assignment)>;
+  std::function<void(f_t solver_obj, f_t user_obj, const std::vector<f_t>& assignment)>;
 
 // CRTP base for early heuristics that run on the original (or papilo-presolved) problem
 // during presolve to find incumbents as early as possible.
@@ -57,11 +57,11 @@ class early_heuristic_t {
  protected:
   ~early_heuristic_t() = default;
 
-  // NOT thread-safe
-  void try_update_best(f_t user_obj, const std::vector<f_t>& assignment)
+  // NOT thread-safe. solver_obj is in solver-space (always minimization).
+  void try_update_best(f_t solver_obj, const std::vector<f_t>& assignment)
   {
-    if (user_obj >= best_objective_) { return; }
-    best_objective_ = user_obj;
+    if (solver_obj >= best_objective_) { return; }
+    best_objective_ = solver_obj;
 
     auto* handle_ptr = problem_ptr_->handle_ptr;
     RAFT_CUDA_TRY(cudaSetDevice(handle_ptr->get_device()));
@@ -72,13 +72,14 @@ class early_heuristic_t {
 
     best_assignment_ = user_assignment;
     solution_found_  = true;
+    f_t user_obj     = problem_ptr_->get_user_obj_from_solver_obj(solver_obj);
     double elapsed =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time_).count();
     CUOPT_LOG_INFO("Early heuristics (%s) lowered the primal bound. Objective %g. Time %.2f",
                    Derived::name(),
                    user_obj,
                    elapsed);
-    if (incumbent_callback_) { incumbent_callback_(user_obj, user_assignment); }
+    if (incumbent_callback_) { incumbent_callback_(solver_obj, user_obj, user_assignment); }
   }
 
   std::unique_ptr<problem_t<i_t, f_t>> problem_ptr_;

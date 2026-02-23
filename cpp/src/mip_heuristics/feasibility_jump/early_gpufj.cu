@@ -53,7 +53,8 @@ void early_gpufj_t<i_t, f_t>::start()
   fj_ptr_ = std::make_unique<fj_t<i_t, f_t>>(*context_ptr_, fj_settings);
 
   fj_ptr_->improvement_callback = [this](f_t user_obj, const std::vector<f_t>& h_assignment) {
-    this->try_update_best(user_obj, h_assignment);
+    f_t solver_obj = this->problem_ptr_->get_solver_obj_from_user_obj(user_obj);
+    this->try_update_best(solver_obj, h_assignment);
   };
 
   worker_thread_ = std::make_unique<std::thread>(&early_gpufj_t::run_worker, this);

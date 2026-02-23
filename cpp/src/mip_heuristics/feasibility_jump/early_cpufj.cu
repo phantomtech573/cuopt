@@ -46,8 +46,7 @@ void early_cpufj_t<i_t, f_t>::start()
 
   cpu_fj_thread_->fj_cpu->improvement_callback =
     [this](f_t solver_obj, const std::vector<f_t>& assignment, double) {
-      f_t user_obj = this->problem_ptr_->get_user_obj_from_solver_obj(solver_obj);
-      this->try_update_best(user_obj, assignment);
+      this->try_update_best(solver_obj, assignment);
     };
 
   cpu_fj_thread_->start_cpu_solver();

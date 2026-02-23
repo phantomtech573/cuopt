@@ -936,8 +936,8 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
       // Invoke improvement callback if we have a better feasible solution
       if (is_feasible && improvement_callback) {
         f_t user_obj = solution.get_user_objective();
-        if (user_obj < last_reported_objective_) {
-          last_reported_objective_ = user_obj;
+        if (solution.h_obj < last_reported_objective_) {
+          last_reported_objective_ = solution.h_obj;
           // Copy assignment to host for callback
           std::vector<f_t> h_assignment(solution.assignment.size());
           raft::copy(h_assignment.data(),
@@ -1075,8 +1075,9 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range scope("fj_solve");
   timer_t timer(settings.time_limit);
-  handle_ptr = const_cast<raft::handle_t*>(solution.handle_ptr);
-  pb_ptr     = solution.problem_ptr;
+  handle_ptr               = const_cast<raft::handle_t*>(solution.handle_ptr);
+  pb_ptr                   = solution.problem_ptr;
+  last_reported_objective_ = std::numeric_limits<f_t>::infinity();
   if (settings.mode != fj_mode_t::ROUNDING) {
     cuopt_func_call(solution.test_variable_bounds(true));
     cuopt_assert(solution.test_number_all_integer(), "All integers must be rounded");

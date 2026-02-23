@@ -57,10 +57,11 @@ template <typename f_t>
 static void invoke_solution_callbacks(
   const std::vector<internals::base_solution_callback_t*>& mip_callbacks,
   f_t objective,
-  std::vector<f_t>& assignment)
+  std::vector<f_t>& assignment,
+  f_t bound)
 {
   std::vector<f_t> obj_vec   = {objective};
-  std::vector<f_t> bound_vec = {std::numeric_limits<f_t>::infinity()};
+  std::vector<f_t> bound_vec = {bound};
   for (auto callback : mip_callbacks) {
     if (callback != nullptr &&
         callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION) {
@@ -185,11 +186,14 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
   if (run_early_cpufj) {
     auto* presolver_ptr     = problem.presolve_data.papilo_presolve_ptr;
     auto mip_callbacks      = settings.get_mip_callbacks();
-    auto incumbent_callback = [presolver_ptr, mip_callbacks](f_t objective,
-                                                             const std::vector<f_t>& assignment) {
+    f_t no_bound            = problem.presolve_data.objective_scaling_factor >= 0
+                                ? -std::numeric_limits<f_t>::infinity()
+                                : std::numeric_limits<f_t>::infinity();
+    auto incumbent_callback = [presolver_ptr, mip_callbacks, no_bound](
+                                f_t solver_obj, f_t user_obj, const std::vector<f_t>& assignment) {
       std::vector<f_t> user_assignment;
       presolver_ptr->uncrush_primal_solution(assignment, user_assignment);
-      invoke_solution_callbacks(mip_callbacks, objective, user_assignment);
+      invoke_solution_callbacks(mip_callbacks, user_obj, user_assignment, no_bound);
     };
     early_cpufj = std::make_unique<detail::early_cpufj_t<i_t, f_t>>(
       *problem.original_problem_ptr, settings.get_tolerances(), incumbent_callback);
@@ -309,17 +313,21 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
     std::mutex early_callback_mutex;
 
     bool run_early_fj = run_presolve && settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
-                        op_problem.get_n_integers() > 0;
+                        op_problem.get_n_integers() > 0 && op_problem.get_n_constraints() > 0;
     if (run_early_fj) {
+      f_t no_bound           = problem.presolve_data.objective_scaling_factor >= 0
+                                 ? -std::numeric_limits<f_t>::infinity()
+                                 : std::numeric_limits<f_t>::infinity();
       auto early_fj_callback = [&early_best_objective,
                                 &early_callback_mutex,
-                                mip_callbacks = settings.get_mip_callbacks()](
-                                 f_t objective, const std::vector<f_t>& assignment) {
+                                mip_callbacks = settings.get_mip_callbacks(),
+                                no_bound](
+                                 f_t solver_obj, f_t user_obj, const std::vector<f_t>& assignment) {
         std::lock_guard<std::mutex> lock(early_callback_mutex);
-        if (objective >= early_best_objective.load()) { return; }
-        early_best_objective.store(objective);
+        if (solver_obj >= early_best_objective.load()) { return; }
+        early_best_objective.store(solver_obj);
         auto user_assignment = assignment;
-        invoke_solution_callbacks(mip_callbacks, objective, user_assignment);
+        invoke_solution_callbacks(mip_callbacks, user_obj, user_assignment, no_bound);
       };
 
       // Start early CPUFJ on original problem (will restart on presolved problem after Papilo)

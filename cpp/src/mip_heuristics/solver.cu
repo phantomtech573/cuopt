@@ -264,14 +264,10 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       branch_and_bound_problem, branch_and_bound_settings, timer_.get_tic_start());
     context.branch_and_bound_ptr = branch_and_bound.get();
 
-    // Set cutoff from early FJ if available
+    // Set cutoff from early FJ if available (initial_cutoff is in solver-space)
     if (context.initial_cutoff < std::numeric_limits<f_t>::infinity()) {
-      f_t internal_cutoff =
-        context.problem_ptr->get_solver_obj_from_user_obj(context.initial_cutoff);
-      branch_and_bound->set_initial_cutoff(internal_cutoff);
-      CUOPT_LOG_INFO("B&B using initial cutoff %.6e from early heuristics (internal: %.6e)",
-                     context.initial_cutoff,
-                     internal_cutoff);
+      branch_and_bound->set_initial_cutoff(context.initial_cutoff);
+      CUOPT_LOG_INFO("B&B using initial cutoff %.6e from early heuristics", context.initial_cutoff);
     }
 
     auto* stats_ptr = &context.stats;
