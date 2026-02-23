@@ -407,7 +407,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     pdlp_settings.presolver                            = presolver_t::None;
     set_pdlp_solver_mode(pdlp_settings);
 
-    bool enable_concurrent_root_pdlp_scaling = false;
+    bool enable_concurrent_root_pdlp_scaling = true;
 
     if (!enable_concurrent_root_pdlp_scaling) {
       // Keep this toggle local to concurrent-root LP solve (not part of solver settings API).
