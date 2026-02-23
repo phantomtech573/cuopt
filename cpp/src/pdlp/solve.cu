@@ -956,11 +956,7 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
 
   // For MIP concurrent solves (PDLP + Barrier), pre-scale once with PDLP scaling and run both
   // methods on the same scaled problem.
-  const bool apply_shared_scaling =
-    settings.inside_mip && (settings_pdlp.hyper_params.do_ruiz_scaling ||
-                            settings_pdlp.hyper_params.do_pock_chambolle_scaling ||
-                            settings_pdlp.hyper_params.bound_objective_rescaling);
-  if (apply_shared_scaling) {
+  if (settings.inside_mip) {
     pre_scaled_problem_ptr = std::make_unique<detail::problem_t<i_t, f_t>>(problem);
     concurrent_scaling_ptr = std::make_unique<detail::pdlp_initial_scaling_strategy_t<i_t, f_t>>(
       problem.handle_ptr,
@@ -1006,7 +1002,7 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
     cuopt_problem_to_simplex_problem<i_t, f_t>(problem.handle_ptr, problem);
   // Barrier shares the same model as PDLP (scaled in MIP concurrent mode, original otherwise).
   dual_simplex::user_problem_t<i_t, f_t> barrier_problem =
-    apply_shared_scaling
+    settings.inside_mip
       ? cuopt_problem_to_simplex_problem<i_t, f_t>(problem.handle_ptr, *concurrent_problem)
       : dual_simplex_problem;
   // Create a thread for dual simplex
