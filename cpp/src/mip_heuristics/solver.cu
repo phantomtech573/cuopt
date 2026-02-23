@@ -316,9 +316,11 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   if (!is_feasible.value(sol.handle_ptr->get_stream())) {
     CUOPT_LOG_ERROR(
       "Solution is not feasible due to variable bounds, returning infeasible solution!");
+    context.stats.total_solve_time = timer_.elapsed_time();
     context.problem_ptr->post_process_solution(sol);
     return sol;
   }
+  context.stats.total_solve_time = timer_.elapsed_time();
   context.problem_ptr->post_process_solution(sol);
   dm.rins.stop_rins();
   return sol;
