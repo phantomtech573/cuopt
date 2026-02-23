@@ -1487,9 +1487,10 @@ static bool cpufj_solve_loop(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t in_time_lim
         for (size_t i = 0; i < fj_cpu.cached_mtm_moves.size(); i++)
           fj_cpu.cached_mtm_moves[i].first = 0;
       }
-      thrust::tie(move, score) = find_mtm_move_viol(fj_cpu, 1, true);   // pick a single random violated constraint
-      i_t var_idx              = move.var_idx >= 0 ? move.var_idx : 0;
-      f_t delta                = move.var_idx >= 0 ? move.value : 0;
+      thrust::tie(move, score) =
+        find_mtm_move_viol(fj_cpu, 1, true);  // pick a single random violated constraint
+      i_t var_idx = move.var_idx >= 0 ? move.var_idx : 0;
+      f_t delta   = move.var_idx >= 0 ? move.value : 0;
       apply_move(fj_cpu, var_idx, delta, true);
       ++local_mins;
       ++fj_cpu.n_local_minima_window;

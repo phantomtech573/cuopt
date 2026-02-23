@@ -177,7 +177,7 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
   auto scaled_sol                 = solver.run_solver();
   bool is_feasible_before_scaling = scaled_sol.get_feasible();
   scaled_sol.problem_ptr          = &problem;
-  solver.context.initial_cutoff = initial_cutoff;
+  solver.context.initial_cutoff   = initial_cutoff;
 
   // Run early CPUFJ on papilo-presolved problem during cuOpt presolve (probing cache).
   // Stopped by run_solver after presolve completes; its best objective feeds into initial_cutoff.
@@ -186,14 +186,14 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
                          settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
                          problem.original_problem_ptr->get_n_integers() > 0;
   if (run_early_cpufj) {
-    auto* presolver_ptr = problem.presolve_data.papilo_presolve_ptr;
-    auto mip_callbacks  = settings.get_mip_callbacks();
-    auto incumbent_callback =
-      [presolver_ptr, mip_callbacks](f_t objective, const std::vector<f_t>& assignment) {
-        std::vector<f_t> user_assignment;
-        presolver_ptr->uncrush_primal_solution(assignment, user_assignment);
-        invoke_solution_callbacks(mip_callbacks, objective, user_assignment);
-      };
+    auto* presolver_ptr     = problem.presolve_data.papilo_presolve_ptr;
+    auto mip_callbacks      = settings.get_mip_callbacks();
+    auto incumbent_callback = [presolver_ptr, mip_callbacks](f_t objective,
+                                                             const std::vector<f_t>& assignment) {
+      std::vector<f_t> user_assignment;
+      presolver_ptr->uncrush_primal_solution(assignment, user_assignment);
+      invoke_solution_callbacks(mip_callbacks, objective, user_assignment);
+    };
     early_cpufj = std::make_unique<detail::early_cpufj_t<i_t, f_t>>(
       *problem.original_problem_ptr, settings.get_tolerances(), incumbent_callback);
     early_cpufj->set_best_objective(initial_cutoff);
@@ -311,9 +311,9 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
                         op_problem.get_n_integers() > 0;
     if (run_early_fj) {
       auto early_fj_callback = [&early_best_objective,
-                                 &early_callback_mutex,
-                                 mip_callbacks = settings.get_mip_callbacks()](
-                                  f_t objective, const std::vector<f_t>& assignment) {
+                                &early_callback_mutex,
+                                mip_callbacks = settings.get_mip_callbacks()](
+                                 f_t objective, const std::vector<f_t>& assignment) {
         std::lock_guard<std::mutex> lock(early_callback_mutex);
         if (objective >= early_best_objective.load()) { return; }
         early_best_objective.store(objective);

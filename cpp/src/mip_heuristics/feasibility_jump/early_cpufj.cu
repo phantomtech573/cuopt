@@ -36,9 +36,9 @@ void early_cpufj_t<i_t, f_t>::start()
 
   this->start_time_ = std::chrono::steady_clock::now();
 
-  cpu_fj_thread_         = std::make_unique<cpu_fj_thread_t<i_t, f_t>>();
-  cpu_fj_thread_->fj_cpu = init_fj_cpu_standalone(
-    *this->problem_ptr_, *this->solution_ptr_, preemption_flag_);
+  cpu_fj_thread_ = std::make_unique<cpu_fj_thread_t<i_t, f_t>>();
+  cpu_fj_thread_->fj_cpu =
+    init_fj_cpu_standalone(*this->problem_ptr_, *this->solution_ptr_, preemption_flag_);
   cpu_fj_thread_->time_limit = std::numeric_limits<f_t>::infinity();
 
   cpu_fj_thread_->fj_cpu->log_prefix = "[Early CPUFJ] ";
@@ -62,8 +62,8 @@ void early_cpufj_t<i_t, f_t>::stop()
   cpu_fj_thread_->wait_for_cpu_solver();
 
   CUOPT_LOG_DEBUG("[Early CPUFJ] Stopped after %d iterations, solution_found=%d",
-                 cpu_fj_thread_->fj_cpu ? cpu_fj_thread_->fj_cpu->iterations : 0,
-                 this->solution_found_);
+                  cpu_fj_thread_->fj_cpu ? cpu_fj_thread_->fj_cpu->iterations : 0,
+                  this->solution_found_);
 
   cpu_fj_thread_.reset();
 }

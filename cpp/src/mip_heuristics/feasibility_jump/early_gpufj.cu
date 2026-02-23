@@ -8,8 +8,8 @@
 #include "early_gpufj.cuh"
 
 #include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
-#include <mip_heuristics/solver_context.cuh>
 #include <mip_heuristics/mip_constants.hpp>
+#include <mip_heuristics/solver_context.cuh>
 #include <utilities/logger.hpp>
 
 #include <raft/core/error.hpp>
@@ -75,8 +75,7 @@ void early_gpufj_t<i_t, f_t>::stop()
 
   if (worker_thread_->joinable()) { worker_thread_->join(); }
 
-  CUOPT_LOG_DEBUG("[Early GPU FJ] Stopped, solution_found=%d",
-                 this->solution_found_);
+  CUOPT_LOG_DEBUG("[Early GPU FJ] Stopped, solution_found=%d", this->solution_found_);
 
   fj_ptr_.reset();
   worker_thread_.reset();
