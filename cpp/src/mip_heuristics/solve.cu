@@ -143,10 +143,8 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
       "please provide a more numerically stable problem.");
   }
 
-  auto sol =
-    scaled_sol.get_solution(is_feasible_on_scaled_problem || is_feasible_on_original_problem,
-                            solver.get_solver_stats(),
-                            false);
+  auto sol = scaled_sol.get_solution(
+    is_feasible_after_unscaling || is_feasible_before_scaling, solver.get_solver_stats(), false);
 
   int hidesol =
     std::getenv("CUOPT_MIP_HIDE_SOLUTION") ? atoi(std::getenv("CUOPT_MIP_HIDE_SOLUTION")) : 0;
