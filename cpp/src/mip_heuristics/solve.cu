@@ -170,7 +170,9 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
   if (timer.check_time_limit()) {
     CUOPT_LOG_INFO("Time limit reached before main solve");
     detail::solution_t<i_t, f_t> sol(problem);
-    return sol.get_solution(false, solver.get_solver_stats(), false);
+    auto stats             = solver.get_solver_stats();
+    stats.total_solve_time = timer.elapsed_time();
+    return sol.get_solution(false, stats, false);
   }
 
   // Run early CPUFJ on papilo-presolved problem during cuOpt presolve (probing cache).
