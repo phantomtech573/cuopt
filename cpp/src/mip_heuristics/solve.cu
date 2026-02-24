@@ -167,6 +167,11 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
 
   detail::mip_solver_t<i_t, f_t> solver(scaled_problem, settings, scaling, timer);
   solver.context.initial_cutoff = initial_cutoff;
+  if (timer.check_time_limit()) {
+    CUOPT_LOG_INFO("Time limit reached before main solve");
+    detail::solution_t<i_t, f_t> sol(problem);
+    return sol.get_solution(false, solver.get_solver_stats(), false);
+  }
 
   // Run early CPUFJ on papilo-presolved problem during cuOpt presolve (probing cache).
   // Stopped by run_solver after presolve completes; its best objective feeds into initial_cutoff.
