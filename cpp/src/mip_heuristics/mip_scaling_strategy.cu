@@ -10,7 +10,6 @@
 #include <pdlp/utils.cuh>
 #include <utilities/logger.hpp>
 
-#include <raft/common/nvtx.hpp>
 #include <raft/util/cudart_utils.hpp>
 
 #include <cub/cub.cuh>
