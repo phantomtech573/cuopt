@@ -14,8 +14,6 @@
 
 #include <utilities/logger.hpp>
 
-#include <rmm/cuda_stream.hpp>
-
 #include <thrust/fill.h>
 
 #include <chrono>
@@ -40,11 +38,15 @@ class early_heuristic_t {
                     early_incumbent_callback_t<f_t> incumbent_callback)
     : incumbent_callback_(std::move(incumbent_callback))
   {
-    problem_ptr_ = std::make_unique<problem_t<i_t, f_t>>(op_problem, tolerances, false);
-    problem_ptr_->preprocess_problem();
+    // Build and preprocess on the original handle, then copy onto our own handle
+    // so the derived solver can run on a dedicated stream (prevents graph capture conflicts).
+    problem_t<i_t, f_t> temp_problem(op_problem, tolerances, false);
+    temp_problem.preprocess_problem();
+    temp_problem.handle_ptr->sync_stream();
+    problem_ptr_ = std::make_unique<problem_t<i_t, f_t>>(temp_problem, &handle_);
 
     solution_ptr_ = std::make_unique<solution_t<i_t, f_t>>(*problem_ptr_);
-    thrust::fill(problem_ptr_->handle_ptr->get_thrust_policy(),
+    thrust::fill(handle_.get_thrust_policy(),
                  solution_ptr_->assignment.begin(),
                  solution_ptr_->assignment.end(),
                  f_t{0});
@@ -66,8 +68,8 @@ class early_heuristic_t {
     if (solver_obj >= best_objective_) { return; }
     best_objective_ = solver_obj;
 
-    RAFT_CUDA_TRY(cudaSetDevice(problem_ptr_->handle_ptr->get_device()));
-    auto stream = private_stream_.view();
+    RAFT_CUDA_TRY(cudaSetDevice(handle_.get_device()));
+    auto stream = handle_.get_stream();
     rmm::device_uvector<f_t> d_assignment(assignment.size(), stream);
     raft::copy(d_assignment.data(), assignment.data(), assignment.size(), stream);
     problem_ptr_->post_process_assignment(d_assignment, true, stream);
@@ -94,7 +96,7 @@ class early_heuristic_t {
 
   early_incumbent_callback_t<f_t> incumbent_callback_;
   std::chrono::steady_clock::time_point start_time_;
-  rmm::cuda_stream private_stream_;
+  raft::handle_t handle_;
 };
 
 }  // namespace cuopt::linear_programming::detail
