@@ -279,13 +279,13 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
     op_problem_scaled_, n_rows, row_inf_norm, row_min_nonzero, row_nonzero_count, stream_view_);
 
   rmm::device_uvector<std::uint8_t> temp_storage(temp_storage_bytes, stream_view_);
-  compute_big_m_skip_rows(op_problem_scaled_,
-                          temp_storage,
-                          temp_storage_bytes,
-                          row_inf_norm,
-                          row_min_nonzero,
-                          row_nonzero_count,
-                          row_skip_scaling);
+  // compute_big_m_skip_rows(op_problem_scaled_,
+  //                         temp_storage,
+  //                         temp_storage_bytes,
+  //                         row_inf_norm,
+  //                         row_min_nonzero,
+  //                         row_nonzero_count,
+  //                         row_skip_scaling);
 
   i_t skipped_big_m_rows = thrust::count(
     handle_ptr_->get_thrust_policy(), row_skip_scaling.begin(), row_skip_scaling.end(), i_t(1));
