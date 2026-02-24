@@ -175,11 +175,9 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
                          settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
                          problem.original_problem_ptr->get_n_integers() > 0;
   if (run_early_cpufj) {
-    auto* presolver_ptr     = problem.presolve_data.papilo_presolve_ptr;
-    auto mip_callbacks      = settings.get_mip_callbacks();
-    f_t no_bound            = problem.presolve_data.objective_scaling_factor >= 0
-                                ? -std::numeric_limits<f_t>::infinity()
-                                : std::numeric_limits<f_t>::infinity();
+    auto* presolver_ptr = problem.presolve_data.papilo_presolve_ptr;
+    auto mip_callbacks  = settings.get_mip_callbacks();
+    f_t no_bound = problem.presolve_data.objective_scaling_factor >= 0 ? (f_t)-1e20 : (f_t)1e20;
     auto incumbent_callback = [presolver_ptr, mip_callbacks, no_bound](
                                 f_t solver_obj, f_t user_obj, const std::vector<f_t>& assignment) {
       std::vector<f_t> user_assignment;
@@ -310,9 +308,7 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
     bool run_early_fj = run_presolve && settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
                         op_problem.get_n_integers() > 0 && op_problem.get_n_constraints() > 0;
     if (run_early_fj) {
-      f_t no_bound           = problem.presolve_data.objective_scaling_factor >= 0
-                                 ? -std::numeric_limits<f_t>::infinity()
-                                 : std::numeric_limits<f_t>::infinity();
+      f_t no_bound = problem.presolve_data.objective_scaling_factor >= 0 ? (f_t)-1e20 : (f_t)1e20;
       auto early_fj_callback = [&early_best_objective,
                                 &early_callback_mutex,
                                 mip_callbacks = settings.get_mip_callbacks(),
