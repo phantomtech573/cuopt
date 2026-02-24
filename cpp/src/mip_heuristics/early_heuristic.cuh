@@ -14,6 +14,8 @@
 
 #include <utilities/logger.hpp>
 
+#include <rmm/cuda_stream.hpp>
+
 #include <thrust/fill.h>
 
 #include <chrono>
@@ -58,17 +60,18 @@ class early_heuristic_t {
   ~early_heuristic_t() = default;
 
   // NOT thread-safe. solver_obj is in solver-space (always minimization).
+  // Uses a private CUDA stream to avoid racing with the FJ solver's stream.
   void try_update_best(f_t solver_obj, const std::vector<f_t>& assignment)
   {
     if (solver_obj >= best_objective_) { return; }
     best_objective_ = solver_obj;
 
-    auto* handle_ptr = problem_ptr_->handle_ptr;
-    RAFT_CUDA_TRY(cudaSetDevice(handle_ptr->get_device()));
-    rmm::device_uvector<f_t> d_assignment(assignment.size(), handle_ptr->get_stream());
-    raft::copy(d_assignment.data(), assignment.data(), assignment.size(), handle_ptr->get_stream());
-    problem_ptr_->post_process_assignment(d_assignment);
-    auto user_assignment = cuopt::host_copy(d_assignment, handle_ptr->get_stream());
+    RAFT_CUDA_TRY(cudaSetDevice(problem_ptr_->handle_ptr->get_device()));
+    auto stream = private_stream_.view();
+    rmm::device_uvector<f_t> d_assignment(assignment.size(), stream);
+    raft::copy(d_assignment.data(), assignment.data(), assignment.size(), stream);
+    problem_ptr_->post_process_assignment(d_assignment, true, stream);
+    auto user_assignment = cuopt::host_copy(d_assignment, stream);
 
     best_assignment_ = user_assignment;
     solution_found_  = true;
@@ -91,6 +94,7 @@ class early_heuristic_t {
 
   early_incumbent_callback_t<f_t> incumbent_callback_;
   std::chrono::steady_clock::time_point start_time_;
+  rmm::cuda_stream private_stream_;
 };
 
 }  // namespace cuopt::linear_programming::detail
