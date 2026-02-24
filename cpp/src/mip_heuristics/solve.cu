@@ -127,11 +127,17 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
   detail::trivial_presolve(scaled_problem);
 
   detail::mip_solver_t<i_t, f_t> solver(scaled_problem, settings, scaling, timer);
-  auto scaled_sol                      = solver.run_solver();
-  bool is_feasible_on_scaled_problem   = scaled_sol.get_feasible();
-  scaled_sol.problem_ptr               = &problem;
-  bool is_feasible_on_original_problem = scaled_sol.compute_feasibility();
-  if (!scaled_problem.empty && is_feasible_on_scaled_problem != is_feasible_on_original_problem) {
+  if (timer.check_time_limit()) {
+    CUOPT_LOG_INFO("Time limit reached before main solve");
+    detail::solution_t<i_t, f_t> sol(problem);
+    return sol.get_solution(false, solver.get_solver_stats(), false);
+  }
+  auto scaled_sol                 = solver.run_solver();
+  bool is_feasible_before_scaling = scaled_sol.get_feasible();
+  scaled_sol.problem_ptr          = &problem;
+  // at this point we need to compute the feasibility on the original problem not the presolved one
+  bool is_feasible_after_unscaling = scaled_sol.compute_feasibility();
+  if (!scaled_problem.empty && is_feasible_before_scaling != is_feasible_after_unscaling) {
     CUOPT_LOG_WARN(
       "The feasibility does not match on scaled and original problems. To overcome this issue, "
       "please provide a more numerically stable problem.");
