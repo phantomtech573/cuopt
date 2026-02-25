@@ -177,6 +177,7 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit)
   raft::common::nvtx::range fun_scope("run_presolve");
   CUOPT_LOG_INFO("Running presolve!");
   timer_t presolve_timer(time_limit);
+  if (context.settings.mip_scaling) { context.scaling.scale_problem(); }
   auto term_crit = ls.constraint_prop.bounds_update.solve(*problem_ptr);
   if (ls.constraint_prop.bounds_update.infeas_constraints_count > 0) {
     stats.presolve_time = timer.elapsed_time();
@@ -217,7 +218,6 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit)
       }
     }
   }
-  if (context.settings.mip_scaling) { context.scaling.scale_problem(); }
   stats.presolve_time = presolve_timer.elapsed_time();
   lp_optimal_solution.resize(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream());
   lp_dual_optimal_solution.resize(problem_ptr->n_constraints,
