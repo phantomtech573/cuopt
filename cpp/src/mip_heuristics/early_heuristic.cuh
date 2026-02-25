@@ -38,6 +38,8 @@ class early_heuristic_t {
                     early_incumbent_callback_t<f_t> incumbent_callback)
     : incumbent_callback_(std::move(incumbent_callback))
   {
+    RAFT_CUDA_TRY(cudaGetDevice(&device_id_));
+
     // Build and preprocess on the original handle, then copy onto our own handle
     // so the derived solver can run on a dedicated stream (prevents graph capture conflicts).
     problem_t<i_t, f_t> temp_problem(op_problem, tolerances, false);
@@ -68,7 +70,7 @@ class early_heuristic_t {
     if (solver_obj >= best_objective_) { return; }
     best_objective_ = solver_obj;
 
-    RAFT_CUDA_TRY(cudaSetDevice(handle_.get_device()));
+    RAFT_CUDA_TRY(cudaSetDevice(device_id_));
     auto stream = handle_.get_stream();
     rmm::device_uvector<f_t> d_assignment(assignment.size(), stream);
     raft::copy(d_assignment.data(), assignment.data(), assignment.size(), stream);
@@ -86,6 +88,8 @@ class early_heuristic_t {
                    elapsed);
     if (incumbent_callback_) { incumbent_callback_(solver_obj, user_obj, user_assignment); }
   }
+
+  int device_id_{0};
 
   // handle_ must be declared before problem_ptr_/solution_ptr_ so it outlives them
   // (C++ destroys members in reverse declaration order)

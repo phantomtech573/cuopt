@@ -63,7 +63,7 @@ void early_gpufj_t<i_t, f_t>::start()
 template <typename i_t, typename f_t>
 void early_gpufj_t<i_t, f_t>::run_worker()
 {
-  RAFT_CUDA_TRY(cudaSetDevice(this->problem_ptr_->handle_ptr->get_device()));
+  RAFT_CUDA_TRY(cudaSetDevice(this->device_id_));
   fj_ptr_->solve(*this->solution_ptr_);
 }
 
