@@ -258,6 +258,8 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
   rmm::device_uvector<f_t> row_min_nonzero(static_cast<size_t>(n_rows), stream_view_);
   rmm::device_uvector<i_t> row_nonzero_count(static_cast<size_t>(n_rows), stream_view_);
   rmm::device_uvector<i_t> row_skip_scaling(static_cast<size_t>(n_rows), stream_view_);
+  thrust::fill(
+    handle_ptr_->get_thrust_policy(), row_skip_scaling.begin(), row_skip_scaling.end(), i_t(0));
   rmm::device_uvector<f_t> iteration_scaling(static_cast<size_t>(n_rows), stream_view_);
   rmm::device_uvector<i_t> coefficient_row_index(static_cast<size_t>(nnz), stream_view_);
 
