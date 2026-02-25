@@ -87,6 +87,10 @@ class early_heuristic_t {
     if (incumbent_callback_) { incumbent_callback_(solver_obj, user_obj, user_assignment); }
   }
 
+  // handle_ must be declared before problem_ptr_/solution_ptr_ so it outlives them
+  // (C++ destroys members in reverse declaration order)
+  raft::handle_t handle_;
+
   std::unique_ptr<problem_t<i_t, f_t>> problem_ptr_;
   std::unique_ptr<solution_t<i_t, f_t>> solution_ptr_;
 
@@ -96,7 +100,6 @@ class early_heuristic_t {
 
   early_incumbent_callback_t<f_t> incumbent_callback_;
   std::chrono::steady_clock::time_point start_time_;
-  raft::handle_t handle_;
 };
 
 }  // namespace cuopt::linear_programming::detail
