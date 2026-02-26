@@ -111,6 +111,12 @@ class branch_and_bound_t {
   // Set a cutoff bound from an external source (e.g., early FJ during presolve).
   // Used for node pruning and reduced cost strengthening but NOT for gap computation.
   // Unlike upper_bound_, this does not imply a verified incumbent solution exists.
+  //
+  // IMPORTANT: `bound` must be in B&B's internal objective space, i.e. the space of
+  // original_lp_ where:  user_obj = obj_scale * (internal_obj + obj_constant).
+  // The caller (solver.cu) converts from user-space via
+  //   problem_ptr->get_solver_obj_from_user_obj(user_cutoff)
+  // which accounts for both the presolve objective offset and maximization.
   void set_initial_cutoff(f_t bound) { initial_cutoff_ = bound; }
 
   // Effective cutoff for node pruning: min of verified incumbent and external cutoff.
@@ -181,6 +187,7 @@ class branch_and_bound_t {
   omp_atomic_t<f_t> upper_bound_;
 
   // External cutoff from early heuristics (for pruning only, no verified solution).
+  // Must be in B&B internal objective space (see set_initial_cutoff).
   f_t initial_cutoff_{std::numeric_limits<f_t>::infinity()};
 
   // Global variable for incumbent. The incumbent should be updated with the upper bound

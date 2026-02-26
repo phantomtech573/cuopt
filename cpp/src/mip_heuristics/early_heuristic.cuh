@@ -57,6 +57,15 @@ class early_heuristic_t {
 
   bool solution_found() const { return solution_found_; }
   f_t get_best_objective() const { return best_objective_; }
+  // Return the best objective converted to user-space (sense-aware, offset-aware).
+  f_t get_best_user_objective() const
+  {
+    return problem_ptr_->get_user_obj_from_solver_obj(best_objective_);
+  }
+  // Set the incumbent threshold.  `obj` must be in THIS heuristic's solver-space
+  // (i.e. the space of problem_ptr_).  Callers that hold a value from a different
+  // problem representation (e.g., the original pre-presolve problem) must convert
+  // it first, otherwise try_update_best will reject valid solutions.
   void set_best_objective(f_t obj) { best_objective_ = obj; }
   const std::vector<f_t>& get_best_assignment() const { return best_assignment_; }
 

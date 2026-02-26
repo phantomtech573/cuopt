@@ -41,6 +41,8 @@
 
 #include <cuda_profiler_api.h>
 
+#include <cmath>
+
 namespace cuopt::linear_programming {
 
 // This serves as both a warm up but also a mandatory initial call to setup cuSparse and cuBLAS
@@ -166,6 +168,8 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
   detail::trivial_presolve(scaled_problem);
 
   detail::mip_solver_t<i_t, f_t> solver(scaled_problem, settings, scaling, timer);
+  // initial_cutoff is in user-space (representation-invariant).
+  // It will be converted to the target solver-space at each consumption point.
   solver.context.initial_cutoff = initial_cutoff;
   if (timer.check_time_limit()) {
     CUOPT_LOG_INFO("Time limit reached before main solve");
@@ -177,6 +181,9 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
 
   // Run early CPUFJ on papilo-presolved problem during cuOpt presolve (probing cache).
   // Stopped by run_solver after presolve completes; its best objective feeds into initial_cutoff.
+  // This CPUFJ operates on *problem.original_problem_ptr (papilo-presolved optimization_problem_t).
+  // Its solver-space differs from both the first-pass FJ (original problem) and B&B (post-trivial-
+  // presolve), so initial_cutoff (user-space) is converted via problem.get_solver_obj_from_user_obj.
   std::unique_ptr<detail::early_cpufj_t<i_t, f_t>> early_cpufj;
   bool run_early_cpufj = problem.has_papilo_presolve_data() &&
                          settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
@@ -193,7 +200,11 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
     };
     early_cpufj = std::make_unique<detail::early_cpufj_t<i_t, f_t>>(
       *problem.original_problem_ptr, settings.get_tolerances(), incumbent_callback);
-    early_cpufj->set_best_objective(initial_cutoff);
+    // Convert initial_cutoff from user-space to the CPUFJ's solver-space (papilo-presolved).
+    // problem.get_solver_obj_from_user_obj uses the papilo offset/scale (matching the CPUFJ).
+    if (std::isfinite(initial_cutoff)) {
+      early_cpufj->set_best_objective(problem.get_solver_obj_from_user_obj(initial_cutoff));
+    }
     early_cpufj->start();
     solver.context.early_cpufj_ptr = early_cpufj.get();
     CUOPT_LOG_DEBUG("Started early CPUFJ on papilo-presolved problem during cuOpt presolve");
@@ -308,8 +319,13 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
     std::unique_ptr<detail::early_cpufj_t<i_t, f_t>> early_cpufj;
     std::unique_ptr<detail::early_gpufj_t<i_t, f_t>> early_gpufj;
 
-    // Track best incumbent found during presolve (shared across CPU and GPU FJ)
+    // Track best incumbent found during presolve (shared across CPU and GPU FJ).
+    // early_best_objective is in the original problem's solver-space (always minimization),
+    // used for fast comparison in the callback.
+    // early_best_user_obj is the corresponding user-space objective (representation-invariant),
+    // passed to run_mip for correct cross-space conversion.
     std::atomic<f_t> early_best_objective{std::numeric_limits<f_t>::infinity()};
+    f_t early_best_user_obj{std::numeric_limits<f_t>::infinity()};
     std::mutex early_callback_mutex;
 
     bool run_early_fj = run_presolve && settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
@@ -317,6 +333,7 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
     f_t no_bound = problem.presolve_data.objective_scaling_factor >= 0 ? (f_t)-1e20 : (f_t)1e20;
     if (run_early_fj) {
       auto early_fj_callback = [&early_best_objective,
+                                &early_best_user_obj,
                                 &early_callback_mutex,
                                 mip_callbacks = settings.get_mip_callbacks(),
                                 no_bound](
@@ -324,6 +341,7 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
         std::lock_guard<std::mutex> lock(early_callback_mutex);
         if (solver_obj >= early_best_objective.load()) { return; }
         early_best_objective.store(solver_obj);
+        early_best_user_obj = user_obj;
         auto user_assignment = assignment;
         invoke_solution_callbacks(mip_callbacks, user_obj, user_assignment, no_bound);
       };
@@ -403,7 +421,9 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
       op_problem.write_to_mps(settings.user_problem_file);
     }
 
-    auto sol = run_mip(problem, settings, timer, early_best_objective.load());
+    // early_best_user_obj is in user-space (representation-invariant).
+    // run_mip stores it in context.initial_cutoff and converts to target spaces as needed.
+    auto sol = run_mip(problem, settings, timer, early_best_user_obj);
 
     if (run_presolve) {
       auto status_to_skip = sol.get_termination_status() == mip_termination_status_t::TimeLimit ||
