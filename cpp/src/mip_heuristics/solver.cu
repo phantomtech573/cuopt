@@ -121,9 +121,10 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     if (context.early_cpufj_ptr->solution_found()) {
       // Compare in user-space (representation-invariant) to pick the tighter cutoff.
       f_t cpufj_user_obj = context.early_cpufj_ptr->get_best_user_objective();
-      bool should_update = !std::isfinite(context.initial_cutoff) ||
-                           (context.problem_ptr->maximize ? cpufj_user_obj > context.initial_cutoff
-                                                          : cpufj_user_obj < context.initial_cutoff);
+      bool should_update =
+        !std::isfinite(context.initial_cutoff) ||
+        (context.problem_ptr->maximize ? cpufj_user_obj > context.initial_cutoff
+                                       : cpufj_user_obj < context.initial_cutoff);
       if (should_update) { context.initial_cutoff = cpufj_user_obj; }
       CUOPT_LOG_INFO("Early CPUFJ found incumbent with user-space objective %g during presolve",
                      cpufj_user_obj);
