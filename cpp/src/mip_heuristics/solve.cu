@@ -26,8 +26,11 @@
 #include <utilities/seed_generator.cuh>
 #include <utilities/version_info.hpp>
 
+#include <cuopt/linear_programming/backend_selection.hpp>
+#include <cuopt/linear_programming/gpu_optimization_problem_solution.hpp>
 #include <cuopt/linear_programming/mip/solver_settings.hpp>
 #include <cuopt/linear_programming/mip/solver_solution.hpp>
+#include <cuopt/linear_programming/optimization_problem_interface.hpp>
 #include <cuopt/linear_programming/pdlp/pdlp_hyper_params.cuh>
 #include <cuopt/linear_programming/solve.hpp>
 #include <cuopt/linear_programming/utilities/internals.hpp>
@@ -38,6 +41,8 @@
 #include <raft/core/cusparse_macros.hpp>
 #include <raft/core/handle.hpp>
 #include <raft/core/nvtx.hpp>
+
+#include <rmm/cuda_stream.hpp>
 
 #include <cuda_profiler_api.h>
 
@@ -183,7 +188,8 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
   // Stopped by run_solver after presolve completes; its best objective feeds into initial_cutoff.
   // This CPUFJ operates on *problem.original_problem_ptr (papilo-presolved optimization_problem_t).
   // Its solver-space differs from both the first-pass FJ (original problem) and B&B (post-trivial-
-  // presolve), so initial_cutoff (user-space) is converted via problem.get_solver_obj_from_user_obj.
+  // presolve), so initial_cutoff (user-space) is converted via
+  // problem.get_solver_obj_from_user_obj.
   std::unique_ptr<detail::early_cpufj_t<i_t, f_t>> early_cpufj;
   bool run_early_cpufj = problem.has_papilo_presolve_data() &&
                          settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
@@ -341,7 +347,7 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
         std::lock_guard<std::mutex> lock(early_callback_mutex);
         if (solver_obj >= early_best_objective.load()) { return; }
         early_best_objective.store(solver_obj);
-        early_best_user_obj = user_obj;
+        early_best_user_obj  = user_obj;
         auto user_assignment = assignment;
         invoke_solution_callbacks(mip_callbacks, user_obj, user_assignment, no_bound);
       };
@@ -495,15 +501,85 @@ mip_solution_t<i_t, f_t> solve_mip(
   return solve_mip(op_problem, settings);
 }
 
-#define INSTANTIATE(F_TYPE)                                                 \
-  template mip_solution_t<int, F_TYPE> solve_mip(                           \
-    optimization_problem_t<int, F_TYPE>& op_problem,                        \
-    mip_solver_settings_t<int, F_TYPE> const& settings);                    \
-                                                                            \
-  template mip_solution_t<int, F_TYPE> solve_mip(                           \
-    raft::handle_t const* handle_ptr,                                       \
-    const cuopt::mps_parser::mps_data_model_t<int, F_TYPE>& mps_data_model, \
-    mip_solver_settings_t<int, F_TYPE> const& settings);
+/**
+ * @brief Solve MIP using polymorphic problem interface
+ *
+ * This overload accepts the abstract optimization_problem_interface_t, allowing
+ * both GPU and CPU-backed problems. Handles remote execution and test mode.
+ */
+template <typename i_t, typename f_t>
+std::unique_ptr<mip_solution_interface_t<i_t, f_t>> solve_mip(
+  optimization_problem_interface_t<i_t, f_t>* problem_interface,
+  mip_solver_settings_t<i_t, f_t> const& settings)
+{
+  try {
+    // Check if remote execution is enabled
+    if (is_remote_execution_enabled()) {
+      CUOPT_LOG_INFO("Remote MIP solve requested");
+      return problem_interface->solve_mip_remote(settings);
+    } else {
+      // Local execution - convert to optimization_problem_t and call original solve_mip
+      CUOPT_LOG_INFO("Local MIP solve");
+
+      // Check if this is a CPU problem (test mode: CUOPT_USE_CPU_MEM_FOR_LOCAL=true)
+      auto* cpu_prob = dynamic_cast<cpu_optimization_problem_t<i_t, f_t>*>(problem_interface);
+      if (cpu_prob != nullptr) {
+        CUOPT_LOG_INFO("Test mode: Converting CPU problem to GPU for local MIP solve");
+
+        // Create CUDA resources for the conversion
+        rmm::cuda_stream stream;
+        raft::handle_t handle(stream);
+
+        // Temporarily set the handle on the CPU problem so it can create GPU resources
+        cpu_prob->set_handle(&handle);
+
+        // Convert CPU problem to GPU problem
+        auto op_problem = cpu_prob->to_optimization_problem();
+
+        // Clear the handle to avoid dangling pointer after this scope
+        cpu_prob->set_handle(nullptr);
+
+        // Synchronize before solving to ensure conversion is complete
+        stream.synchronize();
+
+        // Solve on GPU
+        auto gpu_solution = solve_mip<i_t, f_t>(op_problem, settings);
+
+        // Ensure all GPU work from the solve is complete before to_cpu_solution() D2H copies.
+        stream.synchronize();
+
+        CUOPT_LOG_INFO("Test mode: Converting GPU solution back to CPU solution");
+        gpu_mip_solution_t<i_t, f_t> gpu_sol_interface(std::move(gpu_solution));
+        return gpu_sol_interface.to_cpu_solution();
+      }
+
+      auto op_problem   = problem_interface->to_optimization_problem();
+      auto gpu_solution = solve_mip<i_t, f_t>(op_problem, settings);
+
+      // Wrap GPU solution in interface and return
+      return std::make_unique<gpu_mip_solution_t<i_t, f_t>>(std::move(gpu_solution));
+    }
+  } catch (const cuopt::logic_error& e) {
+    CUOPT_LOG_ERROR("Error in solve_mip (interface): %s", e.what());
+    throw;
+  } catch (const std::bad_alloc& e) {
+    CUOPT_LOG_ERROR("Error in solve_mip (interface): %s", e.what());
+    throw cuopt::logic_error("Memory allocation failed", cuopt::error_type_t::RuntimeError);
+  }
+}
+
+#define INSTANTIATE(F_TYPE)                                                  \
+  template mip_solution_t<int, F_TYPE> solve_mip(                            \
+    optimization_problem_t<int, F_TYPE>& op_problem,                         \
+    mip_solver_settings_t<int, F_TYPE> const& settings);                     \
+                                                                             \
+  template mip_solution_t<int, F_TYPE> solve_mip(                            \
+    raft::handle_t const* handle_ptr,                                        \
+    const cuopt::mps_parser::mps_data_model_t<int, F_TYPE>& mps_data_model,  \
+    mip_solver_settings_t<int, F_TYPE> const& settings);                     \
+                                                                             \
+  template std::unique_ptr<mip_solution_interface_t<int, F_TYPE>> solve_mip( \
+    optimization_problem_interface_t<int, F_TYPE>*, mip_solver_settings_t<int, F_TYPE> const&);
 
 #if MIP_INSTANTIATE_FLOAT
 INSTANTIATE(float)
