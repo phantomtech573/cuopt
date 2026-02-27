@@ -24,6 +24,10 @@
 #include <mip_heuristics/solver.cuh>
 #include <mip_heuristics/utilities/sort_csr.cuh>
 
+#include <cuopt/linear_programming/backend_selection.hpp>
+#include <cuopt/linear_programming/cpu_optimization_problem_solution.hpp>
+#include <cuopt/linear_programming/gpu_optimization_problem_solution.hpp>
+#include <cuopt/linear_programming/optimization_problem_interface.hpp>
 #include <cuopt/linear_programming/pdlp/pdlp_hyper_params.cuh>
 #include <cuopt/linear_programming/pdlp/solver_settings.hpp>
 #include <cuopt/linear_programming/solve.hpp>
@@ -44,6 +48,8 @@
 #include <raft/core/device_setter.hpp>
 #include <raft/core/handle.hpp>
 #include <raft/core/nvtx.hpp>
+
+#include <rmm/cuda_stream.hpp>
 
 #include <thread>  // For std::thread
 
@@ -950,39 +956,6 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
   global_concurrent_halt        = 0;
   settings_pdlp.concurrent_halt = &global_concurrent_halt;
 
-  detail::problem_t<i_t, f_t>* concurrent_problem = &problem;
-  std::unique_ptr<detail::problem_t<i_t, f_t>> pre_scaled_problem_ptr;
-  std::unique_ptr<detail::pdlp_initial_scaling_strategy_t<i_t, f_t>> concurrent_scaling_ptr;
-
-  // For MIP concurrent solves (PDLP + Barrier), pre-scale once with PDLP scaling and run both
-  // methods on the same scaled problem.
-  if (settings.inside_mip) {
-    pre_scaled_problem_ptr = std::make_unique<detail::problem_t<i_t, f_t>>(problem);
-    concurrent_scaling_ptr = std::make_unique<detail::pdlp_initial_scaling_strategy_t<i_t, f_t>>(
-      problem.handle_ptr,
-      *pre_scaled_problem_ptr,
-      settings_pdlp.hyper_params.default_l_inf_ruiz_iterations,
-      static_cast<f_t>(settings_pdlp.hyper_params.default_alpha_pock_chambolle_rescaling),
-      pre_scaled_problem_ptr->reverse_coefficients,
-      pre_scaled_problem_ptr->reverse_offsets,
-      pre_scaled_problem_ptr->reverse_constraints,
-      nullptr,
-      settings_pdlp.hyper_params,
-      true);
-    concurrent_scaling_ptr->scale_problem();
-    // Keep CSR/transpose exactly consistent for strict debug validity checks.
-    pre_scaled_problem_ptr->compute_transpose_of_problem();
-    // Keep combined bounds consistent with scaled lower/upper bounds.
-    detail::combine_constraint_bounds(*pre_scaled_problem_ptr,
-                                      pre_scaled_problem_ptr->combined_bounds);
-    concurrent_problem = pre_scaled_problem_ptr.get();
-
-    // Avoid scaling twice on the PDLP branch once the shared pre-scaling has been applied.
-    settings_pdlp.hyper_params.do_ruiz_scaling           = false;
-    settings_pdlp.hyper_params.do_pock_chambolle_scaling = false;
-    settings_pdlp.hyper_params.bound_objective_rescaling = false;
-  }
-
   // Make sure allocations are done on the original stream
   problem.handle_ptr->sync_stream();
 
@@ -994,17 +967,11 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
       device_count > 1, error_type_t::RuntimeError, "Multi-GPU mode requires at least 2 GPUs");
   }
 
-  // Initialize simplex/barrier structures before we run PDLP.
+  // Initialize the dual simplex structures before we run PDLP.
   // Otherwise, CUDA API calls to the problem stream may occur in both threads and throw graph
-  // capture off.
-  // Keep dual simplex on the original unscaled model to preserve vertex solution semantics.
+  // capture off
   dual_simplex::user_problem_t<i_t, f_t> dual_simplex_problem =
     cuopt_problem_to_simplex_problem<i_t, f_t>(problem.handle_ptr, problem);
-  // Barrier shares the same model as PDLP (scaled in MIP concurrent mode, original otherwise).
-  dual_simplex::user_problem_t<i_t, f_t> barrier_problem =
-    settings.inside_mip
-      ? cuopt_problem_to_simplex_problem<i_t, f_t>(problem.handle_ptr, *concurrent_problem)
-      : dual_simplex_problem;
   // Create a thread for dual simplex
   std::unique_ptr<
     std::tuple<dual_simplex::lp_solution_t<i_t, f_t>, dual_simplex::lp_status_t, f_t, f_t, f_t>>
@@ -1017,6 +984,7 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
                                       std::ref(sol_dual_simplex_ptr),
                                       std::ref(timer));
   }
+  dual_simplex::user_problem_t<i_t, f_t> barrier_problem = dual_simplex_problem;
   // Create a thread for barrier
   std::unique_ptr<
     std::tuple<dual_simplex::lp_solution_t<i_t, f_t>, dual_simplex::lp_status_t, f_t, f_t, f_t>>
@@ -1025,10 +993,10 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
     auto call_barrier_thread = [&]() {
       rmm::cuda_stream_view barrier_stream = rmm::cuda_stream_per_thread;
       auto barrier_handle                  = raft::handle_t(barrier_stream);
-      auto barrier_problem_local           = barrier_problem;
-      barrier_problem_local.handle_ptr     = &barrier_handle;
+      auto barrier_problem                 = dual_simplex_problem;
+      barrier_problem.handle_ptr           = &barrier_handle;
 
-      run_barrier_thread<i_t, f_t>(std::ref(barrier_problem_local),
+      run_barrier_thread<i_t, f_t>(std::ref(barrier_problem),
                                    std::ref(settings_pdlp),
                                    std::ref(sol_barrier_ptr),
                                    std::ref(timer));
@@ -1048,7 +1016,7 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
     CUOPT_LOG_DEBUG("PDLP device: %d", raft::device_setter::get_current_device());
   }
   // Run pdlp in the main thread
-  auto sol_pdlp = run_pdlp(*concurrent_problem, settings_pdlp, timer, is_batch_mode);
+  auto sol_pdlp = run_pdlp(problem, settings_pdlp, timer, is_batch_mode);
 
   // Wait for dual simplex thread to finish
   if (!settings.inside_mip) { dual_simplex_thread.join(); }
@@ -1069,21 +1037,13 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
                                                   problem.handle_ptr->get_stream()};
 
   // copy the barrier solution to the device
-  auto sol_barrier = convert_dual_simplex_sol(*concurrent_problem,
+  auto sol_barrier = convert_dual_simplex_sol(problem,
                                               std::get<0>(*sol_barrier_ptr),
                                               std::get<1>(*sol_barrier_ptr),
                                               std::get<2>(*sol_barrier_ptr),
                                               std::get<3>(*sol_barrier_ptr),
                                               std::get<4>(*sol_barrier_ptr),
                                               1);
-
-  if (concurrent_scaling_ptr) {
-    concurrent_scaling_ptr->unscale_solutions(
-      sol_pdlp.get_primal_solution(), sol_pdlp.get_dual_solution(), sol_pdlp.get_reduced_cost());
-    concurrent_scaling_ptr->unscale_solutions(sol_barrier.get_primal_solution(),
-                                              sol_barrier.get_dual_solution(),
-                                              sol_barrier.get_reduced_cost());
-  }
 
   f_t end_time = timer.elapsed_time();
   CUOPT_LOG_CONDITIONAL_INFO(!settings.inside_mip, "Concurrent time: %.3fs", end_time);
@@ -1391,6 +1351,9 @@ template <typename i_t, typename f_t>
 cuopt::linear_programming::optimization_problem_t<i_t, f_t> mps_data_model_to_optimization_problem(
   raft::handle_t const* handle_ptr, const cuopt::mps_parser::mps_data_model_t<i_t, f_t>& data_model)
 {
+  cuopt_expects(handle_ptr != nullptr,
+                error_type_t::ValidationError,
+                "handle_ptr must not be null for GPU-backed problem construction");
   cuopt::linear_programming::optimization_problem_t<i_t, f_t> op_problem(handle_ptr);
   op_problem.set_maximize(data_model.get_sense());
 
@@ -1481,6 +1444,72 @@ optimization_problem_solution_t<i_t, f_t> solve_lp(
   return solve_lp(op_problem, settings, problem_checking, use_pdlp_solver_mode);
 }
 
+// ============================================================================
+// Interface-based solve overloads with remote execution support
+// ============================================================================
+
+template <typename i_t, typename f_t>
+std::unique_ptr<lp_solution_interface_t<i_t, f_t>> solve_lp(
+  optimization_problem_interface_t<i_t, f_t>* problem_interface,
+  pdlp_solver_settings_t<i_t, f_t> const& settings,
+  bool problem_checking,
+  bool use_pdlp_solver_mode,
+  bool is_batch_mode)
+{
+  // Check if remote execution is enabled
+  if (is_remote_execution_enabled()) {
+    cuopt_expects(!is_batch_mode,
+                  error_type_t::ValidationError,
+                  "Batch mode with remote execution is not supported via this entry point. "
+                  "Use solve_batch_remote() instead.");
+    CUOPT_LOG_INFO("Remote LP solve requested");
+    return problem_interface->solve_lp_remote(settings, problem_checking, use_pdlp_solver_mode);
+  } else {
+    // Local execution - convert to optimization_problem_t and call original solve_lp
+    CUOPT_LOG_INFO("Local LP solve");
+
+    // Check if this is a CPU problem (test mode: CUOPT_USE_CPU_MEM_FOR_LOCAL=true)
+    auto* cpu_prob = dynamic_cast<cpu_optimization_problem_t<i_t, f_t>*>(problem_interface);
+    if (cpu_prob != nullptr) {
+      CUOPT_LOG_INFO("Test mode: Converting CPU problem to GPU for local solve");
+
+      // Create CUDA resources for the conversion
+      rmm::cuda_stream stream;
+      raft::handle_t handle(stream);
+
+      // Temporarily set the handle on the CPU problem so it can create GPU resources
+      cpu_prob->set_handle(&handle);
+
+      // Convert CPU problem to GPU problem
+      auto op_problem = cpu_prob->to_optimization_problem();
+
+      // Clear the handle to avoid dangling pointer after this scope
+      cpu_prob->set_handle(nullptr);
+
+      // Synchronize before solving to ensure conversion is complete
+      stream.synchronize();
+
+      // Solve on GPU
+      auto gpu_solution = solve_lp<i_t, f_t>(
+        op_problem, settings, problem_checking, use_pdlp_solver_mode, is_batch_mode);
+
+      // Ensure all GPU work from the solve is complete before to_cpu_solution() D2H copies.
+      stream.synchronize();
+
+      CUOPT_LOG_INFO("Test mode: Converting GPU solution back to CPU solution");
+      gpu_lp_solution_t<i_t, f_t> gpu_sol_interface(std::move(gpu_solution));
+      return gpu_sol_interface.to_cpu_solution();
+    }
+
+    auto op_problem   = problem_interface->to_optimization_problem();
+    auto gpu_solution = solve_lp<i_t, f_t>(
+      op_problem, settings, problem_checking, use_pdlp_solver_mode, is_batch_mode);
+
+    // Wrap GPU solution in interface and return
+    return std::make_unique<gpu_lp_solution_t<i_t, f_t>>(std::move(gpu_solution));
+  }
+}
+
 #define INSTANTIATE(F_TYPE)                                                            \
   template optimization_problem_solution_t<int, F_TYPE> solve_lp(                      \
     optimization_problem_t<int, F_TYPE>& op_problem,                                   \
@@ -1495,6 +1524,13 @@ optimization_problem_solution_t<i_t, f_t> solve_lp(
     pdlp_solver_settings_t<int, F_TYPE> const& settings,                               \
     bool problem_checking,                                                             \
     bool use_pdlp_solver_mode);                                                        \
+                                                                                       \
+  template std::unique_ptr<lp_solution_interface_t<int, F_TYPE>> solve_lp(             \
+    optimization_problem_interface_t<int, F_TYPE>*,                                    \
+    pdlp_solver_settings_t<int, F_TYPE> const&,                                        \
+    bool,                                                                              \
+    bool,                                                                              \
+    bool);                                                                             \
                                                                                        \
   template optimization_problem_solution_t<int, F_TYPE> solve_lp_with_method(          \
     detail::problem_t<int, F_TYPE>& problem,                                           \
