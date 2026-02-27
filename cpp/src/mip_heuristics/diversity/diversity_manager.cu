@@ -178,6 +178,7 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit)
   CUOPT_LOG_INFO("Running presolve!");
   timer_t presolve_timer(time_limit);
   if (context.settings.mip_scaling) { context.scaling.scale_problem(); }
+
   auto term_crit = ls.constraint_prop.bounds_update.solve(*problem_ptr);
   if (ls.constraint_prop.bounds_update.infeas_constraints_count > 0) {
     stats.presolve_time = timer.elapsed_time();
