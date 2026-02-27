@@ -426,6 +426,54 @@ i_t branch_and_bound_t<i_t, f_t>::find_reduced_cost_fixings(f_t upper_bound,
 }
 
 template <typename i_t, typename f_t>
+i_t branch_and_bound_t<i_t, f_t>::apply_reduced_cost_fixings_at_node(
+  const lp_solution_t<i_t, f_t>& node_solution,
+  f_t cutoff,
+  std::vector<f_t>& lower_bounds,
+  std::vector<f_t>& upper_bounds)
+{
+  const f_t node_obj = node_solution.objective;
+  if (!std::isfinite(node_obj) || cutoff <= node_obj) { return 0; }
+
+  const f_t abs_gap    = cutoff - node_obj;
+  const f_t threshold  = 100.0 * settings_.integer_tol;
+  const f_t weaken     = settings_.integer_tol;
+  i_t num_tightened    = 0;
+  const i_t num_bounds = std::min((i_t)lower_bounds.size(), (i_t)upper_bounds.size());
+  const i_t n          = std::min((i_t)node_solution.z.size(), num_bounds);
+
+  for (i_t j = 0; j < n; j++) {
+    const f_t rc = node_solution.z[j];
+    if (!std::isfinite(rc) || std::abs(rc) <= threshold) { continue; }
+
+    const bool is_integer =
+      var_types_[j] == variable_type_t::INTEGER || var_types_[j] == variable_type_t::BINARY;
+
+    if (rc > 0 && std::isfinite(lower_bounds[j])) {
+      f_t new_upper_bound = lower_bounds[j] + abs_gap / rc;
+      if (is_integer) { new_upper_bound = std::floor(new_upper_bound + weaken); }
+
+      if (new_upper_bound < upper_bounds[j]) {
+        upper_bounds[j] = new_upper_bound;
+        num_tightened++;
+      }
+    }
+
+    if (rc < 0 && std::isfinite(upper_bounds[j])) {
+      f_t new_lower_bound = upper_bounds[j] + abs_gap / rc;
+      if (is_integer) { new_lower_bound = std::ceil(new_lower_bound - weaken); }
+
+      if (new_lower_bound > lower_bounds[j]) {
+        lower_bounds[j] = new_lower_bound;
+        num_tightened++;
+      }
+    }
+  }
+
+  return num_tightened;
+}
+
+template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::update_user_bound(f_t lower_bound)
 {
   if (user_bound_callback_ == nullptr) { return; }
@@ -1457,6 +1505,18 @@ void branch_and_bound_t<i_t, f_t>::plunge_with(branch_and_bound_worker_t<i_t, f_
     ++exploration_stats_.nodes_since_last_log;
     ++exploration_stats_.nodes_explored;
     --exploration_stats_.nodes_unexplored;
+
+    if (lp_status == dual::status_t::OPTIMAL && settings_.reduced_cost_strengthening >= 1) {
+      i_t rc_fixed = apply_reduced_cost_fixings_at_node(worker->leaf_solution,
+                                                        upper_bound_.load(),
+                                                        worker->leaf_problem.lower,
+                                                        worker->leaf_problem.upper);
+      if (rc_fixed > 0) {
+        settings_.log.debug("Node %d: reduced-cost tightening updated %d bounds (opportunistic).\n",
+                            node_ptr->node_id,
+                            rc_fixed);
+      }
+    }
 
     auto [node_status, round_dir] =
       update_tree(node_ptr, search_tree_, worker, lp_status, settings_.log);
@@ -3079,6 +3139,20 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
   ++exploration_stats_.nodes_explored;
   --exploration_stats_.nodes_unexplored;
 
+  if (lp_status == dual::status_t::OPTIMAL && settings_.reduced_cost_strengthening >= 1) {
+    i_t rc_fixed = apply_reduced_cost_fixings_at_node(worker.leaf_solution,
+                                                      worker.local_upper_bound,
+                                                      worker.leaf_problem.lower,
+                                                      worker.leaf_problem.upper);
+    if (rc_fixed > 0) {
+      settings_.log.debug(
+        "Node %d: reduced-cost tightening updated %d bounds (deterministic bfs worker %d).\n",
+        node_ptr->node_id,
+        rc_fixed,
+        worker.worker_id);
+    }
+  }
+
   deterministic_bfs_policy_t<i_t, f_t> policy{*this, worker};
   auto [status, round_dir] = update_tree_impl(node_ptr, search_tree, &worker, lp_status, policy);
 
@@ -3691,6 +3765,20 @@ void branch_and_bound_t<i_t, f_t>::deterministic_dive(
     if (lp_status == dual::status_t::TIME_LIMIT || lp_status == dual::status_t::WORK_LIMIT ||
         lp_status == dual::status_t::ITERATION_LIMIT) {
       break;
+    }
+
+    if (lp_status == dual::status_t::OPTIMAL && settings_.reduced_cost_strengthening >= 1) {
+      i_t rc_fixed = apply_reduced_cost_fixings_at_node(worker.leaf_solution,
+                                                        worker.local_upper_bound,
+                                                        worker.leaf_problem.lower,
+                                                        worker.leaf_problem.upper);
+      if (rc_fixed > 0) {
+        settings_.log.debug(
+          "Node %d: reduced-cost tightening updated %d bounds (deterministic dive worker %d).\n",
+          node_ptr->node_id,
+          rc_fixed,
+          worker.worker_id);
+      }
     }
 
     deterministic_diving_policy_t<i_t, f_t> policy{*this, worker, stack, max_backtrack_depth};
