@@ -36,10 +36,14 @@
 
 namespace cuopt::linear_programming::detail {
 
-constexpr int row_scaling_num_iterations         = 3;
-constexpr int row_scaling_k_min                  = -20;
-constexpr int row_scaling_k_max                  = 20;
-constexpr double nearest_pow2_mantissa_threshold = 0.7071067811865476;
+constexpr int row_scaling_max_iterations                 = 8;
+constexpr int row_scaling_k_min                          = -20;
+constexpr int row_scaling_k_max                          = 20;
+constexpr int row_scaling_big_m_soft_k_min               = -4;
+constexpr int row_scaling_big_m_soft_k_max               = 0;
+constexpr double row_scaling_spread_rel_tol              = 1.0e-2;
+constexpr double nearest_pow2_mantissa_threshold         = 0.7071067811865476;
+constexpr double min_abs_objective_coefficient_threshold = 1.0e-4;
 
 constexpr double big_m_abs_threshold   = 1.0e4;
 constexpr double big_m_ratio_threshold = 1.0e4;
@@ -177,6 +181,41 @@ void compute_big_m_skip_rows(const problem_t<i_t, f_t>& op_problem,
 }
 
 template <typename i_t, typename f_t>
+void scale_objective(problem_t<i_t, f_t>& op_problem)
+{
+  const f_t min_abs_objective_coefficient =
+    thrust::transform_reduce(op_problem.handle_ptr->get_thrust_policy(),
+                             op_problem.objective_coefficients.begin(),
+                             op_problem.objective_coefficients.end(),
+                             nonzero_abs_or_inf_transform_t<f_t>{},
+                             std::numeric_limits<f_t>::infinity(),
+                             min_op_t<f_t>{});
+
+  if (!std::isfinite(min_abs_objective_coefficient) || min_abs_objective_coefficient <= f_t(0) ||
+      min_abs_objective_coefficient >= static_cast<f_t>(min_abs_objective_coefficient_threshold)) {
+    return;
+  }
+
+  const f_t obj_scaling_coefficient =
+    static_cast<f_t>(min_abs_objective_coefficient_threshold) / min_abs_objective_coefficient;
+  if (!std::isfinite(obj_scaling_coefficient) || obj_scaling_coefficient <= f_t(1)) { return; }
+
+  thrust::transform(op_problem.handle_ptr->get_thrust_policy(),
+                    op_problem.objective_coefficients.begin(),
+                    op_problem.objective_coefficients.end(),
+                    op_problem.objective_coefficients.begin(),
+                    [obj_scaling_coefficient] __device__(f_t objective_coefficient) -> f_t {
+                      return objective_coefficient * obj_scaling_coefficient;
+                    });
+  op_problem.presolve_data.objective_scaling_factor /= obj_scaling_coefficient;
+  op_problem.presolve_data.objective_offset *= obj_scaling_coefficient;
+
+  CUOPT_LOG_INFO("MIP objective scaling applied: min_abs_coeff=%g scale=%g",
+                 static_cast<double>(min_abs_objective_coefficient),
+                 static_cast<double>(obj_scaling_coefficient));
+}
+
+template <typename i_t, typename f_t>
 mip_scaling_strategy_t<i_t, f_t>::mip_scaling_strategy_t(problem_t<i_t, f_t>& op_problem_scaled)
   : handle_ptr_(op_problem_scaled.handle_ptr),
     stream_view_(handle_ptr_->get_stream()),
@@ -249,6 +288,8 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
   const i_t n_cols = op_problem_scaled_.n_variables;
   const i_t nnz    = op_problem_scaled_.nnz;
 
+  scale_objective(op_problem_scaled_);
+
   if (n_rows == 0 || nnz <= 0) {
     op_problem_scaled_.is_scaled_ = true;
     return;
@@ -280,45 +321,65 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
     op_problem_scaled_, n_rows, row_inf_norm, row_min_nonzero, row_nonzero_count, stream_view_);
 
   rmm::device_uvector<std::uint8_t> temp_storage(temp_storage_bytes, stream_view_);
-  // compute_big_m_skip_rows(op_problem_scaled_,
-  //                         temp_storage,
-  //                         temp_storage_bytes,
-  //                         row_inf_norm,
-  //                         row_min_nonzero,
-  //                         row_nonzero_count,
-  //                         row_skip_scaling);
+  compute_big_m_skip_rows(op_problem_scaled_,
+                          temp_storage,
+                          temp_storage_bytes,
+                          row_inf_norm,
+                          row_min_nonzero,
+                          row_nonzero_count,
+                          row_skip_scaling);
 
-  i_t skipped_big_m_rows = thrust::count(
+  i_t big_m_rows = thrust::count(
     handle_ptr_->get_thrust_policy(), row_skip_scaling.begin(), row_skip_scaling.end(), i_t(1));
 
-  CUOPT_LOG_INFO("MIP row scaling start: rows=%d cols=%d iterations=%d skip_big_m_rows=%d",
+  CUOPT_LOG_INFO("MIP row scaling start: rows=%d cols=%d max_iterations=%d soft_big_m_rows=%d",
                  n_rows,
                  n_cols,
-                 row_scaling_num_iterations,
-                 skipped_big_m_rows);
+                 row_scaling_max_iterations,
+                 big_m_rows);
 
-  for (int iteration = 0; iteration < row_scaling_num_iterations; ++iteration) {
+  double previous_row_log2_spread = std::numeric_limits<double>::infinity();
+  for (int iteration = 0; iteration < row_scaling_max_iterations; ++iteration) {
     compute_row_inf_norm(
       op_problem_scaled_, temp_storage, temp_storage_bytes, row_inf_norm, stream_view_);
 
-    using sum_count_t       = thrust::tuple<double, double>;
-    auto log2_sum_and_count = thrust::transform_reduce(
+    using row_stats_t   = thrust::tuple<double, double, double, double>;
+    auto row_log2_stats = thrust::transform_reduce(
       handle_ptr_->get_thrust_policy(),
-      thrust::make_zip_iterator(thrust::make_tuple(row_inf_norm.begin(), row_skip_scaling.begin())),
-      thrust::make_zip_iterator(thrust::make_tuple(row_inf_norm.end(), row_skip_scaling.end())),
-      [] __device__(auto row_info) -> sum_count_t {
-        const f_t row_norm = thrust::get<0>(row_info);
-        const i_t skip_row = thrust::get<1>(row_info);
-        if (skip_row || row_norm == f_t(0)) { return {0.0, 0.0}; }
-        return {log2(static_cast<double>(row_norm)), 1.0};
+      row_inf_norm.begin(),
+      row_inf_norm.end(),
+      [] __device__(f_t row_norm) -> row_stats_t {
+        if (row_norm == f_t(0)) {
+          return {0.0,
+                  0.0,
+                  std::numeric_limits<double>::infinity(),
+                  -std::numeric_limits<double>::infinity()};
+        }
+        const double row_log2 = log2(static_cast<double>(row_norm));
+        return {row_log2, 1.0, row_log2, row_log2};
       },
-      sum_count_t{0.0, 0.0},
-      [] __device__(sum_count_t a, sum_count_t b) -> sum_count_t {
-        return {thrust::get<0>(a) + thrust::get<0>(b), thrust::get<1>(a) + thrust::get<1>(b)};
+      row_stats_t{0.0,
+                  0.0,
+                  std::numeric_limits<double>::infinity(),
+                  -std::numeric_limits<double>::infinity()},
+      [] __device__(row_stats_t a, row_stats_t b) -> row_stats_t {
+        return {thrust::get<0>(a) + thrust::get<0>(b),
+                thrust::get<1>(a) + thrust::get<1>(b),
+                min_op_t<double>{}(thrust::get<2>(a), thrust::get<2>(b)),
+                max_op_t<double>{}(thrust::get<3>(a), thrust::get<3>(b))};
       });
-    const double log2_sum      = thrust::get<0>(log2_sum_and_count);
-    const i_t active_row_count = static_cast<i_t>(thrust::get<1>(log2_sum_and_count));
+    const double log2_sum      = thrust::get<0>(row_log2_stats);
+    const i_t active_row_count = static_cast<i_t>(thrust::get<1>(row_log2_stats));
     if (active_row_count == 0) { break; }
+    const double row_log2_spread = thrust::get<3>(row_log2_stats) - thrust::get<2>(row_log2_stats);
+    if (std::isfinite(previous_row_log2_spread)) {
+      const double spread_improvement = previous_row_log2_spread - row_log2_spread;
+      if (spread_improvement <=
+          row_scaling_spread_rel_tol * std::max(1.0, previous_row_log2_spread)) {
+        break;
+      }
+    }
+    previous_row_log2_spread = row_log2_spread;
 
     f_t target_norm = static_cast<f_t>(exp2(log2_sum / static_cast<double>(active_row_count)));
     cuopt_assert(isfinite(target_norm), "target_norm must be finite");
@@ -331,8 +392,8 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
       iteration_scaling.begin(),
       [target_norm] __device__(auto row_info) -> f_t {
         const f_t row_norm = thrust::get<0>(row_info);
-        const i_t skip_row = thrust::get<1>(row_info);
-        if (skip_row || row_norm == f_t(0)) { return f_t(1); }
+        const i_t is_big_m = thrust::get<1>(row_info);
+        if (row_norm == f_t(0)) { return f_t(1); }
 
         const f_t desired_scaling = target_norm / row_norm;
         if (!isfinite(desired_scaling) || desired_scaling <= f_t(0)) { return f_t(1); }
@@ -342,11 +403,23 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
           frexp(desired_scaling, &exponent);  // desired_scaling = mantissa * 2^exponent
         int k =
           mantissa >= static_cast<f_t>(nearest_pow2_mantissa_threshold) ? exponent : exponent - 1;
-        // clamp it so we don't overscale. range [1e-6,1e6]
-        if (k < row_scaling_k_min) { k = row_scaling_k_min; }
-        if (k > row_scaling_k_max) { k = row_scaling_k_max; }
+        // Clamp to avoid overscaling, and softly limit scaling on big-M rows.
+        if (is_big_m) {
+          if (k < row_scaling_big_m_soft_k_min) { k = row_scaling_big_m_soft_k_min; }
+          if (k > row_scaling_big_m_soft_k_max) { k = row_scaling_big_m_soft_k_max; }
+        } else {
+          if (k < row_scaling_k_min) { k = row_scaling_k_min; }
+          if (k > row_scaling_k_max) { k = row_scaling_k_max; }
+        }
         return ldexp(f_t(1), k);
       });
+
+    i_t scaled_rows =
+      thrust::count_if(handle_ptr_->get_thrust_policy(),
+                       iteration_scaling.begin(),
+                       iteration_scaling.end(),
+                       [] __device__(f_t row_scale) -> bool { return row_scale != f_t(1); });
+    if (scaled_rows == 0) { break; }
 
     thrust::transform(
       handle_ptr_->get_thrust_policy(),
