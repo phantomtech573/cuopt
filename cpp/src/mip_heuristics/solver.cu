@@ -219,7 +219,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     branch_and_bound_settings.strong_chvatal_gomory_cuts =
       context.settings.strong_chvatal_gomory_cuts;
     branch_and_bound_settings.reduced_cost_strengthening =
-      context.settings.reduced_cost_strengthening;
+      context.settings.reduced_cost_strengthening == -1 ? 2 :  // -1 is automatic
+        context.settings.reduced_cost_strengthening;
     branch_and_bound_settings.cut_change_threshold  = context.settings.cut_change_threshold;
     branch_and_bound_settings.cut_min_orthogonality = context.settings.cut_min_orthogonality;
     branch_and_bound_settings.mip_batch_pdlp_strong_branching =
