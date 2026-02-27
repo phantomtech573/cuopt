@@ -351,9 +351,8 @@ def main():
         " "
         "For LP: "
         "A single problem file in mps/json format or file_name."
-        "Batch mode is supported in case of mps files only for LP and"
-        "not for MILP, where a list of mps"
-        "files can be shared to be solved in parallel.",
+        "Multiple mps files may be passed for LP; they are solved "
+        "sequentially (batch mode is deprecated).",
     )
     parser.add_argument(
         "-id",
@@ -373,7 +372,7 @@ def main():
         default=None,
         help="reqId of a solution to use as a warmstart data for a "
         "single LP problem. This allows to restart PDLP with a "
-        "previous solution context. Not enabled for Batch LP problem",
+        "previous solution context. Not enabled when multiple LP problems are passed.",
     )
     parser.add_argument(
         "-ca",

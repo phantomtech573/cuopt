@@ -2,7 +2,7 @@
 LP Python Examples
 ===============================
 
-The following example showcases how to use the ``CuOptServiceSelfHostClient`` to solve a simple LP problem in normal mode and batch mode (where multiple problems are solved at once).
+The following example showcases how to use the ``CuOptServiceSelfHostClient`` to solve a simple LP problem in normal mode and with multiple problems (solved sequentially; batch mode is deprecated).
 
 The OpenAPI specification for the server is available in :doc:`open-api spec <../../open-api>`. The example data is structured as per the OpenAPI specification for the server, please refer :doc:`LPData under "POST /cuopt/request" <../../open-api>` under schema section. LP and MILP share same spec.
 

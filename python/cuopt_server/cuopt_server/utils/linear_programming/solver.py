@@ -341,20 +341,30 @@ def solve(
         sol = None
         total_solve_time = None
         if type(LP_data) is list:
+            if len(LP_data) == 0:
+                raise HTTPException(
+                    status_code=400, detail="LP_data list cannot be empty"
+                )
             is_batch = True
-            data_model_list = []
-            warnings = []
-            for i_data in LP_data:
-                i_warnings, data_model = create_data_model(i_data)
-                data_model_list.append(data_model)
-                warnings.extend(i_warnings)
+            warnings = [
+                "LP batch mode is deprecated. Multiple problems are now solved "
+                "sequentially. Implement your own parallelism if needed."
+            ]
+            sol = []
+            total_solve_time = 0.0
             cswarnings, solver_settings = create_solver(
                 LP_data[0], warmstart_data
             )
             warnings.extend(cswarnings)
-            sol, total_solve_time = linear_programming.BatchSolve(
-                data_model_list, solver_settings
-            )
+            for i_data in LP_data:
+                i_warnings, data_model = create_data_model(i_data)
+                warnings.extend(i_warnings)
+                solve_begin_time = time.time()
+                i_sol = linear_programming.Solve(
+                    data_model, solver_settings=solver_settings
+                )
+                total_solve_time += time.time() - solve_begin_time
+                sol.append(i_sol)
         else:
             warnings, data_model = create_data_model(LP_data)
             cswarnings, solver_settings = create_solver(

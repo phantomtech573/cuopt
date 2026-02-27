@@ -4,10 +4,11 @@
 #
 # LP Batch Mode CLI Example
 #
-# This example demonstrates how to solve multiple LP problems in batch mode
-# using MPS files with the cuopt_sh CLI tool.
+# This example demonstrates how to solve multiple LP problems using MPS files
+# with the cuopt_sh CLI tool. Multiple problems are solved sequentially.
 #
-# Note: Batch mode works only with MPS files in CLI and is not available for MILP.
+# Note: LP batch mode is deprecated. Multiple problems are now solved
+# sequentially rather than in parallel.
 #
 # Requirements:
 #   - cuOpt server running on localhost:5000
@@ -52,4 +53,4 @@ echo "=== Solving Multiple MPS Files in Batch Mode ==="
 cuopt_sh "$mps_file" "$mps_file" "$mps_file" -t LP -i $ip -p $port -ss '{"tolerances": {"optimality": 0.0001}, "time_limit": 5}'
 
 echo ""
-echo "Note: Batch mode is only available for LP with MPS files, not for MILP."
+echo "Note: Multiple LPs are solved sequentially (batch mode is deprecated)."
