@@ -231,6 +231,14 @@ def solve(args):
         elif args.type == "LP":
             if args.init_ids:
                 raise Exception("Initial ids are not supported for LP")
+            if (
+                isinstance(cuopt_problem_data, list)
+                and len(cuopt_problem_data) > 1
+                and args.warmstart_id
+            ):
+                raise Exception(
+                    "Warmstart id is only supported for a single LP problem"
+                )
 
             def log_callback(name):
                 def print_log(log):

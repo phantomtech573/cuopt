@@ -359,11 +359,10 @@ def solve(
             for i_data in LP_data:
                 i_warnings, data_model = create_data_model(i_data)
                 warnings.extend(i_warnings)
-                solve_begin_time = time.time()
                 i_sol = linear_programming.Solve(
                     data_model, solver_settings=solver_settings
                 )
-                total_solve_time += time.time() - solve_begin_time
+                total_solve_time += i_sol.get_solve_time()
                 sol.append(i_sol)
         else:
             warnings, data_model = create_data_model(LP_data)
@@ -396,7 +395,7 @@ def solve(
                 if i_sol.get_error_status() != ErrorStatus.Success:
                     res.append(
                         {
-                            "status": i_sol.get_error_status(),
+                            "status": i_sol.get_error_status().name,
                             "solution": i_sol.get_error_message(),
                         }
                     )

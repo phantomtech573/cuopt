@@ -479,6 +479,8 @@ def test_parser_and_batch_solver():
     settings.set_optimality_tolerance(1e-4)
 
     # Call BatchSolve (deprecated; use sequential Solve instead)
+    # DeprecationWarning is emitted when running against a build with the
+    # deprecation; CI asserts it via pytest.warns
     batch_solution, solve_time = solver.BatchSolve(data_model_list, settings)
 
     # Call Solve on each individual data model object
@@ -494,6 +496,16 @@ def test_parser_and_batch_solver():
         assert (
             batch_solution[i].get_termination_status()
             == individual_solutions[i].get_termination_status()
+        )
+        assert batch_solution[i].get_primal_objective() == pytest.approx(
+            individual_solutions[i].get_primal_objective(), rel=1e-6, abs=1e-8
+        )
+        assert np.array(
+            batch_solution[i].get_primal_solution()
+        ) == pytest.approx(
+            np.array(individual_solutions[i].get_primal_solution()),
+            rel=1e-5,
+            abs=1e-7,
         )
 
 

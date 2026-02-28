@@ -15,10 +15,10 @@ If you want to run server locally, please run the following command in a termina
     export port=5000
     python -m cuopt_server.cuopt_service --ip $ip --port $port
 
-.. _generic-example-with-normal-and-batch-mode:
+.. _generic-example-with-normal-and-multiple-lps:
 
-Genric Example With Normal Mode and Batch Mode
-------------------------------------------------
+Generic Example With Normal Mode and Multiple LPs (Batch Deprecated)
+---------------------------------------------------------------------
 
 :download:`basic_lp_example.py <lp/examples/basic_lp_example.py>`
 
@@ -402,7 +402,10 @@ In case the user needs to update solver settings through CLI, the option ``-ss``
    export port=5000
    cuopt_sh data.json -t LP -i $ip -p $port -ss '{"tolerances": {"optimality": 0.0001}, "time_limit": 5}'
 
-In the case of batch mode, you can send a bunch of ``mps`` files at once, and acquire results. The batch mode works only for ``mps`` in the case of CLI:
+In the case of batch mode, you can send a bunch of ``mps`` files at once, and acquire results. The batch mode works only for ``mps`` in the case of CLI.
+
+.. note::
+   LP batch mode is deprecated. Multiple problems are now solved sequentially.
 
 .. note::
    Batch mode is not available for MILP problems.
