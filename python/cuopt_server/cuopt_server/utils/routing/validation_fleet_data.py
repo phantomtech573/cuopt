@@ -85,6 +85,11 @@ def validate_fleet_data(
 
     if vehicle_ids is not None:
         fleet_length_check_array.append(len(vehicle_ids))
+        if len(vehicle_ids) != len(set(vehicle_ids)):
+            return (
+                False,
+                "vehicle_ids must be unique; duplicates are not allowed",
+            )
 
     if capacities is not None:
         fleet_length_check_array.append(len(capacities[0]))
