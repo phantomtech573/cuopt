@@ -1,0 +1,847 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights
+ * reserved. SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifdef CUOPT_ENABLE_GRPC
+
+#include "grpc_field_element_size.hpp"
+#include "grpc_pipe_serialization.hpp"
+#include "grpc_server_types.hpp"
+
+class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::Service {
+ public:
+  Status SubmitJob(ServerContext* context,
+                   const cuopt::remote::SubmitJobRequest* request,
+                   cuopt::remote::SubmitJobResponse* response) override
+  {
+    std::string job_id = generate_job_id();
+
+    bool is_lp = request->has_lp_request();
+    if (!is_lp && !request->has_mip_request()) {
+      return Status(StatusCode::INVALID_ARGUMENT, "No problem data provided");
+    }
+
+    if (config.verbose && is_lp) {
+      const auto& lp_req = request->lp_request();
+      std::cerr << "[gRPC] SubmitJob LP fields: bytes=" << lp_req.ByteSizeLong()
+                << " objective_scaling_factor=" << lp_req.problem().objective_scaling_factor()
+                << " objective_offset=" << lp_req.problem().objective_offset()
+                << " iteration_limit=" << lp_req.settings().iteration_limit()
+                << " method=" << lp_req.settings().method() << std::endl;
+    }
+
+    auto job_data = serialize_submit_request_to_pipe(*request);
+    if (config.verbose) {
+      std::cout << "[gRPC] SubmitJob: UNARY " << (is_lp ? "LP" : "MIP")
+                << ", pipe payload=" << job_data.size() << " bytes\n";
+      std::cout.flush();
+    }
+
+    int job_idx = -1;
+    for (size_t i = 0; i < MAX_JOBS; ++i) {
+      if (job_queue[i].ready.load()) { continue; }
+      bool expected_claimed = false;
+      if (job_queue[i].claimed.compare_exchange_strong(expected_claimed, true)) {
+        job_idx = static_cast<int>(i);
+        break;
+      }
+    }
+
+    if (job_idx < 0) { return Status(StatusCode::RESOURCE_EXHAUSTED, "Job queue full"); }
+
+    copy_cstr(job_queue[job_idx].job_id, job_id);
+    job_queue[job_idx].problem_type = is_lp ? 0 : 1;
+    job_queue[job_idx].data_size    = job_data.size();
+    job_queue[job_idx].cancelled.store(false);
+    job_queue[job_idx].worker_index.store(-1);
+    job_queue[job_idx].data_sent.store(false);
+
+    {
+      std::lock_guard<std::mutex> lock(pending_data_mutex);
+      pending_job_data[job_id] = std::move(job_data);
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(tracker_mutex);
+      job_tracker[job_id] =
+        JobInfo{job_id, JobStatus::QUEUED, std::chrono::steady_clock::now(), {}, !is_lp, "", false};
+    }
+
+    job_queue[job_idx].ready.store(true, std::memory_order_release);
+    job_queue[job_idx].claimed.store(false, std::memory_order_release);
+
+    response->set_job_id(job_id);
+    response->set_message("Job submitted successfully");
+
+    if (config.verbose) {
+      std::cout << "[gRPC] Job submitted: " << job_id << " (type=" << (is_lp ? "LP" : "MIP") << ")"
+                << std::endl;
+    }
+
+    return Status::OK;
+  }
+
+  // =========================================================================
+  // Chunked Array Upload
+  // =========================================================================
+
+  Status StartChunkedUpload(ServerContext* context,
+                            const cuopt::remote::StartChunkedUploadRequest* request,
+                            cuopt::remote::StartChunkedUploadResponse* response) override
+  {
+    (void)context;
+
+    std::string upload_id = generate_job_id();
+    const auto& header    = request->problem_header();
+    bool is_mip           = (header.header().problem_type() == cuopt::remote::MIP);
+
+    if (config.verbose) {
+      std::cout << "[gRPC] StartChunkedUpload upload_id=" << upload_id << " is_mip=" << is_mip
+                << "\n";
+      std::cout.flush();
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(chunked_uploads_mutex);
+      if (chunked_uploads.size() >= kMaxChunkedSessions) {
+        return Status(StatusCode::RESOURCE_EXHAUSTED,
+                      "Too many concurrent chunked upload sessions (limit " +
+                        std::to_string(kMaxChunkedSessions) + ")");
+      }
+      auto& state         = chunked_uploads[upload_id];
+      state.is_mip        = is_mip;
+      state.header        = header;
+      state.total_chunks  = 0;
+      state.last_activity = std::chrono::steady_clock::now();
+    }
+
+    response->set_upload_id(upload_id);
+    response->set_max_message_bytes(server_max_message_bytes());
+
+    return Status::OK;
+  }
+
+  Status SendArrayChunk(ServerContext* context,
+                        const cuopt::remote::SendArrayChunkRequest* request,
+                        cuopt::remote::SendArrayChunkResponse* response) override
+  {
+    (void)context;
+
+    const std::string& upload_id = request->upload_id();
+    const auto& ac               = request->chunk();
+
+    std::lock_guard<std::mutex> lock(chunked_uploads_mutex);
+    auto it = chunked_uploads.find(upload_id);
+    if (it == chunked_uploads.end()) {
+      return Status(StatusCode::NOT_FOUND, "Unknown upload_id: " + upload_id);
+    }
+
+    auto& state         = it->second;
+    state.last_activity = std::chrono::steady_clock::now();
+
+    int32_t field_id    = static_cast<int32_t>(ac.field_id());
+    int64_t elem_offset = ac.element_offset();
+    int64_t total_elems = ac.total_elements();
+    const auto& raw     = ac.data();
+
+    if (!cuopt::remote::ArrayFieldId_IsValid(field_id)) {
+      return Status(StatusCode::INVALID_ARGUMENT,
+                    "Unknown array field_id: " + std::to_string(field_id));
+    }
+    if (elem_offset < 0) {
+      return Status(StatusCode::INVALID_ARGUMENT, "element_offset must be non-negative");
+    }
+    if (total_elems < 0) {
+      return Status(StatusCode::INVALID_ARGUMENT, "total_elements must be non-negative");
+    }
+
+    auto& meta = state.field_meta[field_id];
+    if (meta.total_elements == 0 && total_elems > 0) {
+      int64_t elem_size = array_field_element_size(ac.field_id());
+      if (total_elems > kMaxChunkedArrayBytes / elem_size) {
+        return Status(StatusCode::RESOURCE_EXHAUSTED,
+                      "Array too large (" + std::to_string(total_elems) + " x " +
+                        std::to_string(elem_size) + " bytes exceeds " +
+                        std::to_string(kMaxChunkedArrayBytes) + " byte limit)");
+      }
+      meta.total_elements = total_elems;
+      meta.element_size   = elem_size;
+    }
+
+    int64_t elem_size = meta.element_size > 0 ? meta.element_size : 1;
+
+    if (elem_size > 1 && (raw.size() % static_cast<size_t>(elem_size)) != 0) {
+      return Status(StatusCode::INVALID_ARGUMENT,
+                    "Chunk data size (" + std::to_string(raw.size()) +
+                      ") not aligned to element size (" + std::to_string(elem_size) + ")");
+    }
+
+    int64_t array_bytes = meta.total_elements * elem_size;
+    if (elem_offset > meta.total_elements) {
+      return Status(StatusCode::INVALID_ARGUMENT, "ArrayChunk offset exceeds array size");
+    }
+    int64_t byte_offset = elem_offset * elem_size;
+    if (byte_offset + static_cast<int64_t>(raw.size()) > array_bytes) {
+      return Status(StatusCode::INVALID_ARGUMENT, "ArrayChunk out of bounds");
+    }
+
+    meta.received_bytes += static_cast<int64_t>(raw.size());
+    state.total_bytes += static_cast<int64_t>(raw.size());
+    state.chunks.push_back(ac);
+    ++state.total_chunks;
+
+    response->set_upload_id(upload_id);
+    response->set_chunks_received(state.total_chunks);
+    return Status::OK;
+  }
+
+  Status FinishChunkedUpload(ServerContext* context,
+                             const cuopt::remote::FinishChunkedUploadRequest* request,
+                             cuopt::remote::SubmitJobResponse* response) override
+  {
+    (void)context;
+
+    const std::string& upload_id = request->upload_id();
+
+    ChunkedUploadState state;
+    {
+      std::lock_guard<std::mutex> lock(chunked_uploads_mutex);
+      auto it = chunked_uploads.find(upload_id);
+      if (it == chunked_uploads.end()) {
+        return Status(StatusCode::NOT_FOUND, "Unknown upload_id: " + upload_id);
+      }
+      state = std::move(it->second);
+      chunked_uploads.erase(it);
+    }
+
+    if (config.verbose) {
+      std::cout << "[gRPC] FinishChunkedUpload upload_id=" << upload_id
+                << " chunks=" << state.total_chunks << " fields=" << state.field_meta.size()
+                << "\n";
+      std::cout.flush();
+    }
+
+    auto worker_data = serialize_chunked_request_pipe_blob(state.header, state.chunks);
+    state.chunks.clear();
+    state.field_meta.clear();
+
+    if (config.verbose) {
+      std::cout << "[gRPC] FinishChunkedUpload: CHUNKED path, " << state.total_chunks
+                << " chunks forwarded, pipe payload=" << worker_data.size()
+                << " bytes, upload_id=" << upload_id << "\n";
+      std::cout.flush();
+    }
+
+    std::string job_id = generate_job_id();
+    int job_idx        = -1;
+    for (size_t i = 0; i < MAX_JOBS; ++i) {
+      if (job_queue[i].ready.load()) { continue; }
+      bool expected_claimed = false;
+      if (job_queue[i].claimed.compare_exchange_strong(expected_claimed, true)) {
+        job_idx = static_cast<int>(i);
+        break;
+      }
+    }
+    if (job_idx < 0) { return Status(StatusCode::RESOURCE_EXHAUSTED, "Job queue full"); }
+
+    copy_cstr(job_queue[job_idx].job_id, job_id);
+    job_queue[job_idx].problem_type = state.is_mip ? 1 : 0;
+    job_queue[job_idx].data_size    = static_cast<uint64_t>(worker_data.size());
+    job_queue[job_idx].cancelled.store(false);
+    job_queue[job_idx].worker_index.store(-1);
+    job_queue[job_idx].data_sent.store(false);
+    {
+      std::lock_guard<std::mutex> lock(pending_data_mutex);
+      pending_job_data[job_id] = std::move(worker_data);
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(tracker_mutex);
+      job_tracker[job_id] = JobInfo{
+        job_id, JobStatus::QUEUED, std::chrono::steady_clock::now(), {}, state.is_mip, "", false};
+    }
+
+    job_queue[job_idx].ready.store(true, std::memory_order_release);
+    job_queue[job_idx].claimed.store(false, std::memory_order_release);
+
+    response->set_job_id(job_id);
+    response->set_message("Job submitted via chunked arrays");
+
+    if (config.verbose) {
+      std::cout << "[gRPC] FinishChunkedUpload enqueued job: " << job_id
+                << " (type=" << (state.is_mip ? "MIP" : "LP") << ")\n";
+      std::cout.flush();
+    }
+
+    return Status::OK;
+  }
+
+  // =========================================================================
+  // Job Status and Result RPCs
+  // =========================================================================
+
+  Status CheckStatus(ServerContext* context,
+                     const cuopt::remote::StatusRequest* request,
+                     cuopt::remote::StatusResponse* response) override
+  {
+    (void)context;
+    std::string job_id = request->job_id();
+
+    std::string message;
+    JobStatus status = check_job_status(job_id, message);
+
+    switch (status) {
+      case JobStatus::QUEUED: response->set_job_status(cuopt::remote::QUEUED); break;
+      case JobStatus::PROCESSING: response->set_job_status(cuopt::remote::PROCESSING); break;
+      case JobStatus::COMPLETED: response->set_job_status(cuopt::remote::COMPLETED); break;
+      case JobStatus::FAILED: response->set_job_status(cuopt::remote::FAILED); break;
+      case JobStatus::CANCELLED: response->set_job_status(cuopt::remote::CANCELLED); break;
+      default: response->set_job_status(cuopt::remote::NOT_FOUND); break;
+    }
+    response->set_message(message);
+
+    response->set_max_message_bytes(server_max_message_bytes());
+
+    int64_t result_size_bytes = 0;
+    if (status == JobStatus::COMPLETED) {
+      std::lock_guard<std::mutex> lock(tracker_mutex);
+      auto it = job_tracker.find(job_id);
+      if (it != job_tracker.end()) { result_size_bytes = it->second.result_size_bytes; }
+    }
+    response->set_result_size_bytes(result_size_bytes);
+
+    return Status::OK;
+  }
+
+  Status GetResult(ServerContext* context,
+                   const cuopt::remote::GetResultRequest* request,
+                   cuopt::remote::ResultResponse* response) override
+  {
+    (void)context;
+    std::string job_id = request->job_id();
+
+    std::lock_guard<std::mutex> lock(tracker_mutex);
+    auto it = job_tracker.find(job_id);
+
+    if (it == job_tracker.end()) { return Status(StatusCode::NOT_FOUND, "Job not found"); }
+
+    if (it->second.status != JobStatus::COMPLETED && it->second.status != JobStatus::FAILED) {
+      return Status(StatusCode::UNAVAILABLE, "Result not ready");
+    }
+
+    if (it->second.status == JobStatus::FAILED) {
+      response->set_status(cuopt::remote::ERROR_SOLVE_FAILED);
+      response->set_error_message(it->second.error_message);
+      return Status::OK;
+    }
+
+    int64_t total_result_bytes = it->second.result_size_bytes;
+    const int64_t max_bytes    = server_max_message_bytes();
+    if (max_bytes > 0 && total_result_bytes > max_bytes) {
+      std::string msg = "Result size (~" + std::to_string(total_result_bytes) +
+                        " bytes) exceeds max message size (" + std::to_string(max_bytes) +
+                        " bytes). Use StartChunkedDownload/GetResultChunk RPCs instead.";
+      if (config.verbose) {
+        std::cout << "[gRPC] GetResult rejected for job " << job_id << ": " << msg << "\n";
+        std::cout.flush();
+      }
+      return Status(StatusCode::RESOURCE_EXHAUSTED, msg);
+    }
+
+    if (it->second.is_mip) {
+      cuopt::remote::MIPSolution mip_solution;
+      build_mip_solution_proto<int, double>(
+        it->second.result_header, it->second.result_arrays, &mip_solution);
+      response->mutable_mip_solution()->Swap(&mip_solution);
+    } else {
+      cuopt::remote::LPSolution lp_solution;
+      build_lp_solution_proto<int, double>(
+        it->second.result_header, it->second.result_arrays, &lp_solution);
+      response->mutable_lp_solution()->Swap(&lp_solution);
+    }
+
+    response->set_status(cuopt::remote::SUCCESS);
+    if (config.verbose) {
+      std::cout << "[gRPC] GetResult: UNARY response for job " << job_id << " ("
+                << total_result_bytes << " bytes, " << it->second.result_arrays.size()
+                << " arrays)\n";
+      std::cout.flush();
+    }
+
+    return Status::OK;
+  }
+
+  // =========================================================================
+  // Chunked Result Download RPCs
+  // =========================================================================
+
+  Status StartChunkedDownload(ServerContext* context,
+                              const cuopt::remote::StartChunkedDownloadRequest* request,
+                              cuopt::remote::StartChunkedDownloadResponse* response) override
+  {
+    std::string job_id = request->job_id();
+
+    bool is_mip = false;
+    ChunkedDownloadState state;
+    {
+      std::lock_guard<std::mutex> lock(tracker_mutex);
+      auto it = job_tracker.find(job_id);
+      if (it == job_tracker.end()) {
+        return Status(StatusCode::NOT_FOUND, "Job not found: " + job_id);
+      }
+      if (it->second.status != JobStatus::COMPLETED) {
+        return Status(StatusCode::FAILED_PRECONDITION, "Result not ready for job: " + job_id);
+      }
+      is_mip              = it->second.is_mip;
+      state.is_mip        = is_mip;
+      state.created       = std::chrono::steady_clock::now();
+      state.result_header = it->second.result_header;
+      state.raw_arrays    = it->second.result_arrays;
+    }
+
+    response->mutable_header()->CopyFrom(state.result_header);
+
+    std::string download_id = generate_job_id();
+    response->set_download_id(download_id);
+    response->set_max_message_bytes(server_max_message_bytes());
+
+    {
+      std::lock_guard<std::mutex> lock(chunked_downloads_mutex);
+      if (chunked_downloads.size() >= kMaxChunkedSessions) {
+        return Status(StatusCode::RESOURCE_EXHAUSTED,
+                      "Too many concurrent chunked download sessions (limit " +
+                        std::to_string(kMaxChunkedSessions) + ")");
+      }
+      chunked_downloads[download_id] = std::move(state);
+    }
+
+    if (config.verbose) {
+      std::cout << "[gRPC] StartChunkedDownload: CHUNKED response for job " << job_id
+                << ", download_id=" << download_id
+                << ", arrays=" << response->header().arrays_size() << ", is_mip=" << is_mip << "\n";
+      std::cout.flush();
+    }
+
+    return Status::OK;
+  }
+
+  Status GetResultChunk(ServerContext* context,
+                        const cuopt::remote::GetResultChunkRequest* request,
+                        cuopt::remote::GetResultChunkResponse* response) override
+  {
+    std::string download_id = request->download_id();
+    auto field_id           = request->field_id();
+    int64_t elem_offset     = request->element_offset();
+    int64_t max_elements    = request->max_elements();
+
+    std::lock_guard<std::mutex> lock(chunked_downloads_mutex);
+    auto it = chunked_downloads.find(download_id);
+    if (it == chunked_downloads.end()) {
+      return Status(StatusCode::NOT_FOUND, "Unknown download_id: " + download_id);
+    }
+
+    const auto& state = it->second;
+
+    const uint8_t* raw_bytes = nullptr;
+    int64_t total_bytes      = 0;
+    auto ait                 = state.raw_arrays.find(static_cast<int32_t>(field_id));
+    if (ait != state.raw_arrays.end() && !ait->second.empty()) {
+      raw_bytes   = ait->second.data();
+      total_bytes = static_cast<int64_t>(ait->second.size());
+    }
+
+    if (raw_bytes == nullptr || total_bytes == 0) {
+      return Status(StatusCode::INVALID_ARGUMENT,
+                    "Unknown or empty result field: " + std::to_string(field_id));
+    }
+
+    const int64_t elem_size  = sizeof(double);
+    const int64_t array_size = total_bytes / elem_size;
+
+    if (elem_offset < 0 || elem_offset >= array_size) {
+      return Status(StatusCode::OUT_OF_RANGE,
+                    "element_offset " + std::to_string(elem_offset) + " out of range [0, " +
+                      std::to_string(array_size) + ")");
+    }
+
+    int64_t elems_available = array_size - elem_offset;
+    int64_t elems_to_send =
+      (max_elements > 0) ? std::min(max_elements, elems_available) : elems_available;
+
+    response->set_download_id(download_id);
+    response->set_field_id(field_id);
+    response->set_element_offset(elem_offset);
+    response->set_elements_in_chunk(elems_to_send);
+    response->set_data(reinterpret_cast<const char*>(raw_bytes + elem_offset * elem_size),
+                       static_cast<size_t>(elems_to_send) * elem_size);
+
+    return Status::OK;
+  }
+
+  Status FinishChunkedDownload(ServerContext* context,
+                               const cuopt::remote::FinishChunkedDownloadRequest* request,
+                               cuopt::remote::FinishChunkedDownloadResponse* response) override
+  {
+    std::string download_id = request->download_id();
+    response->set_download_id(download_id);
+
+    std::lock_guard<std::mutex> lock(chunked_downloads_mutex);
+    auto it = chunked_downloads.find(download_id);
+    if (it == chunked_downloads.end()) {
+      return Status(StatusCode::NOT_FOUND, "Unknown download_id: " + download_id);
+    }
+
+    if (config.verbose) {
+      auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now() - it->second.created)
+                          .count();
+      std::cout << "[gRPC] FinishChunkedDownload: download_id=" << download_id
+                << " elapsed_ms=" << elapsed_ms << "\n";
+      std::cout.flush();
+    }
+
+    chunked_downloads.erase(it);
+    return Status::OK;
+  }
+
+  // =========================================================================
+  // Delete, Cancel, Wait, StreamLogs, GetIncumbents
+  // =========================================================================
+
+  Status DeleteResult(ServerContext* context,
+                      const cuopt::remote::DeleteRequest* request,
+                      cuopt::remote::DeleteResponse* response) override
+  {
+    std::string job_id = request->job_id();
+
+    size_t erased = 0;
+    {
+      std::lock_guard<std::mutex> lock(tracker_mutex);
+      erased = job_tracker.erase(job_id);
+    }
+
+    if (erased == 0) {
+      response->set_status(cuopt::remote::ERROR_NOT_FOUND);
+      response->set_message("Job not found: " + job_id);
+      if (config.verbose) {
+        std::cout << "[gRPC] DeleteResult job not found: " << job_id << std::endl;
+      }
+      return Status::OK;
+    }
+
+    delete_log_file(job_id);
+
+    response->set_status(cuopt::remote::SUCCESS);
+    response->set_message("Result deleted");
+
+    if (config.verbose) { std::cout << "[gRPC] Result deleted for job: " << job_id << std::endl; }
+
+    return Status::OK;
+  }
+
+  Status CancelJob(ServerContext* context,
+                   const cuopt::remote::CancelRequest* request,
+                   cuopt::remote::CancelResponse* response) override
+  {
+    (void)context;
+    std::string job_id = request->job_id();
+
+    JobStatus internal_status = JobStatus::NOT_FOUND;
+    std::string message;
+    int rc = cancel_job(job_id, internal_status, message);
+
+    cuopt::remote::JobStatus pb_status = cuopt::remote::NOT_FOUND;
+    switch (internal_status) {
+      case JobStatus::QUEUED: pb_status = cuopt::remote::QUEUED; break;
+      case JobStatus::PROCESSING: pb_status = cuopt::remote::PROCESSING; break;
+      case JobStatus::COMPLETED: pb_status = cuopt::remote::COMPLETED; break;
+      case JobStatus::FAILED: pb_status = cuopt::remote::FAILED; break;
+      case JobStatus::CANCELLED: pb_status = cuopt::remote::CANCELLED; break;
+      case JobStatus::NOT_FOUND: pb_status = cuopt::remote::NOT_FOUND; break;
+    }
+
+    response->set_job_status(pb_status);
+    response->set_message(message);
+
+    if (rc == 0 || rc == 3) {
+      response->set_status(cuopt::remote::SUCCESS);
+    } else if (rc == 1) {
+      response->set_status(cuopt::remote::ERROR_NOT_FOUND);
+    } else {
+      response->set_status(cuopt::remote::ERROR_INVALID_REQUEST);
+    }
+
+    if (config.verbose) {
+      std::cout << "[gRPC] CancelJob job_id=" << job_id << " rc=" << rc
+                << " status=" << static_cast<int>(pb_status) << " msg=" << message << "\n";
+      std::cout.flush();
+    }
+
+    return Status::OK;
+  }
+
+  Status WaitForCompletion(ServerContext* context,
+                           const cuopt::remote::WaitRequest* request,
+                           cuopt::remote::WaitResponse* response) override
+  {
+    const std::string job_id = request->job_id();
+
+    {
+      std::lock_guard<std::mutex> lock(tracker_mutex);
+      auto it = job_tracker.find(job_id);
+      if (it == job_tracker.end()) {
+        response->set_job_status(cuopt::remote::NOT_FOUND);
+        response->set_message("Job not found");
+        response->set_result_size_bytes(0);
+        return Status::OK;
+      }
+      if (it->second.status == JobStatus::COMPLETED) {
+        response->set_job_status(cuopt::remote::COMPLETED);
+        response->set_message("");
+        response->set_result_size_bytes(it->second.result_size_bytes);
+        return Status::OK;
+      }
+      if (it->second.status == JobStatus::FAILED) {
+        response->set_job_status(cuopt::remote::FAILED);
+        response->set_message(it->second.error_message);
+        response->set_result_size_bytes(0);
+        return Status::OK;
+      }
+      if (it->second.status == JobStatus::CANCELLED) {
+        response->set_job_status(cuopt::remote::CANCELLED);
+        response->set_message("Job was cancelled");
+        response->set_result_size_bytes(0);
+        return Status::OK;
+      }
+    }
+
+    std::shared_ptr<JobWaiter> waiter;
+    {
+      std::lock_guard<std::mutex> lock(waiters_mutex);
+      auto it = waiting_threads.find(job_id);
+      if (it != waiting_threads.end()) {
+        waiter = it->second;
+      } else {
+        waiter                  = std::make_shared<JobWaiter>();
+        waiting_threads[job_id] = waiter;
+      }
+    }
+    waiter->waiters.fetch_add(1, std::memory_order_relaxed);
+
+    {
+      std::unique_lock<std::mutex> lock(waiter->mutex);
+      while (!waiter->ready) {
+        if (context->IsCancelled()) {
+          waiter->waiters.fetch_sub(1, std::memory_order_relaxed);
+          return Status(StatusCode::CANCELLED, "Client cancelled WaitForCompletion");
+        }
+        lock.unlock();
+        std::string msg;
+        JobStatus current = check_job_status(job_id, msg);
+        lock.lock();
+        if (current == JobStatus::COMPLETED || current == JobStatus::FAILED ||
+            current == JobStatus::CANCELLED) {
+          break;
+        }
+        waiter->cv.wait_for(lock, std::chrono::milliseconds(200));
+      }
+    }
+
+    if (waiter->success) {
+      response->set_job_status(cuopt::remote::COMPLETED);
+      response->set_message("");
+      {
+        std::lock_guard<std::mutex> tlock(tracker_mutex);
+        auto tit = job_tracker.find(job_id);
+        response->set_result_size_bytes((tit != job_tracker.end()) ? tit->second.result_size_bytes
+                                                                   : 0);
+      }
+    } else {
+      std::string msg;
+      JobStatus status = check_job_status(job_id, msg);
+      switch (status) {
+        case JobStatus::COMPLETED: {
+          response->set_job_status(cuopt::remote::COMPLETED);
+          response->set_message("");
+          std::lock_guard<std::mutex> tlock2(tracker_mutex);
+          auto tit2 = job_tracker.find(job_id);
+          response->set_result_size_bytes(
+            (tit2 != job_tracker.end()) ? tit2->second.result_size_bytes : 0);
+          break;
+        }
+        case JobStatus::FAILED: response->set_job_status(cuopt::remote::FAILED); break;
+        case JobStatus::CANCELLED: response->set_job_status(cuopt::remote::CANCELLED); break;
+        case JobStatus::NOT_FOUND: response->set_job_status(cuopt::remote::NOT_FOUND); break;
+        default: response->set_job_status(cuopt::remote::FAILED); break;
+      }
+      if (status != JobStatus::COMPLETED) {
+        response->set_message(msg);
+        response->set_result_size_bytes(0);
+      }
+    }
+    waiter->waiters.fetch_sub(1, std::memory_order_relaxed);
+
+    if (config.verbose) {
+      std::cout << "[gRPC] WaitForCompletion finished job_id=" << job_id << "\n";
+      std::cout.flush();
+    }
+
+    return Status::OK;
+  }
+
+  Status StreamLogs(ServerContext* context,
+                    const cuopt::remote::StreamLogsRequest* request,
+                    ServerWriter<cuopt::remote::LogMessage>* writer) override
+  {
+    const std::string job_id   = request->job_id();
+    int64_t from_byte          = request->from_byte();
+    const std::string log_path = get_log_file_path(job_id);
+
+    int waited_ms = 0;
+    while (!context->IsCancelled()) {
+      struct stat st;
+      if (stat(log_path.c_str(), &st) == 0) { break; }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      waited_ms += 50;
+      if (waited_ms >= 2000) {
+        std::string msg;
+        JobStatus s = check_job_status(job_id, msg);
+        if (s == JobStatus::NOT_FOUND) {
+          if (config.verbose) {
+            std::cout << "[gRPC] StreamLogs job not found: " << job_id << std::endl;
+          }
+          return Status(grpc::StatusCode::NOT_FOUND, "Job not found: " + job_id);
+        }
+        waited_ms = 0;
+      }
+    }
+
+    std::ifstream in(log_path, std::ios::in | std::ios::binary);
+    if (!in.is_open()) {
+      cuopt::remote::LogMessage m;
+      m.set_line("Failed to open log file");
+      m.set_byte_offset(from_byte);
+      m.set_job_complete(true);
+      writer->Write(m);
+      return Status::OK;
+    }
+
+    if (from_byte > 0) { in.seekg(from_byte, std::ios::beg); }
+
+    int64_t current_offset = from_byte;
+    std::string line;
+
+    while (!context->IsCancelled()) {
+      std::streampos before = in.tellg();
+      if (before >= 0) { current_offset = static_cast<int64_t>(before); }
+
+      if (std::getline(in, line)) {
+        std::streampos after = in.tellg();
+        int64_t next_offset  = current_offset;
+        if (after >= 0) {
+          next_offset = static_cast<int64_t>(after);
+        } else {
+          next_offset = current_offset + static_cast<int64_t>(line.size());
+        }
+
+        cuopt::remote::LogMessage m;
+        m.set_line(line);
+        m.set_byte_offset(next_offset);
+        m.set_job_complete(false);
+        if (!writer->Write(m)) { break; }
+        continue;
+      }
+
+      if (in.eof()) {
+        in.clear();
+      } else if (in.fail()) {
+        in.clear();
+      }
+
+      std::string msg;
+      JobStatus s = check_job_status(job_id, msg);
+      if (s == JobStatus::COMPLETED || s == JobStatus::FAILED || s == JobStatus::CANCELLED) {
+        std::streampos before2 = in.tellg();
+        if (before2 >= 0) { current_offset = static_cast<int64_t>(before2); }
+        if (std::getline(in, line)) {
+          std::streampos after2 = in.tellg();
+          int64_t next_offset2  = current_offset + static_cast<int64_t>(line.size());
+          if (after2 >= 0) { next_offset2 = static_cast<int64_t>(after2); }
+          cuopt::remote::LogMessage m;
+          m.set_line(line);
+          m.set_byte_offset(next_offset2);
+          m.set_job_complete(false);
+          writer->Write(m);
+        }
+
+        cuopt::remote::LogMessage done;
+        done.set_line("");
+        done.set_byte_offset(current_offset);
+        done.set_job_complete(true);
+        writer->Write(done);
+        return Status::OK;
+      }
+
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    return Status::OK;
+  }
+
+  Status GetIncumbents(ServerContext* context,
+                       const cuopt::remote::IncumbentRequest* request,
+                       cuopt::remote::IncumbentResponse* response) override
+  {
+    (void)context;
+    const std::string job_id = request->job_id();
+    int64_t from_index       = request->from_index();
+    int32_t max_count        = request->max_count();
+
+    if (from_index < 0) { from_index = 0; }
+
+    std::lock_guard<std::mutex> lock(tracker_mutex);
+    auto it = job_tracker.find(job_id);
+    if (it == job_tracker.end()) { return Status(StatusCode::NOT_FOUND, "Job not found"); }
+
+    const auto& incumbents = it->second.incumbents;
+    int64_t available      = static_cast<int64_t>(incumbents.size());
+    if (from_index > available) { from_index = available; }
+
+    int64_t count = available - from_index;
+    if (max_count > 0 && count > max_count) { count = max_count; }
+
+    for (int64_t i = 0; i < count; ++i) {
+      const auto& inc = incumbents[static_cast<size_t>(from_index + i)];
+      auto* out       = response->add_incumbents();
+      out->set_index(from_index + i);
+      out->set_objective(inc.objective);
+      for (double v : inc.assignment) {
+        out->add_assignment(v);
+      }
+      out->set_job_id(job_id);
+    }
+
+    response->set_next_index(available);
+    bool done =
+      (it->second.status == JobStatus::COMPLETED || it->second.status == JobStatus::FAILED ||
+       it->second.status == JobStatus::CANCELLED);
+    response->set_job_complete(done);
+    if (config.verbose) {
+      std::cout << "[gRPC] GetIncumbents job_id=" << job_id << " from=" << from_index
+                << " returned=" << response->incumbents_size() << " next=" << available
+                << " done=" << (done ? 1 : 0) << "\n";
+      std::cout.flush();
+    }
+    return Status::OK;
+  }
+};
+
+// Provide access to the service implementation type from grpc_server_main.cpp.
+// This avoids exposing the class definition in a header (it's only needed once in main).
+std::unique_ptr<grpc::Service> create_cuopt_grpc_service()
+{
+  return std::make_unique<CuOptRemoteServiceImpl>();
+}
+
+#endif  // CUOPT_ENABLE_GRPC

@@ -4,10 +4,9 @@
 """
 Tests for CPU-only execution mode and solution interface polymorphism.
 
-TestCPUOnlyExecution / TestCuoptCliCPUOnly:
-    Run in subprocesses with CUDA_VISIBLE_DEVICES="" so the CUDA driver
-    never initializes.  Subprocess isolation is required because the
-    driver reads that variable once at init time.
+These tests verify that cuOpt can run on a CPU host without GPU access,
+forwarding solves to a real cuopt_grpc_server over gRPC. A single shared
+server is started once per test class to avoid per-test startup overhead.
 
 TestSolutionInterfacePolymorphism:
     Run in-process on real GPU hardware and assert correctness of
@@ -15,15 +14,21 @@ TestSolutionInterfacePolymorphism:
 """
 
 import os
+import shutil
+import signal
+import socket
 import subprocess
 import sys
+import time
 
 import cuopt_mps_parser
 import pytest
 from cuopt import linear_programming
 from cuopt.linear_programming.solver.solver_parameters import CUOPT_TIME_LIMIT
 
-RAPIDS_DATASET_ROOT_DIR = os.environ.get("RAPIDS_DATASET_ROOT_DIR", "./")
+RAPIDS_DATASET_ROOT_DIR = os.environ.get(
+    "RAPIDS_DATASET_ROOT_DIR", "/home/datasets/cuopt"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -31,12 +36,50 @@ RAPIDS_DATASET_ROOT_DIR = os.environ.get("RAPIDS_DATASET_ROOT_DIR", "./")
 # ---------------------------------------------------------------------------
 
 
-def _cpu_only_env():
+def _find_grpc_server():
+    """Locate cuopt_grpc_server binary."""
+    env_path = os.environ.get("CUOPT_GRPC_SERVER_PATH")
+    if env_path and os.path.isfile(env_path) and os.access(env_path, os.X_OK):
+        return env_path
+
+    found = shutil.which("cuopt_grpc_server")
+    if found:
+        return found
+
+    for candidate in [
+        "./cuopt_grpc_server",
+        "../cpp/build/cuopt_grpc_server",
+        "../../cpp/build/cuopt_grpc_server",
+    ]:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return os.path.abspath(candidate)
+
+    conda_prefix = os.environ.get("CONDA_PREFIX", "")
+    if conda_prefix:
+        p = os.path.join(conda_prefix, "bin", "cuopt_grpc_server")
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _wait_for_port(port, timeout=15):
+    """Block until TCP port accepts connections or timeout expires."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return True
+        except OSError:
+            time.sleep(0.2)
+    return False
+
+
+def _cpu_only_env(port):
     """Return an env dict that hides all GPUs and enables remote mode."""
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ""
     env["CUOPT_REMOTE_HOST"] = "localhost"
-    env["CUOPT_REMOTE_PORT"] = "12345"
+    env["CUOPT_REMOTE_PORT"] = str(port)
     return env
 
 
@@ -138,6 +181,7 @@ def _impl_warmstart_cpu_only():
     from cuopt.linear_programming.solver.solver_parameters import (
         CUOPT_METHOD,
         CUOPT_ITERATION_LIMIT,
+        CUOPT_PRESOLVE,
     )
     from cuopt.linear_programming.solver_settings import SolverMethod
     import cuopt_mps_parser
@@ -148,6 +192,7 @@ def _impl_warmstart_cpu_only():
 
     settings = linear_programming.SolverSettings()
     settings.set_parameter(CUOPT_METHOD, SolverMethod.PDLP)
+    settings.set_parameter(CUOPT_PRESOLVE, 0)
     settings.set_parameter(CUOPT_ITERATION_LIMIT, 100)
 
     sol1 = linear_programming.Solve(dm, settings)
@@ -166,30 +211,64 @@ def _impl_warmstart_cpu_only():
 
 
 class TestCPUOnlyExecution:
-    """Tests that run with CUDA_VISIBLE_DEVICES='' to simulate CPU-only hosts."""
+    """Tests that run with CUDA_VISIBLE_DEVICES='' to simulate CPU-only hosts.
 
-    @pytest.fixture
-    def env(self):
-        return _cpu_only_env()
+    A shared cuopt_grpc_server is started once for the whole class.
+    """
 
-    def test_lp_solve_cpu_only(self, env):
+    @pytest.fixture(scope="class")
+    def cpu_only_env_with_server(self):
+        server_bin = _find_grpc_server()
+        if server_bin is None:
+            pytest.skip("cuopt_grpc_server not found")
+
+        port = int(os.environ.get("CUOPT_TEST_PORT_BASE", "18000")) + 600
+        proc = subprocess.Popen(
+            [server_bin, "--port", str(port), "--workers", "1"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if not _wait_for_port(port, timeout=15):
+            proc.kill()
+            proc.wait()
+            pytest.fail("cuopt_grpc_server failed to start within 15s")
+
+        env = _cpu_only_env(port)
+        yield env
+
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    def test_lp_solve_cpu_only(self, cpu_only_env_with_server):
         """LP solve returns correctly-sized solution vectors."""
-        result = _run_in_subprocess(_impl_lp_solve_cpu_only, env=env)
+        result = _run_in_subprocess(
+            _impl_lp_solve_cpu_only, env=cpu_only_env_with_server
+        )
         assert result.returncode == 0, f"Test failed:\n{result.stderr}"
 
-    def test_lp_dual_solution_cpu_only(self, env):
+    def test_lp_dual_solution_cpu_only(self, cpu_only_env_with_server):
         """Dual solution and reduced costs are correctly sized."""
-        result = _run_in_subprocess(_impl_lp_dual_solution_cpu_only, env=env)
+        result = _run_in_subprocess(
+            _impl_lp_dual_solution_cpu_only, env=cpu_only_env_with_server
+        )
         assert result.returncode == 0, f"Test failed:\n{result.stderr}"
 
-    def test_mip_solve_cpu_only(self, env):
+    def test_mip_solve_cpu_only(self, cpu_only_env_with_server):
         """MIP solve returns correctly-sized solution vector."""
-        result = _run_in_subprocess(_impl_mip_solve_cpu_only, env=env)
+        result = _run_in_subprocess(
+            _impl_mip_solve_cpu_only, env=cpu_only_env_with_server
+        )
         assert result.returncode == 0, f"Test failed:\n{result.stderr}"
 
-    def test_warmstart_cpu_only(self, env):
+    def test_warmstart_cpu_only(self, cpu_only_env_with_server):
         """Warmstart round-trip works without touching CUDA."""
-        result = _run_in_subprocess(_impl_warmstart_cpu_only, env=env)
+        result = _run_in_subprocess(
+            _impl_warmstart_cpu_only, env=cpu_only_env_with_server
+        )
         assert result.returncode == 0, f"Test failed:\n{result.stderr}"
 
 
@@ -199,16 +278,40 @@ class TestCPUOnlyExecution:
 
 
 class TestCuoptCliCPUOnly:
-    """Test that cuopt_cli runs without CUDA in remote-execution mode."""
+    """Test that cuopt_cli runs without CUDA in remote-execution mode.
 
-    @pytest.fixture
-    def env(self):
-        return _cpu_only_env()
+    A shared cuopt_grpc_server is started once for the whole class.
+    """
+
+    @pytest.fixture(scope="class")
+    def cpu_only_env_with_server(self):
+        server_bin = _find_grpc_server()
+        if server_bin is None:
+            pytest.skip("cuopt_grpc_server not found")
+
+        port = int(os.environ.get("CUOPT_TEST_PORT_BASE", "18000")) + 700
+        proc = subprocess.Popen(
+            [server_bin, "--port", str(port), "--workers", "1"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if not _wait_for_port(port, timeout=15):
+            proc.kill()
+            proc.wait()
+            pytest.fail("cuopt_grpc_server failed to start within 15s")
+
+        env = _cpu_only_env(port)
+        yield env
+
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
     @staticmethod
     def _find_cuopt_cli():
-        import shutil
-
         for loc in [
             shutil.which("cuopt_cli"),
             "./cuopt_cli",
@@ -260,14 +363,17 @@ class TestCuoptCliCPUOnly:
             f"cuopt_cli exited with {result.returncode}"
         )
 
-    def test_cuopt_cli_lp_cpu_only(self, env):
+    def test_cuopt_cli_lp_cpu_only(self, cpu_only_env_with_server):
         self._run_cli(
             f"{RAPIDS_DATASET_ROOT_DIR}/linear_programming/afiro_original.mps",
-            env,
+            cpu_only_env_with_server,
         )
 
-    def test_cuopt_cli_mip_cpu_only(self, env):
-        self._run_cli(f"{RAPIDS_DATASET_ROOT_DIR}/mip/bb_optimality.mps", env)
+    def test_cuopt_cli_mip_cpu_only(self, cpu_only_env_with_server):
+        self._run_cli(
+            f"{RAPIDS_DATASET_ROOT_DIR}/mip/bb_optimality.mps",
+            cpu_only_env_with_server,
+        )
 
 
 # ---------------------------------------------------------------------------

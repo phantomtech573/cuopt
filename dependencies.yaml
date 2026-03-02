@@ -302,6 +302,8 @@ dependencies:
           - tbb-devel
           - zlib
           - bzip2
+          - openssl
+          - c-ares
   test_cpp:
     common:
       - output_types: [conda]
