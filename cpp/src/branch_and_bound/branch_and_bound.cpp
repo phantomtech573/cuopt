@@ -71,7 +71,8 @@ i_t fractional_variables(const simplex_solver_settings_t<i_t, f_t>& settings,
 }
 
 template <typename i_t, typename f_t>
-i_t prune_fixed_fractional_variables(const lp_problem_t<i_t, f_t>& lp,
+i_t prune_fixed_fractional_variables(const std::vector<f_t>& lower_bounds,
+                                     const std::vector<f_t>& upper_bounds,
                                      const simplex_solver_settings_t<i_t, f_t>& settings,
                                      std::vector<i_t>& fractional)
 {
@@ -81,7 +82,7 @@ i_t prune_fixed_fractional_variables(const lp_problem_t<i_t, f_t>& lp,
   i_t num_fixed = 0;
   for (i_t k = 0; k < (i_t)fractional.size(); k++) {
     const i_t j = fractional[k];
-    if (std::abs(lp.upper[j] - lp.lower[j]) < settings.fixed_tol) {
+    if (std::abs(upper_bounds[j] - lower_bounds[j]) < settings.fixed_tol) {
       num_fixed++;
     } else {
       new_fractional.push_back(j);
@@ -2487,17 +2488,30 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 
       std::vector<bool> bounds_changed(original_lp_.num_cols, true);
       std::vector<char> row_sense;
+      std::vector<f_t> new_lower;
+      std::vector<f_t> new_upper;
+      mutex_original_lp_.lock();
+      new_lower = original_lp_.lower;
+      new_upper = original_lp_.upper;
+      mutex_original_lp_.unlock();
       bounds_strengthening_t<i_t, f_t> sb_presolve(original_lp_, Arow_, row_sense, var_types_);
-      bool feasible = sb_presolve.bounds_strengthening(
-        settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
+      bool feasible =
+        sb_presolve.bounds_strengthening(settings_, bounds_changed, new_lower, new_upper);
+      i_t num_fixed = 0;
+      if (feasible) {
+        num_fixed = prune_fixed_fractional_variables(new_lower, new_upper, settings_, fractional);
+      }
+      mutex_original_lp_.lock();
+      original_lp_.lower = new_lower;
+      original_lp_.upper = new_upper;
+      mutex_original_lp_.unlock();
       if (!feasible) {
         settings_.log.printf("Strong branching bounds propagation detected infeasibility\n");
         return mip_status_t::INFEASIBLE;
       }
-      i_t num_fixed = prune_fixed_fractional_variables(original_lp_, settings_, fractional);
       if (num_fixed > 0) {
         settings_.log.printf(
-          "Strong branching bounds tightening: %d variables fixed (%d from propagation)\n",
+          "1Strong branching bounds tightening: %d variables fixed (%d from propagation)\n",
           num_fixed,
           num_fixed - num_tightened);
         num_fractional = fractional.size();
@@ -2551,21 +2565,21 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     if (num_fixed > 0) {
       std::vector<bool> bounds_changed(original_lp_.num_cols, true);
       std::vector<char> row_sense;
-
+      std::vector<f_t> new_lower = lower_bounds;
+      std::vector<f_t> new_upper = upper_bounds;
       bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
-
-      mutex_original_lp_.lock();
-      original_lp_.lower = lower_bounds;
-      original_lp_.upper = upper_bounds;
-      bool feasible      = node_presolve.bounds_strengthening(
-        settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
-      mutex_original_lp_.unlock();
+      bool feasible =
+        node_presolve.bounds_strengthening(settings_, bounds_changed, new_lower, new_upper);
       if (!feasible) {
         settings_.log.printf("Bound strengthening failed\n");
         return mip_status_t::NUMERICAL;  // We had a feasible integer solution, but bound
                                          // strengthening thinks we are infeasible.
       }
-      i_t num_fixed = prune_fixed_fractional_variables(original_lp_, settings_, fractional);
+      i_t num_fixed = prune_fixed_fractional_variables(new_lower, new_upper, settings_, fractional);
+      mutex_original_lp_.lock();
+      original_lp_.lower = new_lower;
+      original_lp_.upper = new_upper;
+      mutex_original_lp_.unlock();
       if (num_fixed > 0) {
         num_fractional = fractional.size();
         if (num_fractional == 0) {
