@@ -2511,7 +2511,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       }
       if (num_fixed > 0) {
         settings_.log.printf(
-          "1Strong branching bounds tightening: %d variables fixed (%d from propagation)\n",
+          "Strong branching bounds tightening: %d variables fixed (%d from propagation)\n",
           num_fixed,
           num_fixed - num_tightened);
         num_fractional = fractional.size();
