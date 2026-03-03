@@ -71,6 +71,28 @@ i_t fractional_variables(const simplex_solver_settings_t<i_t, f_t>& settings,
 }
 
 template <typename i_t, typename f_t>
+i_t prune_fixed_fractional_variables(const lp_problem_t<i_t, f_t>& lp,
+                                     const simplex_solver_settings_t<i_t, f_t>& settings,
+                                     std::vector<i_t>& fractional)
+{
+  std::vector<i_t> new_fractional;
+  new_fractional.reserve(fractional.size());
+
+  i_t num_fixed = 0;
+  for (i_t k = 0; k < (i_t)fractional.size(); k++) {
+    const i_t j = fractional[k];
+    if (std::abs(lp.upper[j] - lp.lower[j]) < settings.fixed_tol) {
+      num_fixed++;
+    } else {
+      new_fractional.push_back(j);
+    }
+  }
+
+  fractional = std::move(new_fractional);
+  return num_fixed;
+}
+
+template <typename i_t, typename f_t>
 void full_variable_types(const user_problem_t<i_t, f_t>& original_problem,
                          const lp_problem_t<i_t, f_t>& original_lp,
                          std::vector<variable_type_t>& var_types)
@@ -2363,6 +2385,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                root_objective_,
                                root_vstatus_,
                                edge_norms_,
+                               upper_bound_,
                                pc_);
   }
 
@@ -2370,6 +2393,111 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     solver_status_ = mip_status_t::TIME_LIMIT;
     set_final_solution(solution, root_objective_);
     return solver_status_;
+  }
+
+  // Exploit infeasible/fathomed branches from strong branching for bounds tightening.
+  // If branching down on x_j is infeasible, we can tighten lb[j] = ceil(x_j*).
+  // If branching up on x_j is infeasible, we can tighten ub[j] = floor(x_j*).
+  // With an incumbent, branches whose objective exceeds the cutoff yield the same deductions.
+  {
+    const f_t current_upper = upper_bound_.load();
+    i_t num_tightened       = 0;
+    i_t num_infeasible      = 0;
+    i_t num_cutoff          = 0;
+    for (i_t k = 0; k < (i_t)fractional.size(); k++) {
+      const i_t j          = fractional[k];
+      const f_t sb_down    = pc_.strong_branch_down[k];
+      const f_t sb_up      = pc_.strong_branch_up[k];
+      bool down_infeasible = std::isinf(sb_down);
+      bool up_infeasible   = std::isinf(sb_up);
+      bool down_cutoff     = false;
+      bool up_cutoff       = false;
+
+      if (!down_infeasible && std::isfinite(sb_down) && std::isfinite(current_upper)) {
+        down_cutoff     = (sb_down + root_objective_ > current_upper + settings_.dual_tol);
+        down_infeasible = down_cutoff;
+      }
+      if (!up_infeasible && std::isfinite(sb_up) && std::isfinite(current_upper)) {
+        up_cutoff     = (sb_up + root_objective_ > current_upper + settings_.dual_tol);
+        up_infeasible = up_cutoff;
+      }
+
+      if (down_infeasible && up_infeasible) {
+        bool truly_infeasible = std::isinf(sb_down) && std::isinf(sb_up);
+        if (truly_infeasible) {
+          settings_.log.printf("Strong branching: both branches infeasible for variable %d\n", j);
+          return mip_status_t::INFEASIBLE;
+        }
+        // Might happen if the incumbent is already the optimal
+        settings_.log.printf("Strong branching: both branches fathomed for variable %d\n", j);
+        set_solution_at_root(solution, cut_info);
+        return mip_status_t::OPTIMAL;
+      }
+      if (down_infeasible) {
+        f_t new_lb = std::ceil(root_relax_soln_.x[j]);
+        if (new_lb > original_lp_.lower[j]) {
+          settings_.log.debug("SB tighten var %d: lb %e -> %e (%s)",
+                              j,
+                              original_lp_.lower[j],
+                              new_lb,
+                              down_cutoff ? "cutoff" : "infeasible");
+          original_lp_.lower[j] = new_lb;
+          num_tightened++;
+          if (down_cutoff) {
+            num_cutoff++;
+          } else {
+            num_infeasible++;
+          }
+        }
+      }
+      if (up_infeasible) {
+        f_t new_ub = std::floor(root_relax_soln_.x[j]);
+        if (new_ub < original_lp_.upper[j]) {
+          settings_.log.debug("SB tighten var %d: ub %e -> %e (%s)",
+                              j,
+                              original_lp_.upper[j],
+                              new_ub,
+                              up_cutoff ? "cutoff" : "infeasible");
+          original_lp_.upper[j] = new_ub;
+          num_tightened++;
+          if (up_cutoff) {
+            num_cutoff++;
+          } else {
+            num_infeasible++;
+          }
+        }
+      }
+    }
+    if (num_tightened > 0) {
+      settings_.log.printf(
+        "Strong branching bounds tightening: %d tightened (%d infeasible, %d cutoff)\n",
+        num_tightened,
+        num_infeasible,
+        num_cutoff);
+
+      std::vector<bool> bounds_changed(original_lp_.num_cols, true);
+      std::vector<char> row_sense;
+      bounds_strengthening_t<i_t, f_t> sb_presolve(original_lp_, Arow_, row_sense, var_types_);
+      bool feasible = sb_presolve.bounds_strengthening(
+        settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
+      if (!feasible) {
+        settings_.log.printf("Strong branching bounds propagation detected infeasibility\n");
+        return mip_status_t::INFEASIBLE;
+      }
+      i_t num_fixed = prune_fixed_fractional_variables(original_lp_, settings_, fractional);
+      if (num_fixed > 0) {
+        settings_.log.printf(
+          "Strong branching bounds tightening: %d variables fixed (%d from propagation)\n",
+          num_fixed,
+          num_fixed - num_tightened);
+        num_fractional = fractional.size();
+      }
+
+      if (num_fractional == 0) {
+        set_solution_at_root(solution, cut_info);
+        return mip_status_t::OPTIMAL;
+      }
+    }
   }
 
   if (settings_.reduced_cost_strengthening >= 2 && upper_bound_.load() < last_upper_bound) {
@@ -2393,26 +2521,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         return mip_status_t::NUMERICAL;  // We had a feasible integer solution, but bound
                                          // strengthening thinks we are infeasible.
       }
-      // Go through and check the fractional variables and remove any that are now fixed to their
-      // bounds
-      std::vector<i_t> to_remove(fractional.size(), 0);
-      i_t num_to_remove = 0;
-      for (i_t k = 0; k < fractional.size(); k++) {
-        const i_t j = fractional[k];
-        if (std::abs(original_lp_.upper[j] - original_lp_.lower[j]) < settings_.fixed_tol) {
-          to_remove[k] = 1;
-          num_to_remove++;
-        }
-      }
-      if (num_to_remove > 0) {
-        std::vector<i_t> new_fractional;
-        new_fractional.reserve(fractional.size() - num_to_remove);
-        for (i_t k = 0; k < fractional.size(); k++) {
-          if (!to_remove[k]) { new_fractional.push_back(fractional[k]); }
-        }
-        fractional     = new_fractional;
-        num_fractional = fractional.size();
-      }
+      i_t num_fixed = prune_fixed_fractional_variables(original_lp_, settings_, fractional);
+      if (num_fixed > 0) { num_fractional = fractional.size(); }
     }
   }
 
