@@ -2503,6 +2503,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         num_fractional = fractional.size();
       }
 
+      // If no fractionals remain after the fixings - perform a resolve
+      // to get fractionals to branch on, or return optimality if the root relaxation is integer
       if (num_fractional == 0) {
         lp_settings.concurrent_halt = NULL;
         i_t iter                    = 0;
