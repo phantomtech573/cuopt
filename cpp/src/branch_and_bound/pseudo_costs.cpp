@@ -310,7 +310,7 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
                       f_t root_obj,
                       const std::vector<variable_status_t>& root_vstatus,
                       const std::vector<f_t>& edge_norms,
-                      const omp_atomic_t<f_t>& upper_bound,
+                      f_t upper_bound,
                       pseudo_costs_t<i_t, f_t>& pc)
 {
   pc.resize(original_lp.num_cols);
@@ -403,7 +403,6 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
                         settings.num_threads,
                         fractional.size());
     f_t strong_branching_start_time = tic();
-    const f_t current_upper_bound   = (f_t)upper_bound;
 
 #pragma omp parallel num_threads(settings.num_threads)
     {
@@ -437,7 +436,7 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
                              root_soln,
                              root_vstatus,
                              edge_norms,
-                             current_upper_bound,
+                             upper_bound,
                              pc);
       }
     }
@@ -792,7 +791,7 @@ template void strong_branching<int, double>(const user_problem_t<int, double>& o
                                             double root_obj,
                                             const std::vector<variable_status_t>& root_vstatus,
                                             const std::vector<double>& edge_norms,
-                                            const omp_atomic_t<double>& upper_bound,
+                                            double upper_bound,
                                             pseudo_costs_t<int, double>& pc);
 
 #endif

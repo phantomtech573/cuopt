@@ -2385,7 +2385,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                root_objective_,
                                root_vstatus_,
                                edge_norms_,
-                               upper_bound_,
+                               upper_bound_.load(),
                                pc_);
   }
 
