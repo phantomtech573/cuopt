@@ -2503,7 +2503,37 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         num_fractional = fractional.size();
       }
 
-      assert(num_fractional > 0);
+      if (num_fractional == 0) {
+        lp_settings.concurrent_halt = NULL;
+        i_t iter                    = 0;
+        bool initialize_basis       = false;
+        dual::status_t lp_status    = dual_phase2_with_advanced_basis(2,
+                                                                   0,
+                                                                   initialize_basis,
+                                                                   exploration_stats_.start_time,
+                                                                   original_lp_,
+                                                                   lp_settings,
+                                                                   root_vstatus_,
+                                                                   basis_update,
+                                                                   basic_list,
+                                                                   nonbasic_list,
+                                                                   root_relax_soln_,
+                                                                   iter,
+                                                                   edge_norms_);
+        exploration_stats_.total_lp_iters += iter;
+        root_objective_ = compute_objective(original_lp_, root_relax_soln_.x);
+        if (lp_status == dual::status_t::OPTIMAL) {
+          set_solution_at_root(solution, cut_info);
+          return mip_status_t::OPTIMAL;
+        }
+        if (lp_status == dual::status_t::TIME_LIMIT) {
+          solver_status_ = mip_status_t::TIME_LIMIT;
+          set_final_solution(solution, root_objective_);
+          return solver_status_;
+        }
+        settings_.log.printf("LP re-solve after SB tightening returned status %d\n", lp_status);
+        return mip_status_t::NUMERICAL;
+      }
     }
   }
 
@@ -2531,7 +2561,37 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       i_t num_fixed = prune_fixed_fractional_variables(original_lp_, settings_, fractional);
       if (num_fixed > 0) {
         num_fractional = fractional.size();
-        assert(num_fractional > 0);
+        if (num_fractional == 0) {
+          lp_settings.concurrent_halt = NULL;
+          i_t iter                    = 0;
+          bool initialize_basis       = false;
+          dual::status_t lp_status    = dual_phase2_with_advanced_basis(2,
+                                                                     0,
+                                                                     initialize_basis,
+                                                                     exploration_stats_.start_time,
+                                                                     original_lp_,
+                                                                     lp_settings,
+                                                                     root_vstatus_,
+                                                                     basis_update,
+                                                                     basic_list,
+                                                                     nonbasic_list,
+                                                                     root_relax_soln_,
+                                                                     iter,
+                                                                     edge_norms_);
+          exploration_stats_.total_lp_iters += iter;
+          root_objective_ = compute_objective(original_lp_, root_relax_soln_.x);
+          if (lp_status == dual::status_t::OPTIMAL) {
+            set_solution_at_root(solution, cut_info);
+            return mip_status_t::OPTIMAL;
+          }
+          if (lp_status == dual::status_t::TIME_LIMIT) {
+            solver_status_ = mip_status_t::TIME_LIMIT;
+            set_final_solution(solution, root_objective_);
+            return solver_status_;
+          }
+          settings_.log.printf("LP re-solve after RC tightening returned status %d\n", lp_status);
+          return mip_status_t::NUMERICAL;
+        }
       }
     }
   }
