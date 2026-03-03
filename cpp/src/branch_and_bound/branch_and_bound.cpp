@@ -2523,16 +2523,21 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         exploration_stats_.total_lp_iters += iter;
         root_objective_ = compute_objective(original_lp_, root_relax_soln_.x);
         if (lp_status == dual::status_t::OPTIMAL) {
-          set_solution_at_root(solution, cut_info);
-          return mip_status_t::OPTIMAL;
-        }
-        if (lp_status == dual::status_t::TIME_LIMIT) {
+          fractional.clear();
+          num_fractional =
+            fractional_variables(settings_, root_relax_soln_.x, var_types_, fractional);
+          if (num_fractional == 0) {
+            set_solution_at_root(solution, cut_info);
+            return mip_status_t::OPTIMAL;
+          }
+        } else if (lp_status == dual::status_t::TIME_LIMIT) {
           solver_status_ = mip_status_t::TIME_LIMIT;
           set_final_solution(solution, root_objective_);
           return solver_status_;
+        } else {
+          settings_.log.printf("LP re-solve after SB tightening returned status %d\n", lp_status);
+          return mip_status_t::NUMERICAL;
         }
-        settings_.log.printf("LP re-solve after SB tightening returned status %d\n", lp_status);
-        return mip_status_t::NUMERICAL;
       }
     }
   }
@@ -2581,16 +2586,21 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
           exploration_stats_.total_lp_iters += iter;
           root_objective_ = compute_objective(original_lp_, root_relax_soln_.x);
           if (lp_status == dual::status_t::OPTIMAL) {
-            set_solution_at_root(solution, cut_info);
-            return mip_status_t::OPTIMAL;
-          }
-          if (lp_status == dual::status_t::TIME_LIMIT) {
+            fractional.clear();
+            num_fractional =
+              fractional_variables(settings_, root_relax_soln_.x, var_types_, fractional);
+            if (num_fractional == 0) {
+              set_solution_at_root(solution, cut_info);
+              return mip_status_t::OPTIMAL;
+            }
+          } else if (lp_status == dual::status_t::TIME_LIMIT) {
             solver_status_ = mip_status_t::TIME_LIMIT;
             set_final_solution(solution, root_objective_);
             return solver_status_;
+          } else {
+            settings_.log.printf("LP re-solve after RC tightening returned status %d\n", lp_status);
+            return mip_status_t::NUMERICAL;
           }
-          settings_.log.printf("LP re-solve after RC tightening returned status %d\n", lp_status);
-          return mip_status_t::NUMERICAL;
         }
       }
     }
