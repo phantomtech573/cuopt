@@ -2430,10 +2430,17 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         }
         // Might happen if the incumbent is already the optimal
         settings_.log.printf("Strong branching: both branches fathomed for variable %d\n", j);
-        set_solution_at_root(solution, cut_info);
-        return mip_status_t::OPTIMAL;
+        bool has_incumbent = false;
+        mutex_upper_.lock();
+        has_incumbent = incumbent_.has_incumbent;
+        mutex_upper_.unlock();
+        assert(has_incumbent);
+        solver_status_ = mip_status_t::OPTIMAL;
+        set_final_solution(solution, upper_bound_.load());
+        return solver_status_;
       }
       if (down_infeasible) {
+        mutex_original_lp_.lock();
         f_t new_lb = std::ceil(root_relax_soln_.x[j]);
         if (new_lb > original_lp_.lower[j]) {
           settings_.log.debug("SB tighten var %d: lb %e -> %e (%s)",
@@ -2449,8 +2456,10 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
             num_infeasible++;
           }
         }
+        mutex_original_lp_.unlock();
       }
       if (up_infeasible) {
+        mutex_original_lp_.lock();
         f_t new_ub = std::floor(root_relax_soln_.x[j]);
         if (new_ub < original_lp_.upper[j]) {
           settings_.log.debug("SB tighten var %d: ub %e -> %e (%s)",
@@ -2466,6 +2475,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
             num_infeasible++;
           }
         }
+        mutex_original_lp_.unlock();
       }
     }
     if (num_tightened > 0) {
@@ -2493,10 +2503,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         num_fractional = fractional.size();
       }
 
-      if (num_fractional == 0) {
-        set_solution_at_root(solution, cut_info);
-        return mip_status_t::OPTIMAL;
-      }
+      assert(num_fractional > 0);
     }
   }
 
@@ -2522,7 +2529,10 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                          // strengthening thinks we are infeasible.
       }
       i_t num_fixed = prune_fixed_fractional_variables(original_lp_, settings_, fractional);
-      if (num_fixed > 0) { num_fractional = fractional.size(); }
+      if (num_fixed > 0) {
+        num_fractional = fractional.size();
+        assert(num_fractional > 0);
+      }
     }
   }
 
