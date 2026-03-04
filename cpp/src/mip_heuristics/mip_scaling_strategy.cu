@@ -217,7 +217,6 @@ void scale_objective(cuopt::linear_programming::optimization_problem_t<i_t, f_t>
                     });
   op_problem.set_objective_scaling_factor(op_problem.get_objective_scaling_factor() /
                                           obj_scaling_coefficient);
-  op_problem.set_objective_offset(op_problem.get_objective_offset() * obj_scaling_coefficient);
 
   CUOPT_LOG_INFO("MIP objective scaling applied: min_abs_coeff=%g scale=%g",
                  static_cast<double>(min_abs_objective_coefficient),
