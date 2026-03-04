@@ -5,7 +5,9 @@ import copy
 
 from cuopt_server.tests.utils.utils import cuoptproc  # noqa
 from cuopt_server.tests.utils.utils import RequestClient
-from cuopt_server.utils.routing.validation_fleet_data import validate_fleet_data
+from cuopt_server.utils.routing.validation_fleet_data import (
+    validate_fleet_data,
+)
 
 client = RequestClient()
 
