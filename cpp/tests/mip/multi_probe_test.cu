@@ -150,8 +150,7 @@ void test_multi_probe(std::string path)
   problem_checking_t<int, double>::check_problem_representation(op_problem);
   detail::problem_t<int, double> problem(op_problem);
   mip_solver_settings_t<int, double> default_settings{};
-  detail::mip_scaling_strategy_t<int, double> scaling(problem);
-  detail::mip_solver_t<int, double> solver(problem, default_settings, scaling, cuopt::timer_t(0));
+  detail::mip_solver_t<int, double> solver(problem, default_settings, cuopt::timer_t(0));
   detail::bound_presolve_t<int, double> bnd_prb_0(solver.context);
   detail::bound_presolve_t<int, double> bnd_prb_1(solver.context);
   detail::multi_probe_t<int, double> multi_probe_prs(solver.context);

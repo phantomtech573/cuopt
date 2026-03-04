@@ -128,13 +128,12 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
                "Size mismatch");
   cuopt_assert(problem.original_problem_ptr->get_n_constraints() == scaled_problem.n_constraints,
                "Size mismatch");
-  detail::mip_scaling_strategy_t<i_t, f_t> scaling(scaled_problem);
 
   // only call preprocess on scaled problem, so we can compute feasibility on the original problem
   scaled_problem.preprocess_problem();
   detail::trivial_presolve(scaled_problem);
 
-  detail::mip_solver_t<i_t, f_t> solver(scaled_problem, settings, scaling, timer);
+  detail::mip_solver_t<i_t, f_t> solver(scaled_problem, settings, timer);
   if (timer.check_time_limit()) {
     CUOPT_LOG_INFO("Time limit reached before main solve");
     detail::solution_t<i_t, f_t> sol(problem);
@@ -215,7 +214,8 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
     }
 
     auto timer = timer_t(time_limit);
-
+    detail::mip_scaling_strategy_t<i_t, f_t> scaling(op_problem);
+    scaling.scale_problem();
     double presolve_time = 0.0;
     std::unique_ptr<detail::third_party_presolve_t<i_t, f_t>> presolver;
     std::optional<detail::third_party_presolve_result_t<i_t, f_t>> presolve_result;

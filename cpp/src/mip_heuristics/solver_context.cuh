@@ -7,7 +7,6 @@
 
 #include <cuopt/linear_programming/mip/solver_stats.hpp>
 
-#include <mip_heuristics/mip_scaling_strategy.cuh>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/relaxed_lp/lp_state.cuh>
 #include <utilities/work_limit_context.hpp>
@@ -34,9 +33,8 @@ template <typename i_t, typename f_t>
 struct mip_solver_context_t {
   explicit mip_solver_context_t(raft::handle_t const* handle_ptr_,
                                 problem_t<i_t, f_t>* problem_ptr_,
-                                mip_solver_settings_t<i_t, f_t> settings_,
-                                mip_scaling_strategy_t<i_t, f_t>& scaling)
-    : handle_ptr(handle_ptr_), problem_ptr(problem_ptr_), settings(settings_), scaling(scaling)
+                                mip_solver_settings_t<i_t, f_t> settings_)
+    : handle_ptr(handle_ptr_), problem_ptr(problem_ptr_), settings(settings_)
   {
     cuopt_assert(problem_ptr != nullptr, "problem_ptr is nullptr");
     stats.set_solution_bound(problem_ptr->maximize ? std::numeric_limits<f_t>::infinity()
@@ -53,7 +51,6 @@ struct mip_solver_context_t {
   diversity_manager_t<i_t, f_t>* diversity_manager_ptr{nullptr};
   std::atomic<bool> preempt_heuristic_solver_ = false;
   const mip_solver_settings_t<i_t, f_t> settings;
-  mip_scaling_strategy_t<i_t, f_t>& scaling;
   solver_stats_t<i_t, f_t> stats;
   // Work limit context for tracking work units in deterministic mode (shared across all timers in
   // GPU heuristic loop)

@@ -67,100 +67,107 @@ struct nonzero_count_transform_t {
   __device__ i_t operator()(f_t value) const { return raft::abs(value) > f_t(0) ? i_t(1) : i_t(0); }
 };
 
-template <typename t_t>
+template <typename item_t>
 struct max_op_t {
-  __host__ __device__ t_t operator()(const t_t& lhs, const t_t& rhs) const
+  __host__ __device__ item_t operator()(const item_t& lhs, const item_t& rhs) const
   {
     return lhs > rhs ? lhs : rhs;
   }
 };
 
-template <typename t_t>
+template <typename item_t>
 struct min_op_t {
-  __host__ __device__ t_t operator()(const t_t& lhs, const t_t& rhs) const
+  __host__ __device__ item_t operator()(const item_t& lhs, const item_t& rhs) const
   {
     return lhs < rhs ? lhs : rhs;
   }
 };
 
 template <typename i_t, typename f_t>
-void compute_row_inf_norm(const problem_t<i_t, f_t>& op_problem,
-                          rmm::device_uvector<std::uint8_t>& temp_storage,
-                          size_t temp_storage_bytes,
-                          rmm::device_uvector<f_t>& row_inf_norm,
-                          rmm::cuda_stream_view stream_view)
+void compute_row_inf_norm(
+  const cuopt::linear_programming::optimization_problem_t<i_t, f_t>& op_problem,
+  rmm::device_uvector<std::uint8_t>& temp_storage,
+  size_t temp_storage_bytes,
+  rmm::device_uvector<f_t>& row_inf_norm,
+  rmm::cuda_stream_view stream_view)
 {
+  const auto& matrix_values  = op_problem.get_constraint_matrix_values();
+  const auto& matrix_offsets = op_problem.get_constraint_matrix_offsets();
   auto coeff_abs_iter =
-    thrust::make_transform_iterator(op_problem.coefficients.data(), abs_value_transform_t<f_t>{});
+    thrust::make_transform_iterator(matrix_values.data(), abs_value_transform_t<f_t>{});
   size_t current_bytes = temp_storage_bytes;
   RAFT_CUDA_TRY(cub::DeviceSegmentedReduce::Reduce(temp_storage.data(),
                                                    current_bytes,
                                                    coeff_abs_iter,
                                                    row_inf_norm.data(),
-                                                   op_problem.n_constraints,
-                                                   op_problem.offsets.data(),
-                                                   op_problem.offsets.data() + 1,
+                                                   op_problem.get_n_constraints(),
+                                                   matrix_offsets.data(),
+                                                   matrix_offsets.data() + 1,
                                                    max_op_t<f_t>{},
                                                    f_t(0),
                                                    stream_view));
 }
 
 template <typename i_t, typename f_t>
-void compute_big_m_skip_rows(const problem_t<i_t, f_t>& op_problem,
-                             rmm::device_uvector<std::uint8_t>& temp_storage,
-                             size_t temp_storage_bytes,
-                             rmm::device_uvector<f_t>& row_inf_norm,
-                             rmm::device_uvector<f_t>& row_min_nonzero,
-                             rmm::device_uvector<i_t>& row_nonzero_count,
-                             rmm::device_uvector<i_t>& row_skip_scaling)
+void compute_big_m_skip_rows(
+  const cuopt::linear_programming::optimization_problem_t<i_t, f_t>& op_problem,
+  rmm::device_uvector<std::uint8_t>& temp_storage,
+  size_t temp_storage_bytes,
+  rmm::device_uvector<f_t>& row_inf_norm,
+  rmm::device_uvector<f_t>& row_min_nonzero,
+  rmm::device_uvector<i_t>& row_nonzero_count,
+  rmm::device_uvector<i_t>& row_skip_scaling)
 {
+  const auto& matrix_values  = op_problem.get_constraint_matrix_values();
+  const auto& matrix_offsets = op_problem.get_constraint_matrix_offsets();
+  const auto stream_view     = op_problem.get_handle_ptr()->get_stream();
   auto coeff_abs_iter =
-    thrust::make_transform_iterator(op_problem.coefficients.data(), abs_value_transform_t<f_t>{});
-  auto coeff_nonzero_min_iter = thrust::make_transform_iterator(
-    op_problem.coefficients.data(), nonzero_abs_or_inf_transform_t<f_t>{});
-  auto coeff_nonzero_count_iter = thrust::make_transform_iterator(
-    op_problem.coefficients.data(), nonzero_count_transform_t<i_t, f_t>{});
+    thrust::make_transform_iterator(matrix_values.data(), abs_value_transform_t<f_t>{});
+  auto coeff_nonzero_min_iter =
+    thrust::make_transform_iterator(matrix_values.data(), nonzero_abs_or_inf_transform_t<f_t>{});
+  auto coeff_nonzero_count_iter =
+    thrust::make_transform_iterator(matrix_values.data(), nonzero_count_transform_t<i_t, f_t>{});
 
   size_t max_bytes = temp_storage_bytes;
   RAFT_CUDA_TRY(cub::DeviceSegmentedReduce::Reduce(temp_storage.data(),
                                                    max_bytes,
                                                    coeff_abs_iter,
                                                    row_inf_norm.data(),
-                                                   op_problem.n_constraints,
-                                                   op_problem.offsets.data(),
-                                                   op_problem.offsets.data() + 1,
+                                                   op_problem.get_n_constraints(),
+                                                   matrix_offsets.data(),
+                                                   matrix_offsets.data() + 1,
                                                    max_op_t<f_t>{},
                                                    f_t(0),
-                                                   op_problem.handle_ptr->get_stream()));
+                                                   stream_view));
   size_t min_bytes = temp_storage_bytes;
   RAFT_CUDA_TRY(cub::DeviceSegmentedReduce::Reduce(temp_storage.data(),
                                                    min_bytes,
                                                    coeff_nonzero_min_iter,
                                                    row_min_nonzero.data(),
-                                                   op_problem.n_constraints,
-                                                   op_problem.offsets.data(),
-                                                   op_problem.offsets.data() + 1,
+                                                   op_problem.get_n_constraints(),
+                                                   matrix_offsets.data(),
+                                                   matrix_offsets.data() + 1,
                                                    min_op_t<f_t>{},
                                                    std::numeric_limits<f_t>::infinity(),
-                                                   op_problem.handle_ptr->get_stream()));
+                                                   stream_view));
   size_t count_bytes = temp_storage_bytes;
   RAFT_CUDA_TRY(cub::DeviceSegmentedReduce::Reduce(temp_storage.data(),
                                                    count_bytes,
                                                    coeff_nonzero_count_iter,
                                                    row_nonzero_count.data(),
-                                                   op_problem.n_constraints,
-                                                   op_problem.offsets.data(),
-                                                   op_problem.offsets.data() + 1,
+                                                   op_problem.get_n_constraints(),
+                                                   matrix_offsets.data(),
+                                                   matrix_offsets.data() + 1,
                                                    thrust::plus<i_t>{},
                                                    i_t(0),
-                                                   op_problem.handle_ptr->get_stream()));
+                                                   stream_view));
 
   auto row_begin = thrust::make_zip_iterator(
     thrust::make_tuple(row_inf_norm.begin(), row_min_nonzero.begin(), row_nonzero_count.begin()));
   auto row_end = thrust::make_zip_iterator(
     thrust::make_tuple(row_inf_norm.end(), row_min_nonzero.end(), row_nonzero_count.end()));
   thrust::transform(
-    op_problem.handle_ptr->get_thrust_policy(),
+    op_problem.get_handle_ptr()->get_thrust_policy(),
     row_begin,
     row_end,
     row_skip_scaling.begin(),
@@ -181,12 +188,13 @@ void compute_big_m_skip_rows(const problem_t<i_t, f_t>& op_problem,
 }
 
 template <typename i_t, typename f_t>
-void scale_objective(problem_t<i_t, f_t>& op_problem)
+void scale_objective(cuopt::linear_programming::optimization_problem_t<i_t, f_t>& op_problem)
 {
+  auto& objective_coefficients = op_problem.get_objective_coefficients();
   const f_t min_abs_objective_coefficient =
-    thrust::transform_reduce(op_problem.handle_ptr->get_thrust_policy(),
-                             op_problem.objective_coefficients.begin(),
-                             op_problem.objective_coefficients.end(),
+    thrust::transform_reduce(op_problem.get_handle_ptr()->get_thrust_policy(),
+                             objective_coefficients.begin(),
+                             objective_coefficients.end(),
                              nonzero_abs_or_inf_transform_t<f_t>{},
                              std::numeric_limits<f_t>::infinity(),
                              min_op_t<f_t>{});
@@ -200,15 +208,16 @@ void scale_objective(problem_t<i_t, f_t>& op_problem)
     static_cast<f_t>(min_abs_objective_coefficient_threshold) / min_abs_objective_coefficient;
   if (!std::isfinite(obj_scaling_coefficient) || obj_scaling_coefficient <= f_t(1)) { return; }
 
-  thrust::transform(op_problem.handle_ptr->get_thrust_policy(),
-                    op_problem.objective_coefficients.begin(),
-                    op_problem.objective_coefficients.end(),
-                    op_problem.objective_coefficients.begin(),
+  thrust::transform(op_problem.get_handle_ptr()->get_thrust_policy(),
+                    objective_coefficients.begin(),
+                    objective_coefficients.end(),
+                    objective_coefficients.begin(),
                     [obj_scaling_coefficient] __device__(f_t objective_coefficient) -> f_t {
                       return objective_coefficient * obj_scaling_coefficient;
                     });
-  op_problem.presolve_data.objective_scaling_factor /= obj_scaling_coefficient;
-  op_problem.presolve_data.objective_offset *= obj_scaling_coefficient;
+  op_problem.set_objective_scaling_factor(op_problem.get_objective_scaling_factor() /
+                                          obj_scaling_coefficient);
+  op_problem.set_objective_offset(op_problem.get_objective_offset() * obj_scaling_coefficient);
 
   CUOPT_LOG_INFO("MIP objective scaling applied: min_abs_coeff=%g scale=%g",
                  static_cast<double>(min_abs_objective_coefficient),
@@ -216,61 +225,64 @@ void scale_objective(problem_t<i_t, f_t>& op_problem)
 }
 
 template <typename i_t, typename f_t>
-mip_scaling_strategy_t<i_t, f_t>::mip_scaling_strategy_t(problem_t<i_t, f_t>& op_problem_scaled)
-  : handle_ptr_(op_problem_scaled.handle_ptr),
+mip_scaling_strategy_t<i_t, f_t>::mip_scaling_strategy_t(
+  typename mip_scaling_strategy_t<i_t, f_t>::optimization_problem_type_t& op_problem_scaled)
+  : handle_ptr_(op_problem_scaled.get_handle_ptr()),
     stream_view_(handle_ptr_->get_stream()),
     op_problem_scaled_(op_problem_scaled)
 {
 }
 
 template <typename i_t, typename f_t>
-size_t dry_run_cub(const problem_t<i_t, f_t>& op_problem,
+size_t dry_run_cub(const cuopt::linear_programming::optimization_problem_t<i_t, f_t>& op_problem,
                    i_t n_rows,
                    rmm::device_uvector<f_t>& row_inf_norm,
                    rmm::device_uvector<f_t>& row_min_nonzero,
                    rmm::device_uvector<i_t>& row_nonzero_count,
                    rmm::cuda_stream_view stream_view)
 {
+  const auto& matrix_values     = op_problem.get_constraint_matrix_values();
+  const auto& matrix_offsets    = op_problem.get_constraint_matrix_offsets();
   size_t temp_storage_bytes     = 0;
   size_t current_required_bytes = 0;
 
   auto coeff_abs_iter =
-    thrust::make_transform_iterator(op_problem.coefficients.data(), abs_value_transform_t<f_t>{});
+    thrust::make_transform_iterator(matrix_values.data(), abs_value_transform_t<f_t>{});
   RAFT_CUDA_TRY(cub::DeviceSegmentedReduce::Reduce(nullptr,
                                                    current_required_bytes,
                                                    coeff_abs_iter,
                                                    row_inf_norm.data(),
                                                    n_rows,
-                                                   op_problem.offsets.data(),
-                                                   op_problem.offsets.data() + 1,
+                                                   matrix_offsets.data(),
+                                                   matrix_offsets.data() + 1,
                                                    max_op_t<f_t>{},
                                                    f_t(0),
                                                    stream_view));
   temp_storage_bytes = std::max(temp_storage_bytes, current_required_bytes);
 
-  auto coeff_nonzero_min_iter = thrust::make_transform_iterator(
-    op_problem.coefficients.data(), nonzero_abs_or_inf_transform_t<f_t>{});
+  auto coeff_nonzero_min_iter =
+    thrust::make_transform_iterator(matrix_values.data(), nonzero_abs_or_inf_transform_t<f_t>{});
   RAFT_CUDA_TRY(cub::DeviceSegmentedReduce::Reduce(nullptr,
                                                    current_required_bytes,
                                                    coeff_nonzero_min_iter,
                                                    row_min_nonzero.data(),
                                                    n_rows,
-                                                   op_problem.offsets.data(),
-                                                   op_problem.offsets.data() + 1,
+                                                   matrix_offsets.data(),
+                                                   matrix_offsets.data() + 1,
                                                    min_op_t<f_t>{},
                                                    std::numeric_limits<f_t>::infinity(),
                                                    stream_view));
   temp_storage_bytes = std::max(temp_storage_bytes, current_required_bytes);
 
-  auto coeff_nonzero_count_iter = thrust::make_transform_iterator(
-    op_problem.coefficients.data(), nonzero_count_transform_t<i_t, f_t>{});
+  auto coeff_nonzero_count_iter =
+    thrust::make_transform_iterator(matrix_values.data(), nonzero_count_transform_t<i_t, f_t>{});
   RAFT_CUDA_TRY(cub::DeviceSegmentedReduce::Reduce(nullptr,
                                                    current_required_bytes,
                                                    coeff_nonzero_count_iter,
                                                    row_nonzero_count.data(),
                                                    n_rows,
-                                                   op_problem.offsets.data(),
-                                                   op_problem.offsets.data() + 1,
+                                                   matrix_offsets.data(),
+                                                   matrix_offsets.data() + 1,
                                                    thrust::plus<i_t>{},
                                                    i_t(0),
                                                    stream_view));
@@ -284,16 +296,17 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
 {
   raft::common::nvtx::range fun_scope("mip_scale_problem");
 
-  const i_t n_rows = op_problem_scaled_.n_constraints;
-  const i_t n_cols = op_problem_scaled_.n_variables;
-  const i_t nnz    = op_problem_scaled_.nnz;
+  auto& matrix_values           = op_problem_scaled_.get_constraint_matrix_values();
+  auto& matrix_offsets          = op_problem_scaled_.get_constraint_matrix_offsets();
+  auto& constraint_lower_bounds = op_problem_scaled_.get_constraint_lower_bounds();
+  auto& constraint_upper_bounds = op_problem_scaled_.get_constraint_upper_bounds();
+  const i_t n_rows              = op_problem_scaled_.get_n_constraints();
+  const i_t n_cols              = op_problem_scaled_.get_n_variables();
+  const i_t nnz                 = op_problem_scaled_.get_nnz();
 
   scale_objective(op_problem_scaled_);
 
-  if (n_rows == 0 || nnz <= 0) {
-    op_problem_scaled_.is_scaled_ = true;
-    return;
-  }
+  if (n_rows == 0 || nnz <= 0) { return; }
 
   rmm::device_uvector<f_t> row_inf_norm(static_cast<size_t>(n_rows), stream_view_);
   rmm::device_uvector<f_t> row_min_nonzero(static_cast<size_t>(n_rows), stream_view_);
@@ -305,8 +318,8 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
   rmm::device_uvector<i_t> coefficient_row_index(static_cast<size_t>(nnz), stream_view_);
 
   thrust::upper_bound(handle_ptr_->get_thrust_policy(),
-                      op_problem_scaled_.offsets.begin(),
-                      op_problem_scaled_.offsets.end(),
+                      matrix_offsets.begin(),
+                      matrix_offsets.end(),
                       thrust::make_counting_iterator<i_t>(0),
                       thrust::make_counting_iterator<i_t>(nnz),
                       coefficient_row_index.begin());
@@ -423,30 +436,26 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
 
     thrust::transform(
       handle_ptr_->get_thrust_policy(),
-      op_problem_scaled_.coefficients.begin(),
-      op_problem_scaled_.coefficients.end(),
+      matrix_values.begin(),
+      matrix_values.end(),
       thrust::make_permutation_iterator(iteration_scaling.begin(), coefficient_row_index.begin()),
-      op_problem_scaled_.coefficients.begin(),
+      matrix_values.begin(),
       thrust::multiplies<f_t>{});
 
     thrust::transform(handle_ptr_->get_thrust_policy(),
-                      op_problem_scaled_.constraint_lower_bounds.begin(),
-                      op_problem_scaled_.constraint_lower_bounds.end(),
+                      constraint_lower_bounds.begin(),
+                      constraint_lower_bounds.end(),
                       iteration_scaling.begin(),
-                      op_problem_scaled_.constraint_lower_bounds.begin(),
+                      constraint_lower_bounds.begin(),
                       thrust::multiplies<f_t>{});
     thrust::transform(handle_ptr_->get_thrust_policy(),
-                      op_problem_scaled_.constraint_upper_bounds.begin(),
-                      op_problem_scaled_.constraint_upper_bounds.end(),
+                      constraint_upper_bounds.begin(),
+                      constraint_upper_bounds.end(),
                       iteration_scaling.begin(),
-                      op_problem_scaled_.constraint_upper_bounds.begin(),
+                      constraint_upper_bounds.begin(),
                       thrust::multiplies<f_t>{});
   }
 
-  op_problem_scaled_.compute_transpose_of_problem();
-  combine_constraint_bounds(op_problem_scaled_, op_problem_scaled_.combined_bounds);
-  op_problem_scaled_.check_problem_representation(true, true);
-  op_problem_scaled_.is_scaled_ = true;
   CUOPT_LOG_INFO("MIP row scaling completed");
 }
 

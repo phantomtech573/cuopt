@@ -223,8 +223,7 @@ void rins_t<i_t, f_t>::run_rins()
 
   std::vector<std::vector<f_t>> rins_solution_queue;
 
-  mip_solver_context_t<i_t, f_t> fj_context(
-    &rins_handle, &fixed_problem, context.settings, context.scaling);
+  mip_solver_context_t<i_t, f_t> fj_context(&rins_handle, &fixed_problem, context.settings);
   fj_t<i_t, f_t> fj(fj_context);
   solution_t<i_t, f_t> fj_solution(fixed_problem);
   fj_solution.copy_new_assignment(cuopt::host_copy(fixed_assignment, rins_handle.get_stream()));

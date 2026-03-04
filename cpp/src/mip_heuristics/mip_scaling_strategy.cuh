@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <mip_heuristics/problem/problem.cuh>
+#include <cuopt/linear_programming/optimization_problem.hpp>
 
 #include <raft/core/handle.hpp>
 
@@ -18,14 +18,15 @@ namespace cuopt::linear_programming::detail {
 template <typename i_t, typename f_t>
 class mip_scaling_strategy_t {
  public:
-  explicit mip_scaling_strategy_t(problem_t<i_t, f_t>& op_problem_scaled);
+  using optimization_problem_type_t = cuopt::linear_programming::optimization_problem_t<i_t, f_t>;
+  explicit mip_scaling_strategy_t(optimization_problem_type_t& op_problem_scaled);
 
   void scale_problem();
 
  private:
   raft::handle_t const* handle_ptr_{nullptr};
   rmm::cuda_stream_view stream_view_;
-  problem_t<i_t, f_t>& op_problem_scaled_;
+  optimization_problem_type_t& op_problem_scaled_;
 };
 
 }  // namespace cuopt::linear_programming::detail
