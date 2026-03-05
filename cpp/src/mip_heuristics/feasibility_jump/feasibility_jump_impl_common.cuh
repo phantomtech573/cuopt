@@ -103,7 +103,9 @@ HDI std::pair<f_t, f_t> feas_score_constraint(
   f_t cstr_coeff,
   f_t c_lb,
   f_t c_ub,
-  f_t current_lhs)
+  f_t current_lhs,
+  f_t cstr_left_weight  = std::numeric_limits<f_t>::quiet_NaN(),
+  f_t cstr_right_weight = std::numeric_limits<f_t>::quiet_NaN())
 {
   cuopt_assert(isfinite(delta), "invalid delta");
   cuopt_assert(cstr_coeff != 0 && isfinite(cstr_coeff), "invalid coefficient");
@@ -123,8 +125,11 @@ HDI std::pair<f_t, f_t> feas_score_constraint(
     // TODO: broadcast left/right weights to a csr_offset-indexed table? local minimums
     // usually occur on a rarer basis (around 50 iteratiosn to 1 local minimum)
     // likely unreasonable and overkill however
-    f_t cstr_weight =
-      bound_idx == 0 ? fj.cstr_left_weights[cstr_idx] : fj.cstr_right_weights[cstr_idx];
+    f_t cstr_weight = bound_idx == 0 ? cstr_left_weight : cstr_right_weight;
+    if (!isfinite(cstr_weight)) {
+      cstr_weight =
+        bound_idx == 0 ? fj.cstr_left_weights[cstr_idx] : fj.cstr_right_weights[cstr_idx];
+    }
     f_t sign      = bound_idx == 0 ? -1 : 1;
     f_t rhs       = bounds[bound_idx] * sign;
     f_t old_lhs   = current_lhs * sign;

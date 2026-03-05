@@ -941,7 +941,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   i_t n_failed_repair_iterations = 0;
   while (set_count < unset_integer_vars.size()) {
     CUOPT_LOG_TRACE("n_set_vars %d vars to set %lu", set_count, unset_integer_vars.size());
-    CUOPT_LOG_DEBUG("hash unset_integer_vars 0x%x", detail::compute_hash(unset_integer_vars));
+    CUOPT_LOG_DEBUG("unset_integer_vars size %lu", unset_integer_vars.size());
     update_host_assignment(sol);
     if (max_timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("Second time limit is reached returning nearest rounding!");
@@ -989,10 +989,11 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
                     detail::compute_hash(std::get<2>(var_probe_vals)));
     probe(
       sol, orig_sol.problem_ptr, var_probe_vals, &set_count, unset_integer_vars, probing_config);
-    CUOPT_LOG_TRACE("post probe, set count %d, unset var hash 0x%x, size %lu",
-                    (int)set_count,
-                    detail::compute_hash(unset_integer_vars),
-                    unset_integer_vars.size());
+    CUOPT_LOG_TRACE(
+      "post probe, set count %d, unset var hash 0x%x, size %lu",
+      (int)set_count,
+      detail::compute_hash(make_span(unset_integer_vars), sol.handle_ptr->get_stream()),
+      unset_integer_vars.size());
     if (!(n_failed_repair_iterations >= max_n_failed_repair_iterations) && rounding_ii &&
         !timeout_happened) {
       // timer_t repair_timer{std::min(timer.remaining_time() / 5, timer.elapsed_time() / 3)};
@@ -1247,13 +1248,15 @@ bool constraint_prop_t<i_t, f_t>::handle_fixed_vars(
   const f_t int_tol = sol.problem_ptr->tolerances.integrality_tolerance;
   // which other variables were affected?
   CUOPT_LOG_TRACE("handle_fixed_vars, unset vars hash 0x%x, sol.assignment hash 0x%x",
-                  detail::compute_hash(unset_vars),
-                  detail::compute_hash(sol.assignment));
+                  detail::compute_hash(make_span(unset_vars), sol.handle_ptr->get_stream()),
+                  detail::compute_hash(make_span(sol.assignment), sol.handle_ptr->get_stream()));
   CUOPT_LOG_TRACE(
     "handle_fixed_vars, original_problem->variable_bounds hash 0x%x, "
     "sol.problem_ptr->variable_bounds hash 0x%x",
-    detail::compute_hash(original_problem->variable_bounds),
-    detail::compute_hash(sol.problem_ptr->variable_bounds));
+    detail::compute_hash(make_span(original_problem->variable_bounds),
+                         sol.handle_ptr->get_stream()),
+    detail::compute_hash(make_span(sol.problem_ptr->variable_bounds),
+                         sol.handle_ptr->get_stream()));
 
   auto iter        = thrust::stable_partition(sol.handle_ptr->get_thrust_policy(),
                                        unset_vars.begin() + set_count,

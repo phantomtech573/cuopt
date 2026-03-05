@@ -26,6 +26,7 @@
 #include <mip_heuristics/solution/solution.cuh>
 #include <mip_heuristics/solver.cuh>
 #include <utilities/timer.hpp>
+#include <utilities/work_limit_timer.hpp>
 
 namespace cuopt::linear_programming::detail {
 
@@ -63,8 +64,9 @@ class diversity_manager_t {
                               solution_t<i_t, f_t>& sol2);
   bool run_local_search(solution_t<i_t, f_t>& solution,
                         const weight_t<i_t, f_t>& weights,
-                        timer_t& timer,
+                        work_limit_timer_t& timer,
                         ls_config_t<i_t, f_t>& ls_config);
+  bool work_limit_reached();
 
   void set_simplex_solution(const std::vector<f_t>& solution,
                             const std::vector<f_t>& dual_solution,
@@ -79,7 +81,7 @@ class diversity_manager_t {
   rmm::device_uvector<f_t> lp_dual_optimal_solution;
   std::atomic<bool> simplex_solution_exists{false};
   local_search_t<i_t, f_t> ls;
-  cuopt::timer_t timer;
+  cuopt::work_limit_timer_t timer;
   bound_prop_recombiner_t<i_t, f_t> bound_prop_recombiner;
   fp_recombiner_t<i_t, f_t> fp_recombiner;
   line_segment_recombiner_t<i_t, f_t> line_segment_recombiner;

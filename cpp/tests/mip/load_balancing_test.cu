@@ -9,6 +9,7 @@
 #include "mip_utils.cuh"
 
 #include <raft/sparse/detail/cusparse_wrappers.h>
+#include <cuopt/linear_programming/pdlp/pdlp_hyper_params.cuh>
 #include <mip_heuristics/presolve/bounds_presolve.cuh>
 #include <mip_heuristics/presolve/load_balanced_bounds_presolve.cuh>
 #include <mip_heuristics/problem/load_balanced_problem.cuh>
@@ -129,6 +130,7 @@ void test_multi_probe(std::string path)
   detail::problem_t<int, double> problem(op_problem);
   mip_solver_settings_t<int, double> default_settings{};
   detail::pdhg_solver_t<int, double> pdhg_solver(problem.handle_ptr, problem);
+  pdlp_hyper_params::pdlp_hyper_params_t hyper_params{};
   detail::pdlp_initial_scaling_strategy_t<int, double> scaling(&handle_,
                                                                problem,
                                                                10,
@@ -137,6 +139,7 @@ void test_multi_probe(std::string path)
                                                                problem.reverse_offsets,
                                                                problem.reverse_constraints,
                                                                nullptr,
+                                                               hyper_params,
                                                                true);
   detail::mip_solver_t<int, double> solver(problem, default_settings, scaling, cuopt::timer_t(0));
   detail::load_balanced_problem_t<int, double> lb_problem(problem);

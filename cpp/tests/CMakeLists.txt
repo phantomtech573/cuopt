@@ -1,4 +1,4 @@
-﻿# cmake-format: off
+# cmake-format: off
 # SPDX-FileCopyrightText: Copyright (c) 2021-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # cmake-format: on
@@ -101,16 +101,6 @@ function(ConfigureTest CMAKE_TEST_NAME)
     if(NOT DEFINED INSTALL_TARGET OR "${INSTALL_TARGET}" STREQUAL "")
       target_link_options(${CMAKE_TEST_NAME} PRIVATE -Wl,--enable-new-dtags)
     endif()
-
-    target_link_libraries(${CMAKE_TEST_NAME} PRIVATE
-        #cuopt::nvperf_target
-        #cuopt::nvperf_host
-        #cuopt::cupti
-        cuda
-    )
-    target_include_directories(${CMAKE_TEST_NAME} PRIVATE
-        "${cuopt_cupti_root}/include"
-    )
 
     add_test(NAME ${CMAKE_TEST_NAME} COMMAND ${CMAKE_TEST_NAME})
 

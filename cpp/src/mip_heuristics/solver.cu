@@ -236,18 +236,6 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     }
     CUOPT_LOG_INFO("Using %d CPU threads for B&B", branch_and_bound_settings.num_threads);
 
-    i_t num_threads        = branch_and_bound_settings.num_threads;
-    i_t num_bfs_threads    = std::max(1, num_threads / 4);
-    i_t num_diving_threads = std::max(1, num_threads - num_bfs_threads);
-    // deterministic mode: use BSP coordinator with multiple workers, no diving
-    if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-      // BSP mode can use multiple workers deterministically
-      num_bfs_threads    = std::max(1, num_threads);
-      num_diving_threads = 0;  // No diving in deterministic mode
-    }
-    branch_and_bound_settings.num_bfs_threads    = num_bfs_threads;
-    branch_and_bound_settings.num_diving_threads = num_diving_threads;
-
     // Set the branch and bound -> primal heuristics callback
     branch_and_bound_settings.solution_callback =
       std::bind(&branch_and_bound_solution_helper_t<i_t, f_t>::solution_callback,
@@ -290,11 +278,11 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
                   std::placeholders::_1);
     } else if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
       branch_and_bound->set_concurrent_lp_root_solve(false);
-      context.problem_ptr->branch_and_bound_callback =
-        [bb = branch_and_bound.get()](const std::vector<f_t>& solution) {
-          double vt = bb->get_current_bsp_horizon();
-          bb->set_new_solution_deterministic(solution, vt);
-        };
+      // TODO once deterministic GPU heuristics are integrated
+      // context.problem_ptr->branch_and_bound_callback =
+      //   [bb = branch_and_bound.get()](const std::vector<f_t>& solution) {
+      //     bb->queue_external_solution_deterministic(solution, 0.0);
+      //   };
     }
 
     context.work_unit_scheduler_.register_context(branch_and_bound->get_work_unit_context());

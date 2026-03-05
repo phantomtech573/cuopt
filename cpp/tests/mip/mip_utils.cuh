@@ -8,9 +8,14 @@
 #include <algorithm>
 #include <cuopt/linear_programming/mip/solver_settings.hpp>
 #include <cuopt/linear_programming/solve.hpp>
+#include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
 #include <mip_heuristics/problem/problem.cuh>
+#include <mip_heuristics/solution/solution.cuh>
+#include <mip_heuristics/solver.cuh>
 #include <mps_parser/parser.hpp>
+#include <pdlp/initial_scaling_strategy/initial_scaling.cuh>
 #include <utilities/copy_helpers.hpp>
+#include <utilities/timer.hpp>
 
 namespace cuopt::linear_programming::test {
 
@@ -197,6 +202,7 @@ static fj_state_t run_fj(detail::problem_t<int, double>& problem,
                          fj_tweaks_t tweaks                   = {},
                          std::vector<double> initial_solution = {})
 {
+  pdlp_hyper_params::pdlp_hyper_params_t hyper_params{};
   detail::pdlp_initial_scaling_strategy_t<int, double> scaling(problem.handle_ptr,
                                                                problem,
                                                                10,
@@ -205,6 +211,7 @@ static fj_state_t run_fj(detail::problem_t<int, double>& problem,
                                                                problem.reverse_offsets,
                                                                problem.reverse_constraints,
                                                                nullptr,
+                                                               hyper_params,
                                                                true);
 
   auto settings       = mip_solver_settings_t<int, double>{};

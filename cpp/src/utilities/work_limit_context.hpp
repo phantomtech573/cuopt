@@ -41,6 +41,8 @@ struct work_limit_context_t {
     global_work_units_elapsed += work;
     if (scheduler) { scheduler->on_work_recorded(*this, global_work_units_elapsed); }
   }
+
+  void record_work(double work) { record_work_sync_on_horizon(work); }
 };
 
 }  // namespace cuopt

@@ -7,6 +7,7 @@ set(UTIL_SRC_FILES ${CMAKE_CURRENT_SOURCE_DIR}/utilities/seed_generator.cu
                    ${CMAKE_CURRENT_SOURCE_DIR}/utilities/logger.cpp
                    ${CMAKE_CURRENT_SOURCE_DIR}/utilities/version_info.cpp
                    ${CMAKE_CURRENT_SOURCE_DIR}/utilities/timestamp_utils.cpp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/utilities/work_unit_predictor.cpp
                    ${CMAKE_CURRENT_SOURCE_DIR}/utilities/work_unit_scheduler.cpp)
 
 add_subdirectory(pdlp)

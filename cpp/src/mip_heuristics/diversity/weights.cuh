@@ -12,7 +12,7 @@
 #include <rmm/device_scalar.hpp>
 #include <rmm/device_uvector.hpp>
 
-#include <mip/utils.cuh>
+#include <mip_heuristics/utils.cuh>
 
 namespace cuopt::linear_programming::detail {
 

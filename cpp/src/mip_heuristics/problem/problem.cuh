@@ -126,8 +126,6 @@ class problem_t {
 
   uint32_t get_fingerprint() const;
 
-  uint32_t get_fingerprint() const;
-
   void add_cutting_plane_at_objective(f_t objective);
   void compute_vars_with_objective_coeffs();
   void test_problem_fixing_time();

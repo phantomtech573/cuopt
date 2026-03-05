@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights
  * reserved. SPDX-License-Identifier: Apache-2.0
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,20 +20,21 @@
 #include "mip_utils.cuh"
 
 #include <cuopt/error.hpp>
+#include <cuopt/linear_programming/pdlp/pdlp_hyper_params.cuh>
 #include <cuopt/linear_programming/solve.hpp>
 #include <cuopt/linear_programming/utilities/internals.hpp>
-#include <linear_programming/initial_scaling_strategy/initial_scaling.cuh>
-#include <linear_programming/pdlp.cuh>
-#include <linear_programming/restart_strategy/pdlp_restart_strategy.cuh>
-#include <linear_programming/step_size_strategy/adaptive_step_size_strategy.hpp>
-#include <linear_programming/utilities/problem_checking.cuh>
-#include <mip/diversity/diversity_manager.cuh>
-#include <mip/feasibility_jump/feasibility_jump.cuh>
-#include <mip/local_search/local_search.cuh>
-#include <mip/relaxed_lp/relaxed_lp.cuh>
-#include <mip/solution/solution.cuh>
-#include <mip/solver_context.cuh>
+#include <mip_heuristics/diversity/diversity_manager.cuh>
+#include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
+#include <mip_heuristics/local_search/local_search.cuh>
+#include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
+#include <mip_heuristics/solution/solution.cuh>
+#include <mip_heuristics/solver_context.cuh>
 #include <mps_parser/parser.hpp>
+#include <pdlp/initial_scaling_strategy/initial_scaling.cuh>
+#include <pdlp/pdlp.cuh>
+#include <pdlp/restart_strategy/pdlp_restart_strategy.cuh>
+#include <pdlp/step_size_strategy/adaptive_step_size_strategy.hpp>
+#include <pdlp/utilities/problem_checking.cuh>
 #include <utilities/common_utils.hpp>
 #include <utilities/seed_generator.cuh>
 
@@ -64,13 +65,7 @@ void init_handler(const raft::handle_t* handle_ptr)
     handle_ptr->get_cusparse_handle(), CUSPARSE_POINTER_MODE_DEVICE, handle_ptr->get_stream()));
 }
 
-static void setup_device_symbols(rmm::cuda_stream_view stream_view)
-{
-  raft::common::nvtx::range fun_scope("Setting device symbol");
-  detail::set_adaptive_step_size_hyper_parameters(stream_view);
-  detail::set_restart_hyper_parameters(stream_view);
-  detail::set_pdlp_hyper_parameters(stream_view);
-}
+static void setup_device_symbols(rmm::cuda_stream_view stream_view) { (void)stream_view; }
 
 static uint32_t test_full_run_determinism(std::string path,
                                           unsigned long seed = std::random_device{}())
@@ -90,6 +85,7 @@ static uint32_t test_full_run_determinism(std::string path,
 
   setup_device_symbols(op_problem.get_handle_ptr()->get_stream());
 
+  pdlp_hyper_params::pdlp_hyper_params_t hyper_params{};
   detail::pdlp_initial_scaling_strategy_t<int, double> scaling(&handle_,
                                                                problem,
                                                                10,
@@ -98,6 +94,7 @@ static uint32_t test_full_run_determinism(std::string path,
                                                                problem.reverse_offsets,
                                                                problem.reverse_constraints,
                                                                nullptr,
+                                                               hyper_params,
                                                                true);
 
   auto settings             = mip_solver_settings_t<int, double>{};
@@ -146,6 +143,7 @@ static uint32_t test_initial_solution_determinism(std::string path,
 
   setup_device_symbols(op_problem.get_handle_ptr()->get_stream());
 
+  pdlp_hyper_params::pdlp_hyper_params_t hyper_params{};
   detail::pdlp_initial_scaling_strategy_t<int, double> scaling(&handle_,
                                                                problem,
                                                                10,
@@ -154,6 +152,7 @@ static uint32_t test_initial_solution_determinism(std::string path,
                                                                problem.reverse_offsets,
                                                                problem.reverse_constraints,
                                                                nullptr,
+                                                               hyper_params,
                                                                true);
 
   auto settings             = mip_solver_settings_t<int, double>{};
@@ -202,6 +201,7 @@ static uint32_t test_recombiners_determinism(std::string path,
 
   setup_device_symbols(op_problem.get_handle_ptr()->get_stream());
 
+  pdlp_hyper_params::pdlp_hyper_params_t hyper_params{};
   detail::pdlp_initial_scaling_strategy_t<int, double> scaling(&handle_,
                                                                problem,
                                                                10,
@@ -210,6 +210,7 @@ static uint32_t test_recombiners_determinism(std::string path,
                                                                problem.reverse_offsets,
                                                                problem.reverse_constraints,
                                                                nullptr,
+                                                               hyper_params,
                                                                true);
 
   auto settings             = mip_solver_settings_t<int, double>{};
@@ -314,7 +315,6 @@ class DiversityTestParams : public testing::TestWithParam<std::tuple<std::string
 //   std::cerr << "Tested with seed " << seed << "\n";
 //   auto path     = make_path_absolute(test_instance);
 //   test_instance = std::getenv("CUOPT_INSTANCE") ? std::getenv("CUOPT_INSTANCE") : test_instance;
-//   path          = "/home/scratch.yboucher_gpu_1/collection/" + test_instance;
 //   uint32_t gold_hash = 0;
 //   for (int i = 0; i < 2; ++i) {
 //     cuopt::seed_generator::set_seed(seed);
@@ -344,7 +344,6 @@ class DiversityTestParams : public testing::TestWithParam<std::tuple<std::string
 //   std::cerr << "Tested with seed " << seed << "\n";
 //   auto path     = make_path_absolute(test_instance);
 //   test_instance = std::getenv("CUOPT_INSTANCE") ? std::getenv("CUOPT_INSTANCE") : test_instance;
-//   path          = "/home/scratch.yboucher_gpu_1/collection/" + test_instance;
 //   uint32_t gold_hash = 0;
 //   for (int i = 0; i < 2; ++i) {
 //     cuopt::seed_generator::set_seed(seed);
@@ -372,9 +371,11 @@ TEST_P(DiversityTestParams, full_run_deterministic)
   int seed =
     std::getenv("CUOPT_SEED") ? std::stoi(std::getenv("CUOPT_SEED")) : std::random_device{}();
   std::cerr << "Tested with seed " << seed << "\n";
-  auto path     = make_path_absolute(test_instance);
-  test_instance = std::getenv("CUOPT_INSTANCE") ? std::getenv("CUOPT_INSTANCE") : test_instance;
-  path          = "/home/scratch.yboucher_gpu_1/collection/" + test_instance;
+  auto path = make_path_absolute(test_instance);
+  if (std::getenv("CUOPT_INSTANCE")) {
+    test_instance = std::getenv("CUOPT_INSTANCE");
+    path          = make_path_absolute(test_instance);
+  }
   uint32_t gold_hash = 0;
   for (int i = 0; i < 2; ++i) {
     cuopt::seed_generator::set_seed(seed);

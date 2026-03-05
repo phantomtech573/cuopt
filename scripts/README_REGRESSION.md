@@ -13,7 +13,19 @@ The workflow consists of two steps:
 Install required dependencies:
 
 ```bash
-pip install -r requirements.txt
+pip install numpy pandas scikit-learn joblib
+```
+
+Optional model backends:
+
+```bash
+pip install xgboost lightgbm
+```
+
+Optional C source export dependencies:
+
+```bash
+pip install treelite tl2cgen
 ```
 
 ## Usage

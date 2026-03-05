@@ -19,29 +19,12 @@
 #include <algorithm>
 #include <string>
 
-#include <mip/logger.hpp>
+#include <mip_heuristics/logger.hpp>
 
 #include "timer.hpp"
-#include "work_unit_scheduler.hpp"
+#include "work_limit_context.hpp"
 
 namespace cuopt {
-
-struct work_limit_context_t {
-  double global_work_units_elapsed{0.0};
-  double total_sync_time{0.0};  // Total time spent waiting at sync barriers (seconds)
-  bool deterministic{false};
-  work_unit_scheduler_t* scheduler{nullptr};
-  std::string name;
-
-  work_limit_context_t(const std::string& name) : name(name) {}
-
-  void record_work(double work)
-  {
-    if (!deterministic) return;
-    global_work_units_elapsed += work;
-    if (scheduler) { scheduler->on_work_recorded(*this, global_work_units_elapsed); }
-  }
-};
 
 // In determinism mode, relies on a work limit accumulator; otherwise rely on a timer
 // in non-determinism mode: 1s = 1wu
@@ -62,6 +45,16 @@ class work_limit_timer_t {
       timer(work_limit_),
       work_context(&context),
       work_units_at_start(context.deterministic ? context.global_work_units_elapsed : 0)
+  {
+  }
+
+  // Compatibility constructor for non-deterministic contexts.
+  explicit work_limit_timer_t(double time_limit_)
+    : deterministic(false),
+      work_limit(time_limit_),
+      timer(time_limit_),
+      work_context(nullptr),
+      work_units_at_start(0)
   {
   }
 
@@ -113,7 +106,7 @@ class work_limit_timer_t {
                       work_units,
                       timer.elapsed_time(),
                       work_context->global_work_units_elapsed);
-      work_context->record_work(work_units);
+      work_context->record_work_sync_on_horizon(work_units);
     }
   }
 

@@ -136,7 +136,8 @@ struct fj_staged_score_t {
   int32_t base{std::numeric_limits<int32_t>::lowest()};
   int32_t bonus{std::numeric_limits<int32_t>::lowest()};
 
-  fj_staged_score_t()                                    = default;
+  fj_staged_score_t() = default;
+  HDI fj_staged_score_t(int32_t base_, int32_t bonus_) : base(base_), bonus(bonus_) {}
   fj_staged_score_t(const fj_staged_score_t&)            = default;
   fj_staged_score_t(fj_staged_score_t&&)                 = default;
   fj_staged_score_t& operator=(const fj_staged_score_t&) = default;

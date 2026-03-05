@@ -173,9 +173,10 @@ class bound_prop_recombiner_t : public recombiner_t<i_t, f_t> {
                     n_different_vars,
                     n_vars_from_other,
                     n_vars_from_guiding);
-    CUOPT_LOG_TRACE("BP_DET: remaining_indices_hash=0x%x (first %d elements)",
-                    detail::compute_hash(this->remaining_indices),
-                    std::min((i_t)10, n_vars_from_other));
+    CUOPT_LOG_TRACE(
+      "BP_DET: remaining_indices_hash=0x%x (first %d elements)",
+      detail::compute_hash(make_span(this->remaining_indices), a.handle_ptr->get_stream()),
+      std::min((i_t)10, n_vars_from_other));
     CUOPT_LOG_TRACE("BP_DET: guiding_feasible=%d other_feasible=%d expensive_to_fix=%d",
                     guiding_solution.get_feasible(),
                     other_solution.get_feasible(),
@@ -201,7 +202,7 @@ class bound_prop_recombiner_t : public recombiner_t<i_t, f_t> {
     if (guiding_solution.get_feasible() && !a.problem_ptr->expensive_to_fix_vars) {
       CUOPT_LOG_DEBUG("BP_DET: Taking FEASIBLE path (with variable fixing)");
       this->compute_vars_to_fix(offspring, vars_to_fix, n_vars_from_other, n_vars_from_guiding);
-      CUOPT_LOG_DEBUG("BP_DET: vars_to_fix_hash=0x%x", detail::compute_hash(vars_to_fix));
+      CUOPT_LOG_DEBUG("BP_DET: vars_to_fix_size=%lu", vars_to_fix.size());
       auto [fixed_problem, fixed_assignment, variable_map] = offspring.fix_variables(vars_to_fix);
       CUOPT_LOG_DEBUG("BP_DET: fixed_problem_fingerprint=0x%x variable_map_size=%lu",
                       fixed_problem.get_fingerprint(),
@@ -256,7 +257,8 @@ class bound_prop_recombiner_t : public recombiner_t<i_t, f_t> {
       get_probing_values_for_infeasible(
         guiding_solution, other_solution, offspring, probing_values, n_vars_from_other);
       probing_config.probing_values = host_copy(probing_values, offspring.handle_ptr->get_stream());
-      CUOPT_LOG_TRACE("BP_DET: probing_values_hash=0x%x", detail::compute_hash(probing_values));
+      CUOPT_LOG_TRACE("BP_DET: probing_values_hash=0x%x",
+                      detail::compute_hash(make_span(probing_values), a.handle_ptr->get_stream()));
       constraint_prop.apply_round(offspring, lp_run_time_after_feasible, timer, probing_config);
     }
     CUOPT_LOG_TRACE("BP_DET: After apply_round: offspring_hash=0x%x feasible=%d",

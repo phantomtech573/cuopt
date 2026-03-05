@@ -10,17 +10,18 @@
 #include "mip_utils.cuh"
 
 #include <raft/sparse/detail/cusparse_wrappers.h>
+#include <cuopt/linear_programming/pdlp/pdlp_hyper_params.cuh>
 #include <cuopt/linear_programming/solve.hpp>
-#include <linear_programming/initial_scaling_strategy/initial_scaling.cuh>
-#include <linear_programming/utilities/problem_checking.cuh>
-#include <mip/presolve/bounds_presolve.cuh>
-#include <mip/presolve/multi_probe.cuh>
-#include <mip/presolve/trivial_presolve.cuh>
-#include <mip/utils.cuh>
+#include <mip_heuristics/presolve/bounds_presolve.cuh>
+#include <mip_heuristics/presolve/multi_probe.cuh>
 #include <mip_heuristics/presolve/third_party_presolve.hpp>
+#include <mip_heuristics/presolve/trivial_presolve.cuh>
 #include <mip_heuristics/problem/problem.cuh>
+#include <mip_heuristics/utils.cuh>
 #include <mps_parser/mps_data_model.hpp>
 #include <mps_parser/parser.hpp>
+#include <pdlp/initial_scaling_strategy/initial_scaling.cuh>
+#include <pdlp/utilities/problem_checking.cuh>
 #include <pdlp/utils.cuh>
 #include <utilities/common_utils.hpp>
 #include <utilities/copy_helpers.hpp>
@@ -112,6 +113,7 @@ uint32_t test_probing_cache_determinism(std::string path,
   detail::problem_t<int, double> problem(op_problem);
   mip_solver_settings_t<int, double> default_settings{};
   default_settings.mip_scaling = false;  // we're not checking scaling determinism here
+  pdlp_hyper_params::pdlp_hyper_params_t hyper_params{};
   detail::pdlp_initial_scaling_strategy_t<int, double> scaling(&handle_,
                                                                problem,
                                                                10,
@@ -120,6 +122,7 @@ uint32_t test_probing_cache_determinism(std::string path,
                                                                problem.reverse_offsets,
                                                                problem.reverse_constraints,
                                                                nullptr,
+                                                               hyper_params,
                                                                true);
   detail::mip_solver_t<int, double> solver(problem, default_settings, scaling, cuopt::timer_t(0));
   detail::bound_presolve_t<int, double> bnd_prb(solver.context);
@@ -181,20 +184,22 @@ uint32_t test_scaling_determinism(std::string path, unsigned long seed = std::ra
   problem_checking_t<int, double>::check_problem_representation(op_problem);
   detail::problem_t<int, double> problem(op_problem);
 
-  pdlp_hyper_params::update_primal_weight_on_initial_solution = false;
-  pdlp_hyper_params::update_step_size_on_initial_solution     = true;
+  pdlp_hyper_params::pdlp_hyper_params_t hyper_params{};
+  hyper_params.update_primal_weight_on_initial_solution = false;
+  hyper_params.update_step_size_on_initial_solution     = true;
   // problem contains unpreprocessed data
   detail::problem_t<int, double> scaled_problem(problem);
 
   detail::pdlp_initial_scaling_strategy_t<int, double> scaling(
     scaled_problem.handle_ptr,
     scaled_problem,
-    pdlp_hyper_params::default_l_inf_ruiz_iterations,
-    (double)pdlp_hyper_params::default_alpha_pock_chambolle_rescaling,
+    hyper_params.default_l_inf_ruiz_iterations,
+    (double)hyper_params.default_alpha_pock_chambolle_rescaling,
     scaled_problem.reverse_coefficients,
     scaled_problem.reverse_offsets,
     scaled_problem.reverse_constraints,
     nullptr,
+    hyper_params,
     true);
 
   scaling.scale_problem();

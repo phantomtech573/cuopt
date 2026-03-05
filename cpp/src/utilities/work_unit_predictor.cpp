@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights
  * reserved. SPDX-License-Identifier: Apache-2.0
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +21,8 @@
 #include <chrono>
 #include <cstring>
 #include <limits>
-#include <mip/logger.hpp>
-#include <raft/common/nvtx.hpp>
+#include <mip_heuristics/logger.hpp>
+#include <raft/core/nvtx.hpp>
 #include <stdexcept>
 
 #include "models/cpufj_predictor/header.h"

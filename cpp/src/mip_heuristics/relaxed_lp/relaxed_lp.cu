@@ -76,9 +76,8 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   pdlp_settings.time_limit                           = settings.time_limit;
   pdlp_settings.iteration_limit                      = settings.iteration_limit;
 
-  // CHANGE
-  i_t work_limit                        = settings.work_limit;
-  bool determinism_mode                 = work_limit != std::numeric_limits<double>::infinity();
+  const f_t work_limit                  = settings.work_limit;
+  const bool determinism_mode           = std::isfinite(work_limit);
   pdlp_settings.concurrent_halt         = settings.concurrent_halt;
   pdlp_settings.per_constraint_residual = settings.per_constraint_residual;
   pdlp_settings.first_primal_feasible   = settings.return_first_feasible;
@@ -95,14 +94,10 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
       estim_iters += 100;
     } while (true);
     CUOPT_LOG_DEBUG("estimated iterations %d for work limit %f", estim_iters, settings.work_limit);
-    pdlp_settings.iteration_limit         = estim_iters;
-    pdlp_settings.time_limit              = std::numeric_limits<double>::infinity();
-    pdlp_settings.pdlp_solver_mode        = pdlp_solver_mode_t::Stable3;
-    pdlp_settings.concurrent_halt         = settings.concurrent_halt;
-    pdlp_settings.per_constraint_residual = settings.per_constraint_residual;
-    pdlp_settings.first_primal_feasible   = settings.return_first_feasible;
-    pdlp_settings.pdlp_solver_mode        = pdlp_solver_mode_t::Stable2;
-    pdlp_settings.presolver               = presolver_t::None;
+    pdlp_settings.iteration_limit  = estim_iters;
+    pdlp_settings.time_limit       = std::numeric_limits<double>::infinity();
+    pdlp_settings.pdlp_solver_mode = pdlp_solver_mode_t::Stable3;
+    pdlp_settings.presolver        = presolver_t::None;
   }
   set_pdlp_solver_mode(pdlp_settings);
   // TODO: set Stable3 here?
@@ -137,11 +132,10 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   // temporarily add timer
   auto start_time = timer_t(pdlp_settings.time_limit);
   lp_solver.set_inside_mip(true);
-  CUOPT_LOG_DEBUG("prev primal hash 0x%x", detail::compute_hash(assignment));
-  CUOPT_LOG_DEBUG("prev dual hash 0x%x", detail::compute_hash(lp_state.prev_dual));
+  CUOPT_LOG_DEBUG(
+    "prev solution sizes primal=%lu dual=%lu", assignment.size(), lp_state.prev_dual.size());
   auto solver_response = lp_solver.run_solver(start_time);
-  CUOPT_LOG_DEBUG("post LP primal hash 0x%x",
-                  detail::compute_hash(solver_response.get_primal_solution()));
+  CUOPT_LOG_DEBUG("post LP primal size %lu", solver_response.get_primal_solution().size());
 
   if (solver_response.get_primal_solution().size() != 0 &&
       solver_response.get_dual_solution().size() != 0 && settings.save_state) {
@@ -159,10 +153,9 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
     // CUOPT_LOG_DEBUG("feasible solution found with LP objective %f",
     //                 solver_response.get_objective_value());
   } else {
-    CUOPT_LOG_DEBUG("LP returned with reason %d, %d iterations, sol hash 0x%x",
+    CUOPT_LOG_DEBUG("LP returned with reason %d, %d iterations",
                     solver_response.get_termination_status(),
-                    solver_response.get_additional_termination_information().number_of_steps_taken,
-                    compute_hash(assignment));
+                    solver_response.get_additional_termination_information().number_of_steps_taken);
   }
 
   // auto function_end_time = std::chrono::high_resolution_clock::now();

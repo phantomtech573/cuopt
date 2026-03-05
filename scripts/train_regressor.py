@@ -2062,7 +2062,6 @@ Examples:
 
     # Apply scaling if needed
     scaler = None
-    needs_scaling = False
     X_test_original = X_test.copy()  # Keep unscaled version for display
     if needs_scaling:
         print("  Applying StandardScaler to features...")

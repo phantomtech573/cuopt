@@ -9,7 +9,7 @@
 
 #include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
 #include <mip_heuristics/local_search/rounding/constraint_prop.cuh>
-#include <utilities/timer.hpp>
+#include <utilities/work_limit_timer.hpp>
 
 namespace cuopt::linear_programming::detail {
 

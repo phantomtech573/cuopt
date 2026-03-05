@@ -318,8 +318,8 @@ DI std::pair<f_t, typename fj_t<i_t, f_t>::move_score_info_t> compute_best_mtm(
     f_t c_lb = fj.pb.constraint_lower_bounds[cstr_idx];
     f_t c_ub = fj.pb.constraint_upper_bounds[cstr_idx];
     f_t new_val;
-    auto [delta_ij, sign, slack, cstr_tolerance] = get_mtm_for_constraint<i_t, f_t, move_type>(
-      fj, var_idx, cstr_idx, cstr_coeff, c_lb, c_ub, fj.incumbent_assignment, fj.incumbent_lhs);
+    auto [delta_ij, sign, slack, cstr_tolerance] =
+      get_mtm_for_constraint<i_t, f_t, move_type>(fj, var_idx, cstr_idx, cstr_coeff, c_lb, c_ub);
     if (fj.pb.is_integer_var(var_idx)) {
       new_val = cstr_coeff * sign > 0
                   ? floor(old_val + delta_ij + fj.pb.tolerances.integrality_tolerance)
@@ -760,14 +760,8 @@ DI void update_lift_moves(typename fj_t<i_t, f_t>::climber_data_t::view_t fj)
       // Process each bound separately, as both are satified and may both be finite
       // otherwise range constraints aren't correctly handled
       for (auto [bound, sign] : {std::make_tuple(c_lb, -1), std::make_tuple(c_ub, 1)}) {
-        auto [delta, slack] = get_mtm_for_bound<i_t, f_t>(fj,
-                                                          var_idx,
-                                                          cstr_idx,
-                                                          cstr_coeff,
-                                                          bound,
-                                                          sign,
-                                                          fj.incumbent_assignment,
-                                                          fj.incumbent_lhs);
+        auto [delta, slack] =
+          get_mtm_for_bound<i_t, f_t>(fj, var_idx, cstr_idx, cstr_coeff, bound, sign);
 
         if (cstr_coeff * sign < 0) {
           if (fj.pb.is_integer_var(var_idx)) delta = ceil(delta);

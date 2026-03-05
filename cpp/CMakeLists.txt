@@ -65,9 +65,6 @@ message(VERBOSE "cuOpt: fatbin: ${WRITE_FATBIN}")
 
 # CUDA runtime
 rapids_cuda_init_runtime(USE_STATIC ON)
-message(STATUS "HEY")
-find_package(CUDAToolkit)
-message(STATUS "HEY")
 
 rapids_find_package(CUDAToolkit REQUIRED
   BUILD_EXPORT_SET cuopt-exports

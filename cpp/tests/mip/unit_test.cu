@@ -123,165 +123,165 @@ mps_parser::mps_data_model_t<int, double> create_single_var_milp_problem(bool ma
   return problem;
 }
 
-// TEST(LPTest, TestSampleLP2)
-// {
-//   raft::handle_t handle;
+TEST(LPTest, TestSampleLP2)
+{
+  raft::handle_t handle;
 
-//   // Construct a simple LP problem:
-//   // Minimize:    x
-//   // Subject to:  x <= 1
-//   //              x <= 1
-//   //              x >= 0
+  // Construct a simple LP problem:
+  // Minimize:    x
+  // Subject to:  x <= 1
+  //              x <= 1
+  //              x >= 0
 
-//   // One variable, two constraints (both x <= 1)
-//   std::vector<double> A_values = {1.0, 1.0};
-//   std::vector<int> A_indices   = {0, 0};
-//   std::vector<int> A_offsets   = {0, 1, 2};  // CSR: 2 constraints, 1 variable
+  // One variable, two constraints (both x <= 1)
+  std::vector<double> A_values = {1.0, 1.0};
+  std::vector<int> A_indices   = {0, 0};
+  std::vector<int> A_offsets   = {0, 1, 2};  // CSR: 2 constraints, 1 variable
 
-//   std::vector<double> b       = {1.0, 1.0};  // RHS for both constraints
-//   std::vector<double> b_lower = {-std::numeric_limits<double>::infinity(),
-//                                  -std::numeric_limits<double>::infinity()};
+  std::vector<double> b       = {1.0, 1.0};  // RHS for both constraints
+  std::vector<double> b_lower = {-std::numeric_limits<double>::infinity(),
+                                 -std::numeric_limits<double>::infinity()};
 
-//   std::vector<double> c = {1.0};  // Objective: Minimize x
+  std::vector<double> c = {1.0};  // Objective: Minimize x
 
-//   std::vector<char> row_types = {'L', 'L'};  // Both constraints are <=
+  std::vector<char> row_types = {'L', 'L'};  // Both constraints are <=
 
-//   // Build the problem
-//   mps_parser::mps_data_model_t<int, double> problem;
-//   problem.set_csr_constraint_matrix(A_values.data(),
-//                                     A_values.size(),
-//                                     A_indices.data(),
-//                                     A_indices.size(),
-//                                     A_offsets.data(),
-//                                     A_offsets.size());
-//   problem.set_constraint_upper_bounds(b.data(), b.size());
-//   problem.set_constraint_lower_bounds(b_lower.data(), b_lower.size());
+  // Build the problem
+  mps_parser::mps_data_model_t<int, double> problem;
+  problem.set_csr_constraint_matrix(A_values.data(),
+                                    A_values.size(),
+                                    A_indices.data(),
+                                    A_indices.size(),
+                                    A_offsets.data(),
+                                    A_offsets.size());
+  problem.set_constraint_upper_bounds(b.data(), b.size());
+  problem.set_constraint_lower_bounds(b_lower.data(), b_lower.size());
 
-//   // Set variable bounds (x >= 0)
-//   std::vector<double> var_lower = {0.0};
-//   std::vector<double> var_upper = {std::numeric_limits<double>::infinity()};
-//   problem.set_variable_lower_bounds(var_lower.data(), var_lower.size());
-//   problem.set_variable_upper_bounds(var_upper.data(), var_upper.size());
+  // Set variable bounds (x >= 0)
+  std::vector<double> var_lower = {0.0};
+  std::vector<double> var_upper = {std::numeric_limits<double>::infinity()};
+  problem.set_variable_lower_bounds(var_lower.data(), var_lower.size());
+  problem.set_variable_upper_bounds(var_upper.data(), var_upper.size());
 
-//   problem.set_objective_coefficients(c.data(), c.size());
-//   problem.set_maximize(false);
-//   // Set up solver settings
-//   cuopt::linear_programming::pdlp_solver_settings_t<int, double> settings{};
-//   settings.set_optimality_tolerance(1e-2);
-//   settings.method     = cuopt::linear_programming::method_t::PDLP;
-//   settings.time_limit = 5;
+  problem.set_objective_coefficients(c.data(), c.size());
+  problem.set_maximize(false);
+  // Set up solver settings
+  cuopt::linear_programming::pdlp_solver_settings_t<int, double> settings{};
+  settings.set_optimality_tolerance(1e-2);
+  settings.method     = cuopt::linear_programming::method_t::PDLP;
+  settings.time_limit = 5;
 
-//   // Solve
-//   auto result = cuopt::linear_programming::solve_lp(&handle, problem, settings);
+  // Solve
+  auto result = cuopt::linear_programming::solve_lp(&handle, problem, settings);
 
-//   // Check results
-//   EXPECT_EQ(result.get_termination_status(),
-//             cuopt::linear_programming::pdlp_termination_status_t::Optimal);
-//   ASSERT_EQ(result.get_primal_solution().size(), 1);
+  // Check results
+  EXPECT_EQ(result.get_termination_status(),
+            cuopt::linear_programming::pdlp_termination_status_t::Optimal);
+  ASSERT_EQ(result.get_primal_solution().size(), 1);
 
-//   // Copy solution to host to access values
-//   auto primal_host = cuopt::host_copy(result.get_primal_solution(), handle.get_stream());
-//   EXPECT_NEAR(primal_host[0], 0.0, 1e-6);
+  // Copy solution to host to access values
+  auto primal_host = cuopt::host_copy(result.get_primal_solution(), handle.get_stream());
+  EXPECT_NEAR(primal_host[0], 0.0, 1e-6);
 
-//   EXPECT_NEAR(result.get_additional_termination_information().primal_objective, 0.0, 1e-6);
-//   EXPECT_NEAR(result.get_additional_termination_information().dual_objective, 0.0, 1e-6);
-// }
+  EXPECT_NEAR(result.get_additional_termination_information().primal_objective, 0.0, 1e-6);
+  EXPECT_NEAR(result.get_additional_termination_information().dual_objective, 0.0, 1e-6);
+}
 
-// TEST(LPTest, TestSampleLP)
-// {
-//   raft::handle_t handle;
-//   auto problem = create_std_lp_problem();
+TEST(LPTest, TestSampleLP)
+{
+  raft::handle_t handle;
+  auto problem = create_std_lp_problem();
 
-//   cuopt::linear_programming::pdlp_solver_settings_t<int, double> settings{};
-//   settings.set_optimality_tolerance(1e-4);
-//   settings.time_limit = 5;
-//   settings.presolver  = cuopt::linear_programming::presolver_t::None;
+  cuopt::linear_programming::pdlp_solver_settings_t<int, double> settings{};
+  settings.set_optimality_tolerance(1e-4);
+  settings.time_limit = 5;
+  settings.presolver  = cuopt::linear_programming::presolver_t::None;
 
-//   auto result = cuopt::linear_programming::solve_lp(&handle, problem, settings);
+  auto result = cuopt::linear_programming::solve_lp(&handle, problem, settings);
 
-//   EXPECT_EQ(result.get_termination_status(),
-//             cuopt::linear_programming::pdlp_termination_status_t::Optimal);
-// }
+  EXPECT_EQ(result.get_termination_status(),
+            cuopt::linear_programming::pdlp_termination_status_t::Optimal);
+}
 
-// TEST(ErrorTest, TestError)
-// {
-//   raft::handle_t handle;
-//   auto problem = create_std_milp_problem(false);
+TEST(ErrorTest, TestError)
+{
+  raft::handle_t handle;
+  auto problem = create_std_milp_problem(false);
 
-//   cuopt::linear_programming::mip_solver_settings_t<int, double> settings{};
-//   settings.time_limit = 5;
-//   settings.presolver  = cuopt::linear_programming::presolver_t::None;
+  cuopt::linear_programming::mip_solver_settings_t<int, double> settings{};
+  settings.time_limit = 5;
+  settings.presolver  = cuopt::linear_programming::presolver_t::None;
 
-//   // Set constraint bounds
-//   std::vector<double> lower_bounds = {1.0};
-//   std::vector<double> upper_bounds = {1.0, 1.0};
-//   problem.set_constraint_lower_bounds(lower_bounds.data(), lower_bounds.size());
-//   problem.set_constraint_upper_bounds(upper_bounds.data(), upper_bounds.size());
+  // Set constraint bounds
+  std::vector<double> lower_bounds = {1.0};
+  std::vector<double> upper_bounds = {1.0, 1.0};
+  problem.set_constraint_lower_bounds(lower_bounds.data(), lower_bounds.size());
+  problem.set_constraint_upper_bounds(upper_bounds.data(), upper_bounds.size());
 
-//   auto result = cuopt::linear_programming::solve_mip(&handle, problem, settings);
+  auto result = cuopt::linear_programming::solve_mip(&handle, problem, settings);
 
-//   EXPECT_EQ(result.get_termination_status(),
-//             cuopt::linear_programming::mip_termination_status_t::NoTermination);
-// }
+  EXPECT_EQ(result.get_termination_status(),
+            cuopt::linear_programming::mip_termination_status_t::NoTermination);
+}
 
-// class MILPTestParams
-//   : public testing::TestWithParam<
-//       std::tuple<bool, bool, bool, cuopt::linear_programming::mip_termination_status_t>> {};
+class MILPTestParams
+  : public testing::TestWithParam<
+      std::tuple<bool, bool, bool, cuopt::linear_programming::mip_termination_status_t>> {};
 
-// TEST_P(MILPTestParams, TestSampleMILP)
-// {
-//   bool maximize                    = std::get<0>(GetParam());
-//   bool scaling                     = std::get<1>(GetParam());
-//   bool heuristics_only             = std::get<2>(GetParam());
-//   auto expected_termination_status = std::get<3>(GetParam());
+TEST_P(MILPTestParams, TestSampleMILP)
+{
+  bool maximize                    = std::get<0>(GetParam());
+  bool scaling                     = std::get<1>(GetParam());
+  bool heuristics_only             = std::get<2>(GetParam());
+  auto expected_termination_status = std::get<3>(GetParam());
 
-//   raft::handle_t handle;
-//   auto problem = create_std_milp_problem(maximize);
+  raft::handle_t handle;
+  auto problem = create_std_milp_problem(maximize);
 
-//   cuopt::linear_programming::mip_solver_settings_t<int, double> settings{};
-//   settings.time_limit      = 5;
-//   settings.mip_scaling     = scaling;
-//   settings.heuristics_only = heuristics_only;
-//   settings.presolver       = cuopt::linear_programming::presolver_t::None;
+  cuopt::linear_programming::mip_solver_settings_t<int, double> settings{};
+  settings.time_limit      = 5;
+  settings.mip_scaling     = scaling;
+  settings.heuristics_only = heuristics_only;
+  settings.presolver       = cuopt::linear_programming::presolver_t::None;
 
-//   auto result = cuopt::linear_programming::solve_mip(&handle, problem, settings);
+  auto result = cuopt::linear_programming::solve_mip(&handle, problem, settings);
 
-//   EXPECT_EQ(result.get_termination_status(), expected_termination_status);
-// }
+  EXPECT_EQ(result.get_termination_status(), expected_termination_status);
+}
 
-// TEST_P(MILPTestParams, TestSingleVarMILP)
-// {
-//   bool maximize                    = std::get<0>(GetParam());
-//   bool scaling                     = std::get<1>(GetParam());
-//   bool heuristics_only             = std::get<2>(GetParam());
-//   auto expected_termination_status = std::get<3>(GetParam());
+TEST_P(MILPTestParams, TestSingleVarMILP)
+{
+  bool maximize                    = std::get<0>(GetParam());
+  bool scaling                     = std::get<1>(GetParam());
+  bool heuristics_only             = std::get<2>(GetParam());
+  auto expected_termination_status = std::get<3>(GetParam());
 
-//   raft::handle_t handle;
-//   auto problem = create_single_var_milp_problem(maximize);
+  raft::handle_t handle;
+  auto problem = create_single_var_milp_problem(maximize);
 
-//   cuopt::linear_programming::mip_solver_settings_t<int, double> settings{};
-//   settings.time_limit      = 5;
-//   settings.mip_scaling     = scaling;
-//   settings.heuristics_only = heuristics_only;
-//   settings.presolver       = cuopt::linear_programming::presolver_t::None;
+  cuopt::linear_programming::mip_solver_settings_t<int, double> settings{};
+  settings.time_limit      = 5;
+  settings.mip_scaling     = scaling;
+  settings.heuristics_only = heuristics_only;
+  settings.presolver       = cuopt::linear_programming::presolver_t::None;
 
-//   auto result = cuopt::linear_programming::solve_mip(&handle, problem, settings);
+  auto result = cuopt::linear_programming::solve_mip(&handle, problem, settings);
 
-//   EXPECT_EQ(result.get_termination_status(),
-//             cuopt::linear_programming::mip_termination_status_t::Optimal);
-// }
+  EXPECT_EQ(result.get_termination_status(),
+            cuopt::linear_programming::mip_termination_status_t::Optimal);
+}
 
-// INSTANTIATE_TEST_SUITE_P(
-//   MILPTests,
-//   MILPTestParams,
-//   testing::Values(
-//     std::make_tuple(true, true, true,
-//     cuopt::linear_programming::mip_termination_status_t::Optimal), std::make_tuple(
-//       false, true, false, cuopt::linear_programming::mip_termination_status_t::Optimal),
-//     std::make_tuple(
-//       true, false, true, cuopt::linear_programming::mip_termination_status_t::Optimal),
-//     std::make_tuple(
-//       false, false, false, cuopt::linear_programming::mip_termination_status_t::Optimal)));
+INSTANTIATE_TEST_SUITE_P(
+  MILPTests,
+  MILPTestParams,
+  testing::Values(
+    std::make_tuple(true, true, true, cuopt::linear_programming::mip_termination_status_t::Optimal),
+    std::make_tuple(
+      false, true, false, cuopt::linear_programming::mip_termination_status_t::Optimal),
+    std::make_tuple(
+      true, false, true, cuopt::linear_programming::mip_termination_status_t::Optimal),
+    std::make_tuple(
+      false, false, false, cuopt::linear_programming::mip_termination_status_t::Optimal)));
 
 // TEST_P(MILPTestParams, TestDeterminism)
 // {

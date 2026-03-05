@@ -664,7 +664,8 @@ mip_solution_t<i_t, f_t> solution_t<i_t, f_t>::get_solution(bool output_feasible
 template <typename i_t, typename f_t>
 uint32_t solution_t<i_t, f_t>::get_hash() const
 {
-  return compute_hash(assignment);
+  auto h_assignment = host_copy(assignment, handle_ptr->get_stream());
+  return compute_hash(h_assignment);
 }
 
 #if MIP_INSTANTIATE_FLOAT

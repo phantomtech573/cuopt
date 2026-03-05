@@ -97,9 +97,10 @@ class recombiner_t {
                  this->remaining_indices.data(),
                  this->remaining_indices.data() + remaining_variables);
 
-    CUOPT_LOG_TRACE("remaining indices hash 0x%x, size %d",
-                    detail::compute_hash(this->remaining_indices),
-                    remaining_variables);
+    CUOPT_LOG_TRACE(
+      "remaining indices hash 0x%x, size %d",
+      detail::compute_hash(make_span(this->remaining_indices), a.handle_ptr->get_stream()),
+      remaining_variables);
 
     auto vec_remaining_indices =
       host_copy(this->remaining_indices.data(), remaining_variables, a.handle_ptr->get_stream());
@@ -181,9 +182,12 @@ class recombiner_t {
                            i_t n_vars_from_guiding)
   {
     vars_to_fix.resize(n_vars_from_guiding, offspring.handle_ptr->get_stream());
-    CUOPT_LOG_TRACE("remaining indices hash 0x%x", detail::compute_hash(this->remaining_indices));
+    CUOPT_LOG_TRACE(
+      "remaining indices hash 0x%x",
+      detail::compute_hash(make_span(this->remaining_indices), offspring.handle_ptr->get_stream()));
     CUOPT_LOG_TRACE("integer_indices hash 0x%x",
-                    detail::compute_hash(offspring.problem_ptr->integer_indices));
+                    detail::compute_hash(make_span(offspring.problem_ptr->integer_indices),
+                                         offspring.handle_ptr->get_stream()));
     // set difference needs two sorted arrays
     thrust::sort(offspring.handle_ptr->get_thrust_policy(),
                  this->remaining_indices.data(),

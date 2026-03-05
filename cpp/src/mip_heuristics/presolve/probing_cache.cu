@@ -367,7 +367,7 @@ void compute_cache_for_var(i_t var_idx,
                            std::atomic<bool>& problem_is_infeasible,
                            std::vector<std::tuple<f_t, i_t, f_t, f_t>>& modification_vector,
                            std::vector<substitution_t<i_t, f_t>>& substitution_vector,
-                           timer_t timer,
+                           const work_limit_timer_t& timer,
                            i_t device_id)
 {
   RAFT_CUDA_TRY(cudaSetDevice(device_id));
@@ -899,19 +899,19 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
 
         auto& multi_probe_presolve = multi_probe_presolve_pool[thread_idx];
 
-        compute_cache_for_var<i_t, f_t>(var_idx,
-                                        bound_presolve,
-                                        problem,
-                                        multi_probe_presolve,
-                                        h_var_bounds,
-                                        h_integer_indices,
-                                        n_of_implied_singletons,
-                                        n_of_cached_probings,
-                                        problem_is_infeasible,
-                                        modification_vector_pool[thread_idx],
-                                        substitution_vector_pool[thread_idx],
-                                        timer,
-                                        problem.handle_ptr->get_device());
+        compute_cache_for_var(var_idx,
+                              bound_presolve,
+                              problem,
+                              multi_probe_presolve,
+                              h_var_bounds,
+                              h_integer_indices,
+                              n_of_implied_singletons,
+                              n_of_cached_probings,
+                              problem_is_infeasible,
+                              modification_vector_pool[thread_idx],
+                              substitution_vector_pool[thread_idx],
+                              timer,
+                              problem.handle_ptr->get_device());
       }
     }
 #pragma omp single

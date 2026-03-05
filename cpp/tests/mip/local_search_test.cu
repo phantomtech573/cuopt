@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights
  * reserved. SPDX-License-Identifier: Apache-2.0
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,20 +20,21 @@
 #include "mip_utils.cuh"
 
 #include <cuopt/error.hpp>
+#include <cuopt/linear_programming/pdlp/pdlp_hyper_params.cuh>
 #include <cuopt/linear_programming/solve.hpp>
 #include <cuopt/linear_programming/utilities/internals.hpp>
-#include <linear_programming/initial_scaling_strategy/initial_scaling.cuh>
-#include <linear_programming/pdlp.cuh>
-#include <linear_programming/restart_strategy/pdlp_restart_strategy.cuh>
-#include <linear_programming/step_size_strategy/adaptive_step_size_strategy.hpp>
-#include <linear_programming/utilities/problem_checking.cuh>
-#include <mip/diversity/diversity_manager.cuh>
-#include <mip/feasibility_jump/feasibility_jump.cuh>
-#include <mip/local_search/local_search.cuh>
-#include <mip/relaxed_lp/relaxed_lp.cuh>
-#include <mip/solution/solution.cuh>
-#include <mip/solver_context.cuh>
+#include <mip_heuristics/diversity/diversity_manager.cuh>
+#include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
+#include <mip_heuristics/local_search/local_search.cuh>
+#include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
+#include <mip_heuristics/solution/solution.cuh>
+#include <mip_heuristics/solver_context.cuh>
 #include <mps_parser/parser.hpp>
+#include <pdlp/initial_scaling_strategy/initial_scaling.cuh>
+#include <pdlp/pdlp.cuh>
+#include <pdlp/restart_strategy/pdlp_restart_strategy.cuh>
+#include <pdlp/step_size_strategy/adaptive_step_size_strategy.hpp>
+#include <pdlp/utilities/problem_checking.cuh>
 #include <utilities/common_utils.hpp>
 #include <utilities/seed_generator.cuh>
 
@@ -64,13 +65,7 @@ void init_handler(const raft::handle_t* handle_ptr)
     handle_ptr->get_cusparse_handle(), CUSPARSE_POINTER_MODE_DEVICE, handle_ptr->get_stream()));
 }
 
-static void setup_device_symbols(rmm::cuda_stream_view stream_view)
-{
-  raft::common::nvtx::range fun_scope("Setting device symbol");
-  detail::set_adaptive_step_size_hyper_parameters(stream_view);
-  detail::set_restart_hyper_parameters(stream_view);
-  detail::set_pdlp_hyper_parameters(stream_view);
-}
+static void setup_device_symbols(rmm::cuda_stream_view stream_view) { (void)stream_view; }
 
 enum local_search_mode_t {
   FP = 0,
@@ -100,6 +95,7 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
 
   setup_device_symbols(op_problem.get_handle_ptr()->get_stream());
 
+  pdlp_hyper_params::pdlp_hyper_params_t hyper_params{};
   detail::pdlp_initial_scaling_strategy_t<int, double> scaling(&handle_,
                                                                problem,
                                                                10,
@@ -108,6 +104,7 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
                                                                problem.reverse_offsets,
                                                                problem.reverse_constraints,
                                                                nullptr,
+                                                               hyper_params,
                                                                true);
 
   auto settings             = mip_solver_settings_t<int, double>{};
@@ -146,7 +143,8 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
   solution.compute_feasibility();
 
   printf("Model fingerprint: 0x%x\n", problem.get_fingerprint());
-  printf("LP optimal hash: 0x%x\n", detail::compute_hash(lp_optimal_solution));
+  printf("LP optimal hash: 0x%x\n",
+         detail::compute_hash(make_span(lp_optimal_solution), problem.handle_ptr->get_stream()));
   printf("running mode: %d\n", mode);
 
   work_limit_context_t work_limit_context("LocalSearch");
@@ -189,10 +187,10 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
   // return {host_copy(solution_vector, problem.handle_ptr->get_stream()), iterations};
 }
 
-static uint32_t run_fp_check_determinism(std::string test_instance, local_search_mode_t mode)
+static uint32_t run_fp_check_determinism(std::string test_instance,
+                                         local_search_mode_t mode,
+                                         unsigned long seed)
 {
-  int seed =
-    std::getenv("CUOPT_SEED") ? std::stoi(std::getenv("CUOPT_SEED")) : std::random_device{}();
   cuopt::seed_generator::set_seed(seed);
 
   return run_fp(test_instance, mode);
@@ -207,8 +205,6 @@ static uint32_t run_fp_check_determinism(std::string test_instance, local_search
   //                    solution.get_objective());
 
   //    static auto first_val = solution.get_user_objective();
-
-  //    if (abs(solution.get_user_objective() - first_val) > 1) exit(0);
 }
 
 class LocalSearchTestParams : public testing::TestWithParam<std::tuple<local_search_mode_t>> {};
@@ -237,11 +233,13 @@ TEST_P(LocalSearchTestParams, local_search_operator_determinism)
     //    run_fp_check_determinism(instance, 1000);
     //  }
 
-    unsigned long seed = std::random_device{}();
+    unsigned long seed = std::getenv("CUOPT_SEED")
+                           ? (unsigned long)std::stoi(std::getenv("CUOPT_SEED"))
+                           : (unsigned long)std::random_device{}();
     std::cerr << "Tested with seed " << seed << "\n";
     uint32_t gold_hash = 0;
     for (int i = 0; i < 5; ++i) {
-      uint32_t hash = run_fp_check_determinism(instance, mode);
+      uint32_t hash = run_fp_check_determinism(instance, mode, seed);
       if (i == 0) {
         gold_hash = hash;
         printf("Gold hash: 0x%x\n", gold_hash);

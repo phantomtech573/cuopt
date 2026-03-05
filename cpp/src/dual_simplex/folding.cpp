@@ -39,8 +39,8 @@ constexpr int8_t kInactive = 0;
 
 template <typename i_t>
 void find_vertices_to_refine(const std::unordered_set<i_t>& refining_color_vertices,
-                             const cuopt::ins_vector<i_t>& offset,
-                             const cuopt::ins_vector<i_t>& vertex_list,
+                             const std::vector<i_t>& offset,
+                             const std::vector<i_t>& vertex_list,
                              const std::vector<i_t>& color_map,
                              std::vector<i_t>& marked_vertices,
                              std::vector<i_t>& vertices_to_refine,
@@ -77,9 +77,9 @@ template <typename i_t, typename f_t>
 void compute_sums_of_refined_vertices(i_t refining_color,
                                       const std::unordered_set<i_t>& refining_color_vertices,
                                       const std::vector<i_t>& vertices_to_refine,
-                                      const cuopt::ins_vector<i_t>& offsets,
-                                      const cuopt::ins_vector<i_t>& vertex_list,
-                                      const cuopt::ins_vector<f_t>& weight_list,
+                                      const std::vector<i_t>& offsets,
+                                      const std::vector<i_t>& vertex_list,
+                                      const std::vector<f_t>& weight_list,
                                       const std::vector<i_t>& color_map,
                                       std::vector<f_t>& vertex_to_sum,
                                       std::vector<f_t>& max_sum_by_color)

@@ -69,17 +69,20 @@ class fp_recombiner_t : public recombiner_t<i_t, f_t> {
     double work = static_cast<double>(n_vars_from_other);
     CUOPT_LOG_DEBUG(
       "n_vars_from_guiding %d n_vars_from_other %d", n_vars_from_guiding, n_vars_from_other);
-    CUOPT_LOG_TRACE("FP rec: offspring hash 0x%x, vars to fix 0x%x",
-                    offspring.get_hash(),
-                    detail::compute_hash(vars_to_fix));
+    CUOPT_LOG_TRACE(
+      "FP rec: offspring hash 0x%x, vars to fix 0x%x",
+      offspring.get_hash(),
+      detail::compute_hash(make_span(vars_to_fix), offspring.handle_ptr->get_stream()));
     this->compute_vars_to_fix(offspring, vars_to_fix, n_vars_from_other, n_vars_from_guiding);
-    CUOPT_LOG_TRACE("FP rec post computevarstofix: offspring hash 0x%x, vars to fix 0x%x",
-                    offspring.get_hash(),
-                    detail::compute_hash(vars_to_fix));
+    CUOPT_LOG_TRACE(
+      "FP rec post computevarstofix: offspring hash 0x%x, vars to fix 0x%x",
+      offspring.get_hash(),
+      detail::compute_hash(make_span(vars_to_fix), offspring.handle_ptr->get_stream()));
     auto [fixed_problem, fixed_assignment, variable_map] = offspring.fix_variables(vars_to_fix);
-    CUOPT_LOG_TRACE("FP rec: fixed_problem hash 0x%x assigned hash 0x%x",
-                    fixed_problem.get_fingerprint(),
-                    detail::compute_hash(fixed_assignment));
+    CUOPT_LOG_TRACE(
+      "FP rec: fixed_problem hash 0x%x assigned hash 0x%x",
+      fixed_problem.get_fingerprint(),
+      detail::compute_hash(make_span(fixed_assignment), offspring.handle_ptr->get_stream()));
     fixed_problem.check_problem_representation(true);
     if (!guiding_solution.get_feasible() && !other_solution.get_feasible()) {
       CUOPT_LOG_TRACE("FP rec: running LP with infeasibility detection");

@@ -58,7 +58,7 @@ static fj_state_t run_fj_instance(std::string test_instance,
   auto path = cuopt::test::get_rapids_dataset_root_dir() + ("/mip/" + test_instance);
 
   if (std::getenv("CUOPT_INSTANCE")) {
-    path = std::string("/home/scratch.yboucher_gpu_1/collection/") + std::getenv("CUOPT_INSTANCE");
+    path = make_path_absolute(std::getenv("CUOPT_INSTANCE"));
     std::cout << "Using instance from CUOPT_INSTANCE: " << path << std::endl;
   }
 
@@ -190,7 +190,8 @@ static bool run_fj_check_determinism(std::string test_instance, int iter_limit)
   if (first_val_map.count(test_instance) == 0) {
     first_val_map[test_instance] = solution.get_user_objective();
   }
-  if (std::abs(solution.get_user_objective() - first_val_map[test_instance]) > 1) exit(0);
+  EXPECT_NEAR(solution.get_user_objective(), first_val_map[test_instance], 1.0)
+    << test_instance << " determinism objective mismatch";
 
   return true;
 }
