@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -28,12 +28,34 @@ cuopt_int_t solve_mps_file(const char* filename,
 cuopt_int_t test_missing_file();
 cuopt_int_t test_infeasible_problem();
 cuopt_int_t test_bad_parameter_name();
+cuopt_int_t test_mip_get_callbacks_only();
+cuopt_int_t test_mip_get_set_callbacks();
 cuopt_int_t test_ranged_problem(cuopt_int_t* termination_status_ptr, cuopt_float_t* objective_ptr);
 cuopt_int_t test_invalid_bounds(cuopt_int_t test_mip);
 cuopt_int_t test_quadratic_problem(cuopt_int_t* termination_status_ptr,
                                    cuopt_float_t* objective_ptr);
 cuopt_int_t test_quadratic_ranged_problem(cuopt_int_t* termination_status_ptr,
                                           cuopt_float_t* objective_ptr);
+cuopt_int_t test_write_problem(const char* input_filename, const char* output_filename);
+cuopt_int_t test_maximize_problem_dual_variables(cuopt_int_t method,
+                                                 cuopt_int_t* termination_status_ptr,
+                                                 cuopt_float_t* objective_ptr,
+                                                 cuopt_float_t* dual_variables,
+                                                 cuopt_float_t* reduced_costs,
+                                                 cuopt_float_t* dual_obj_ptr);
+cuopt_int_t test_deterministic_bb(const char* filename,
+                                  cuopt_int_t num_runs,
+                                  cuopt_int_t num_threads,
+                                  cuopt_float_t time_limit,
+                                  cuopt_float_t work_limit);
+
+/* Tests for solution interface polymorphism (use inline problems, no file I/O) */
+cuopt_int_t test_lp_solution_mip_methods();
+cuopt_int_t test_mip_solution_lp_methods();
+
+/* CPU-only execution tests (require env vars CUDA_VISIBLE_DEVICES="" and CUOPT_REMOTE_HOST) */
+cuopt_int_t test_cpu_only_execution(const char* filename);
+cuopt_int_t test_cpu_only_mip_execution(const char* filename);
 
 #ifdef __cplusplus
 }

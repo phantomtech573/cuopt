@@ -7,7 +7,7 @@ LP, QP and MILP API Reference
 .. autoclass:: cuopt.linear_programming.problem.Problem
    :members:
    :undoc-members:
-   :exclude-members: reset_solved_values, populate_solution, dict_to_object, NumNZs, NumVariables, NumConstraints, IsMIP
+   :exclude-members: reset_solved_values, populate_solution, dict_to_object, NumNZs, NumVariables, NumConstraints, IsMIP, get_incumbent_values, get_pdlp_warm_start_data, getQcsr
 
 .. autoclass:: cuopt.linear_programming.problem.Variable
    :members:
@@ -17,9 +17,6 @@ LP, QP and MILP API Reference
 .. autoclass:: cuopt.linear_programming.problem.LinearExpression
    :members:
    :undoc-members:
-
-.. note::
-   The QP solver is currently in beta.
 
 .. autoclass:: cuopt.linear_programming.problem.QuadraticExpression
    :members:

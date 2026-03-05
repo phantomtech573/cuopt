@@ -195,7 +195,7 @@ mps_parser::mps_data_model_t<int, double> create_single_var_milp_problem(bool ma
 //   cuopt::linear_programming::pdlp_solver_settings_t<int, double> settings{};
 //   settings.set_optimality_tolerance(1e-4);
 //   settings.time_limit = 5;
-//   settings.presolve   = false;
+//   settings.presolver  = cuopt::linear_programming::presolver_t::None;
 
 //   auto result = cuopt::linear_programming::solve_lp(&handle, problem, settings);
 
@@ -210,7 +210,7 @@ mps_parser::mps_data_model_t<int, double> create_single_var_milp_problem(bool ma
 
 //   cuopt::linear_programming::mip_solver_settings_t<int, double> settings{};
 //   settings.time_limit = 5;
-//   settings.presolve   = false;
+//   settings.presolver  = cuopt::linear_programming::presolver_t::None;
 
 //   // Set constraint bounds
 //   std::vector<double> lower_bounds = {1.0};
@@ -242,7 +242,7 @@ mps_parser::mps_data_model_t<int, double> create_single_var_milp_problem(bool ma
 //   settings.time_limit      = 5;
 //   settings.mip_scaling     = scaling;
 //   settings.heuristics_only = heuristics_only;
-//   settings.presolve        = false;
+//   settings.presolver       = cuopt::linear_programming::presolver_t::None;
 
 //   auto result = cuopt::linear_programming::solve_mip(&handle, problem, settings);
 
@@ -263,7 +263,7 @@ mps_parser::mps_data_model_t<int, double> create_single_var_milp_problem(bool ma
 //   settings.time_limit      = 5;
 //   settings.mip_scaling     = scaling;
 //   settings.heuristics_only = heuristics_only;
-//   settings.presolve        = false;
+//   settings.presolver       = cuopt::linear_programming::presolver_t::None;
 
 //   auto result = cuopt::linear_programming::solve_mip(&handle, problem, settings);
 

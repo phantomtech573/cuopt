@@ -12,6 +12,7 @@
 #include <string_view>
 #include <type_traits>
 
+#include <cuopt/linear_programming/constants.h>
 namespace cuopt {
 namespace internals {
 
@@ -31,16 +32,23 @@ class base_solution_callback_t : public Callback {
     this->n_variables = n_variables_;
   }
 
+  void set_user_data(void* input_user_data) { user_data = input_user_data; }
+  void* get_user_data() const { return user_data; }
+
   virtual base_solution_callback_type get_type() const = 0;
 
  protected:
   bool isFloat       = true;
   size_t n_variables = 0;
+  void* user_data    = nullptr;
 };
 
 class get_solution_callback_t : public base_solution_callback_t {
  public:
-  virtual void get_solution(void* data, void* objective_value) = 0;
+  virtual void get_solution(void* data,
+                            void* objective_value,
+                            void* solution_bound,
+                            void* user_data) = 0;
   base_solution_callback_type get_type() const override
   {
     return base_solution_callback_type::GET_SOLUTION;
@@ -49,7 +57,10 @@ class get_solution_callback_t : public base_solution_callback_t {
 
 class set_solution_callback_t : public base_solution_callback_t {
  public:
-  virtual void set_solution(void* data, void* objective_value) = 0;
+  virtual void set_solution(void* data,
+                            void* objective_value,
+                            void* solution_bound,
+                            void* user_data) = 0;
   base_solution_callback_type get_type() const override
   {
     return base_solution_callback_type::SET_SOLUTION;
@@ -99,6 +110,24 @@ struct parameter_info_t<std::string> {
   std::string param_name;
   std::string* value_ptr;
   std::string default_value;
+};
+
+/**
+ * @brief Enum representing the different presolvers that can be used to solve the
+ * linear programming problem.
+ *
+ * Default: Use the default presolver.
+ * None: No presolver.
+ * Papilo: Use the Papilo presolver.
+ * PSLP: Use the PSLP presolver.
+ *
+ * @note Default presolver is None.
+ */
+enum presolver_t : int {
+  Default = CUOPT_PRESOLVE_DEFAULT,
+  None    = CUOPT_PRESOLVE_OFF,
+  Papilo  = CUOPT_PRESOLVE_PAPILO,
+  PSLP    = CUOPT_PRESOLVE_PSLP
 };
 
 }  // namespace linear_programming

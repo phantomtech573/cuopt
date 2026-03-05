@@ -17,83 +17,83 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <functional>
-#include <mutex>
-#include <queue>
-#include <unordered_map>
 #include <vector>
 
 namespace cuopt {
 
 struct work_limit_context_t;
 
-enum class sync_result_t {
-  CONTINUE,  // Continue processing
-  STOPPED    // Scheduler has been stopped
-};
-
 class work_unit_scheduler_t {
  public:
-  using callback_t = std::function<void()>;
-
   explicit work_unit_scheduler_t(double sync_interval = 5.0);
 
   void set_sync_interval(double interval);
-  double get_sync_interval() const;
+  double get_sync_interval() const { return sync_interval_; }
 
   void register_context(work_limit_context_t& ctx);
   void deregister_context(work_limit_context_t& ctx);
   void on_work_recorded(work_limit_context_t& ctx, double total_work);
-  void queue_callback(work_limit_context_t& source,
-                      work_limit_context_t& destination,
-                      callback_t callback);
 
-  // Sync callback support - callback is executed when all contexts reach sync point
-  // If callback returns true, scheduler stops and all workers exit cleanly
-  using sync_callback_t = std::function<bool(double sync_target)>;
+  // Sync callback - executed by one thread when all contexts reach sync point
+  using sync_callback_t = std::function<void(double sync_target)>;
   void set_sync_callback(sync_callback_t callback);
-  bool is_stopped() const;
 
   // Wait for next sync point (for idle workers with no work)
-  sync_result_t wait_for_next_sync(work_limit_context_t& ctx);
+  void wait_for_next_sync(work_limit_context_t& ctx);
+
+  double current_sync_target() const;
+
+  void signal_shutdown() { shutdown_.store(true, std::memory_order_release); }
+  bool is_shutdown() const { return shutdown_.load(std::memory_order_acquire); }
 
  public:
   bool verbose{false};
-  double sync_interval_;
 
  private:
-  struct tagged_callback_t {
-    double work_unit_tag;
-    callback_t callback;
-
-    bool operator>(const tagged_callback_t& other) const
-    {
-      return work_unit_tag > other.work_unit_tag;
-    }
-  };
-
-  using callback_queue_t =
-    std::priority_queue<tagged_callback_t, std::vector<tagged_callback_t>, std::greater<>>;
-
-  double current_sync_target() const;
   void wait_at_sync_point(work_limit_context_t& ctx, double sync_target);
-  void process_callbacks_for_context(work_limit_context_t& ctx, double up_to_work_units);
 
+  double sync_interval_;
   std::vector<std::reference_wrapper<work_limit_context_t>> contexts_;
-  std::unordered_map<work_limit_context_t*, callback_queue_t> callback_queues_;
-  std::unordered_map<work_limit_context_t*, double> last_sync_target_;
 
-  std::mutex mutex_;
-  std::condition_variable cv_;
-  size_t contexts_at_barrier_{0};
-  double current_sync_target_{0};
   size_t barrier_generation_{0};
-  size_t exit_generation_{0};
+  double current_sync_target_{0};
 
   // Sync callback - executed when all contexts reach sync point
   sync_callback_t sync_callback_;
-  std::atomic<bool> stopped_{false};
+
+  // Shutdown flag - prevents threads from entering barriers after termination is signaled
+  std::atomic<bool> shutdown_{false};
+};
+
+// RAII helper for registering multiple contexts with automatic cleanup
+class scoped_context_registrations_t {
+ public:
+  explicit scoped_context_registrations_t(work_unit_scheduler_t& scheduler) : scheduler_(scheduler)
+  {
+  }
+
+  ~scoped_context_registrations_t()
+  {
+    for (auto* ctx : contexts_) {
+      scheduler_.deregister_context(*ctx);
+    }
+  }
+
+  void add(work_limit_context_t& ctx)
+  {
+    scheduler_.register_context(ctx);
+    contexts_.push_back(&ctx);
+  }
+
+  scoped_context_registrations_t(const scoped_context_registrations_t&)            = delete;
+  scoped_context_registrations_t& operator=(const scoped_context_registrations_t&) = delete;
+  scoped_context_registrations_t(scoped_context_registrations_t&&)                 = delete;
+  scoped_context_registrations_t& operator=(scoped_context_registrations_t&&)      = delete;
+
+ private:
+  work_unit_scheduler_t& scheduler_;
+  std::vector<work_limit_context_t*> contexts_;
 };
 
 }  // namespace cuopt

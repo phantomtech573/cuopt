@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <cuopt/linear_programming/constants.h>
+#include <cuopt/linear_programming/pdlp/pdlp_hyper_params.cuh>
 #include <cuopt/linear_programming/utilities/internals.hpp>
 
 #include <raft/core/device_span.hpp>
@@ -36,8 +37,12 @@ class mip_solver_settings_t {
 
   /**
    * @brief Set the callback for the user solution
+   *
+   * @param[in] callback - Callback handler for user solutions.
+   * @param[in] user_data - Pointer to user-defined data forwarded to the callback.
    */
-  void set_mip_callback(internals::base_solution_callback_t* callback = nullptr);
+  void set_mip_callback(internals::base_solution_callback_t* callback = nullptr,
+                        void* user_data                               = nullptr);
 
   /**
    * @brief Add an primal solution.
@@ -78,20 +83,32 @@ class mip_solver_settings_t {
   friend class problem_checking_t;
   tolerances_t tolerances;
 
-  f_t time_limit       = std::numeric_limits<f_t>::infinity();
-  f_t work_limit       = std::numeric_limits<f_t>::infinity();
-  bool heuristics_only = false;
-  i_t num_cpu_threads  = -1;  // -1 means use default number of threads in branch and bound
-  i_t num_gpus         = 1;
-  bool log_to_console  = true;
+  f_t time_limit                = std::numeric_limits<f_t>::infinity();
+  f_t work_limit                = std::numeric_limits<f_t>::infinity();
+  i_t node_limit                = std::numeric_limits<i_t>::max();
+  bool heuristics_only          = false;
+  i_t reliability_branching     = -1;
+  i_t num_cpu_threads           = -1;  // -1 means use default number of threads in branch and bound
+  i_t max_cut_passes            = 10;  // number of cut passes to make
+  i_t mir_cuts                  = -1;
+  i_t mixed_integer_gomory_cuts = -1;
+  i_t knapsack_cuts             = -1;
+  i_t strong_chvatal_gomory_cuts      = -1;
+  i_t reduced_cost_strengthening      = -1;
+  f_t cut_change_threshold            = 1e-3;
+  f_t cut_min_orthogonality           = 0.5;
+  i_t mip_batch_pdlp_strong_branching = 0;
+  i_t num_gpus                        = 1;
+  bool log_to_console                 = true;
+
   std::string log_file;
   std::string sol_file;
   std::string user_problem_file;
 
   /** Initial primal solutions */
   std::vector<std::shared_ptr<rmm::device_uvector<f_t>>> initial_solutions;
-  bool mip_scaling = true;
-  bool presolve    = true;
+  bool mip_scaling = false;
+  presolver_t presolver{presolver_t::Default};
   /**
    * @brief Determinism mode for MIP solver.
    *
@@ -102,9 +119,19 @@ class mip_solver_settings_t {
    *   at potential cost of performance
    */
   int determinism_mode = CUOPT_MODE_OPPORTUNISTIC;
+  /**
+   * @brief Random seed for the MIP solver.
+   *
+   * Controls the initial seed for random number generation in the solver.
+   * Use -1 to generate a random seed.
+   */
+  i_t seed = -1;
   // this is for extracting info from different places of the solver during
   // benchmarks
   benchmark_info_t* benchmark_info_ptr = nullptr;
+
+  // TODO check with Akif and Alice
+  pdlp_hyper_params::pdlp_hyper_params_t hyper_params;
 
  private:
   std::vector<internals::base_solution_callback_t*> mip_callbacks_;

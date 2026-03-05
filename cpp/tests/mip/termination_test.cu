@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -9,11 +9,11 @@
 #include "mip_utils.cuh"
 
 #include <cuopt/linear_programming/mip/solver_solution.hpp>
-#include <linear_programming/pdlp.cuh>
-#include <linear_programming/utilities/problem_checking.cuh>
-#include <mip/presolve/trivial_presolve.cuh>
-#include <mip/relaxed_lp/relaxed_lp.cuh>
+#include <mip_heuristics/presolve/trivial_presolve.cuh>
+#include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
 #include <mps_parser/parser.hpp>
+#include <pdlp/pdlp.cuh>
+#include <pdlp/utilities/problem_checking.cuh>
 #include <utilities/common_utils.hpp>
 #include <utilities/error.hpp>
 
@@ -88,7 +88,7 @@ TEST(termination_status, optimality_test)
   auto [termination_status, obj_val, lb] =
     test_mps_file("mip/bb_optimality.mps", default_time_limit, false);
   EXPECT_EQ(termination_status, mip_termination_status_t::Optimal);
-  EXPECT_EQ(obj_val, 2);
+  EXPECT_NEAR(obj_val, 2, 1e-6);
 }
 
 // Ensure the lower bound on maximization problems when BB times out has the right sign

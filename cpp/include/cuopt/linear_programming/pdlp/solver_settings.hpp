@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -8,7 +8,10 @@
 #pragma once
 
 #include <cuopt/linear_programming/constants.h>
+#include <cuopt/linear_programming/cpu_pdlp_warm_start_data.hpp>
+#include <cuopt/linear_programming/pdlp/pdlp_hyper_params.cuh>
 #include <cuopt/linear_programming/pdlp/pdlp_warm_start_data.hpp>
+#include <cuopt/linear_programming/utilities/internals.hpp>
 #include <optional>
 #include <raft/core/device_span.hpp>
 #include <rmm/device_uvector.hpp>
@@ -116,6 +119,20 @@ class pdlp_solver_settings_t {
                                  i_t size,
                                  rmm::cuda_stream_view stream = rmm::cuda_stream_default);
 
+  /** TODO batch mode: tmp
+   * @brief Set an initial step size.
+   *
+   * @param[in] initial_step_size Initial step size.
+   */
+  // TODO batch mode: tmp
+  void set_initial_step_size(f_t initial_step_size);
+  /**
+   * @brief Set an initial primal weight.
+   *
+   * @param[in] initial_primal_weight Initial primal weight.
+   */
+  void set_initial_primal_weight(f_t initial_primal_weight);
+
   /**
    * @brief Set the pdlp warm start data. This allows to restart PDLP with a
    * previous solution
@@ -164,6 +181,24 @@ class pdlp_solver_settings_t {
   pdlp_warm_start_data_t<i_t, f_t>& get_pdlp_warm_start_data();
   const pdlp_warm_start_data_view_t<i_t, f_t>& get_pdlp_warm_start_data_view() const noexcept;
 
+  /**
+   * @brief Get the CPU-backed PDLP warm start data (for remote execution)
+   * @return Const reference to cpu_pdlp_warm_start_data_t
+   * @note Used when the solver runs on a CPU-only host via remote execution.
+   *       The data is std::vector-backed rather than device_uvector-backed.
+   */
+  const cpu_pdlp_warm_start_data_t<i_t, f_t>& get_cpu_pdlp_warm_start_data() const noexcept;
+
+  /**
+   * @brief Get mutable CPU-backed PDLP warm start data (for remote execution)
+   * @return Mutable reference to cpu_pdlp_warm_start_data_t
+   */
+  cpu_pdlp_warm_start_data_t<i_t, f_t>& get_cpu_pdlp_warm_start_data() noexcept;
+  // TODO batch mode: tmp
+  std::optional<f_t> get_initial_step_size() const;
+  // TODO batch mode: tmp
+  std::optional<f_t> get_initial_primal_weight() const;
+
   const rmm::device_uvector<f_t>& get_initial_primal_solution() const;
   const rmm::device_uvector<f_t>& get_initial_dual_solution() const;
 
@@ -177,8 +212,8 @@ class pdlp_solver_settings_t {
     f_t relative_primal_tolerance   = 1.0e-4;
     f_t absolute_gap_tolerance      = 1.0e-4;
     f_t relative_gap_tolerance      = 1.0e-4;
-    f_t primal_infeasible_tolerance = 1.0e-8;
-    f_t dual_infeasible_tolerance   = 1.0e-8;
+    f_t primal_infeasible_tolerance = 1.0e-10;
+    f_t dual_infeasible_tolerance   = 1.0e-10;
   };
 
   tolerances_t get_tolerances() const noexcept;
@@ -206,7 +241,7 @@ class pdlp_solver_settings_t {
   bool eliminate_dense_columns{true};
   bool save_best_primal_so_far{false};
   bool first_primal_feasible{false};
-  bool presolve{false};
+  presolver_t presolver{presolver_t::Default};
   bool dual_postsolve{true};
   int num_gpus{1};
   method_t method{method_t::Concurrent};
@@ -214,16 +249,31 @@ class pdlp_solver_settings_t {
   // For concurrent termination
   std::atomic<int>* concurrent_halt{nullptr};
   static constexpr f_t minimal_absolute_tolerance = 1.0e-12;
+  pdlp_hyper_params::pdlp_hyper_params_t hyper_params;
+  // Holds the information of new variable lower and upper bounds for each climber in the format:
+  // (variable index, new lower bound, new upper bound)
+  // For each entry in the vector, a new version of the problem (climber) will be solved
+  // concurrently i.e. if new_bounds.size() == 2, then 2 versions of the problem with updated bounds
+  // will be solved concurrently
+  std::vector<std::tuple<i_t, f_t, f_t>> new_bounds;
 
  private:
   /** Initial primal solution */
   std::shared_ptr<rmm::device_uvector<f_t>> initial_primal_solution_;
   /** Initial dual solution */
   std::shared_ptr<rmm::device_uvector<f_t>> initial_dual_solution_;
-  // For the C++ interface
+  /** Initial step size */
+  // TODO batch mode: tmp
+  std::optional<f_t> initial_step_size_;
+  /** Initial primal weight */
+  // TODO batch mode: tmp
+  std::optional<f_t> initial_primal_weight_;
+  /** GPU-backed warm start data (device_uvector), used by C++ API and local GPU solves */
   pdlp_warm_start_data_t<i_t, f_t> pdlp_warm_start_data_;
-  // For the Cython interface
+  /** Warm start data as spans over external memory, used by Cython/Python interface */
   pdlp_warm_start_data_view_t<i_t, f_t> pdlp_warm_start_data_view_;
+  /** CPU-backed warm start data (std::vector), used for remote execution on CPU-only hosts */
+  cpu_pdlp_warm_start_data_t<i_t, f_t> cpu_pdlp_warm_start_data_;
 
   friend class solver_settings_t<i_t, f_t>;
 };

@@ -1,12 +1,9 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Simple Quadratic Programming Example
 ====================================
-
-.. note::
-   The QP solver is currently in beta.
 
 This example demonstrates how to formulate and solve a simple
 Quadratic Programming (QP) problem using the cuOpt Python API.

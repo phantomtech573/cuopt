@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -223,6 +223,9 @@ class basis_update_mpf_t {
     reset_stats();
   }
 
+  basis_update_mpf_t(const basis_update_mpf_t& other)            = default;
+  basis_update_mpf_t& operator=(const basis_update_mpf_t& other) = default;
+
   void print_stats() const
   {
     i_t total_L_transpose_calls = total_sparse_L_transpose_ + total_dense_L_transpose_;
@@ -262,6 +265,7 @@ class basis_update_mpf_t {
     assert(p.size() == Linit.m);
     row_permutation_ = p;
     inverse_permutation(row_permutation_, inverse_row_permutation_);
+    work_estimate_ += 4 * p.size();
     clear();
     compute_transposes();
     reset_stats();
@@ -290,6 +294,8 @@ class basis_update_mpf_t {
     clear();
     reset_stats();
   }
+
+  i_t append_cuts(const csr_matrix_t<i_t, f_t>& cuts_basic);
 
   f_t estimate_solution_density(f_t rhs_nz, f_t sum, i_t& num_calls, bool& use_hypersparse) const
   {
@@ -366,6 +372,7 @@ class basis_update_mpf_t {
   {
     L0_.transpose(L0_transpose_);
     U0_.transpose(U0_transpose_);
+    work_estimate_ += 6 * L0_.col_start[L0_.n] + 6 * U0_.col_start[U0_.n];
   }
 
   void multiply_lu(csc_matrix_t<i_t, f_t>& out) const;
@@ -373,9 +380,17 @@ class basis_update_mpf_t {
   // Compute L*U = A(p, basic_list)
   int refactor_basis(const csc_matrix_t<i_t, f_t>& A,
                      const simplex_solver_settings_t<i_t, f_t>& settings,
+                     const std::vector<f_t>& lower,
+                     const std::vector<f_t>& upper,
+                     f_t start_time,
                      std::vector<i_t>& basic_list,
                      std::vector<i_t>& nonbasic_list,
                      std::vector<variable_status_t>& vstatus);
+
+  void set_refactor_frequency(i_t new_frequency) { refactor_frequency_ = new_frequency; }
+
+  f_t work_estimate() const { return work_estimate_; }
+  void clear_work_estimate() { work_estimate_ = 0.0; }
 
  private:
   void clear()
@@ -391,9 +406,11 @@ class basis_update_mpf_t {
     mu_values_.clear();
     mu_values_.reserve(refactor_frequency_);
     num_updates_ = 0;
+    work_estimate_ += 2 * refactor_frequency_;
 
     std::fill(xi_workspace_.begin(), xi_workspace_.end(), 0);
     std::fill(x_workspace_.begin(), x_workspace_.end(), 0.0);
+    work_estimate_ += xi_workspace_.size() + x_workspace_.size();
   }
 
   void grow_storage(i_t nz, i_t& S_start, i_t& S_nz);
@@ -463,6 +480,8 @@ class basis_update_mpf_t {
   mutable f_t sum_U_transpose_;
 
   f_t hypersparse_threshold_;
+
+  mutable f_t work_estimate_{0.0};
 };
 
 }  // namespace cuopt::linear_programming::dual_simplex

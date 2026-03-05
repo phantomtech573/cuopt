@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 """
 LP Warmstart Server Example
@@ -9,6 +9,11 @@ solving of similar problems.
 
 Note:
     Warmstart is only applicable to LP, not for MILP.
+
+Important:
+    To use warm start with PDLP, presolve must be explicitly disabled.
+    Set "presolve": "off" in solver_config, as presolve transforms the problem
+    and the warm start solution from the original problem cannot be applied.
 
 Requirements:
     - cuOpt server running (default: localhost:5000)
@@ -50,7 +55,11 @@ def main():
             "lower_bounds": [0.0, 0.0],
         },
         "maximize": False,
-        "solver_config": {"tolerances": {"optimality": 0.0001}},
+        "solver_config": {
+            "tolerances": {"optimality": 0.0001},
+            "pdlp_solver_mode": 1,  # Stable2
+            "presolve": 0,
+        },
     }
 
     # If cuOpt is not running on localhost:5000, edit ip and port parameters

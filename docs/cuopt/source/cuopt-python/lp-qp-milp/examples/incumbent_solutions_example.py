@@ -1,19 +1,6 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION &
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+
 """
 Working with Incumbent Solutions Example
 
@@ -59,12 +46,14 @@ from cuopt.linear_programming.internals import GetSolutionCallback
 class IncumbentCallback(GetSolutionCallback):
     """Callback to receive and track incumbent solutions during solving."""
 
-    def __init__(self):
+    def __init__(self, user_data):
         super().__init__()
         self.solutions = []
         self.n_callbacks = 0
+        self.user_data = user_data
 
-    def get_solution(self, solution, solution_cost):
+    def get_solution(self, solution, solution_cost, solution_bound, user_data):
+        assert user_data is self.user_data
         """
         Called whenever the solver finds a new incumbent solution.
 
@@ -74,14 +63,18 @@ class IncumbentCallback(GetSolutionCallback):
             The variable values of the incumbent solution
         solution_cost : array-like
             The objective value of the incumbent solution
+        solution_bound : array-like
+            The current best bound in user objective space
         """
         self.n_callbacks += 1
 
         # Store the incumbent solution
         incumbent = {
-            "solution": solution.copy_to_host(),
-            "cost": solution_cost.copy_to_host()[0],
+            "solution": solution.tolist(),
+            "cost": float(solution_cost[0]),
+            "bound": float(solution_bound[0]),
             "iteration": self.n_callbacks,
+            "user_data": user_data,
         }
         self.solutions.append(incumbent)
 
@@ -111,8 +104,9 @@ def main():
     # Configure solver settings with callback
     settings = SolverSettings()
     # Set the incumbent callback
-    incumbent_callback = IncumbentCallback()
-    settings.set_mip_callback(incumbent_callback)
+    user_data = {"source": "incumbent_solutions_example"}
+    incumbent_callback = IncumbentCallback(user_data)
+    settings.set_mip_callback(incumbent_callback, user_data)
     # Allow enough time to find multiple incumbents
     settings.set_parameter(CUOPT_TIME_LIMIT, 30)
 

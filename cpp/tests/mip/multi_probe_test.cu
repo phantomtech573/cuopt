@@ -10,12 +10,11 @@
 #include "mip_utils.cuh"
 
 #include <raft/sparse/detail/cusparse_wrappers.h>
-#include <linear_programming/initial_scaling_strategy/initial_scaling.cuh>
-#include <linear_programming/utilities/problem_checking.cuh>
-#include <mip/presolve/bounds_presolve.cuh>
-#include <mip/presolve/multi_probe.cuh>
-#include <mip/utils.cuh>
+#include <mip_heuristics/presolve/bounds_presolve.cuh>
+#include <mip_heuristics/presolve/multi_probe.cuh>
 #include <mps_parser/parser.hpp>
+#include <pdlp/initial_scaling_strategy/initial_scaling.cuh>
+#include <pdlp/utilities/problem_checking.cuh>
 #include <raft/core/handle.hpp>
 #include <raft/util/cudart_utils.hpp>
 #include <utilities/common_utils.hpp>
@@ -153,6 +152,7 @@ uint32_t test_multi_probe(std::string path, unsigned long seed = std::random_dev
   problem_checking_t<int, double>::check_problem_representation(op_problem);
   detail::problem_t<int, double> problem(op_problem);
   mip_solver_settings_t<int, double> default_settings{};
+  pdlp_hyper_params::pdlp_hyper_params_t hyper_params{};
   detail::pdlp_initial_scaling_strategy_t<int, double> scaling(&handle_,
                                                                problem,
                                                                10,
@@ -161,6 +161,7 @@ uint32_t test_multi_probe(std::string path, unsigned long seed = std::random_dev
                                                                problem.reverse_offsets,
                                                                problem.reverse_constraints,
                                                                nullptr,
+                                                               hyper_params,
                                                                true);
   detail::mip_solver_t<int, double> solver(problem, default_settings, scaling, timer_t(0));
   detail::bound_presolve_t<int, double> bnd_prb_0(solver.context);

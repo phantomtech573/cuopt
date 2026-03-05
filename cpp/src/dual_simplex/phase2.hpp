@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -32,8 +32,8 @@ enum class status_t {
   TIME_LIMIT       = 4,
   ITERATION_LIMIT  = 5,
   CONCURRENT_LIMIT = 6,
-  UNSET            = 7,
-  WORK_LIMIT       = 8
+  WORK_LIMIT       = 7,
+  UNSET            = 8
 };
 
 static std::string status_to_string(status_t status)
@@ -62,7 +62,8 @@ dual::status_t dual_phase2(i_t phase,
                            std::vector<variable_status_t>& vstatus,
                            lp_solution_t<i_t, f_t>& sol,
                            i_t& iter,
-                           std::vector<f_t>& steepest_edge_norms);
+                           std::vector<f_t>& steepest_edge_norms,
+                           work_limit_context_t* work_unit_context = nullptr);
 
 template <typename i_t, typename f_t>
 dual::status_t dual_phase2_with_advanced_basis(i_t phase,

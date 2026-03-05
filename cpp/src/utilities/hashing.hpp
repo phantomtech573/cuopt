@@ -6,12 +6,13 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace cuopt::linear_programming::detail {
 
 template <typename i_t>
-inline uint32_t compute_hash(std::vector<i_t> h_contents)
+inline uint32_t compute_hash(const std::vector<i_t>& h_contents)
 {
   // FNV-1a hash
 
@@ -26,8 +27,8 @@ inline uint32_t compute_hash(std::vector<i_t> h_contents)
 }
 
 template <typename i_t>
-#ifdef __CUDA_ARCH__
-__device__
+#if defined(__CUDACC__)
+__host__ __device__
 #endif
   inline uint32_t
   compute_hash(const i_t val)

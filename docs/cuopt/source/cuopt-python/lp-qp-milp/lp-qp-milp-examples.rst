@@ -33,9 +33,6 @@ The response is as follows:
 Simple Quadratic Programming Example
 ------------------------------------
 
-.. note::
-   The QP solver is currently in beta.
-
 :download:`simple_qp_example.py <examples/simple_qp_example.py>`
 
 .. literalinclude:: examples/simple_qp_example.py
@@ -110,6 +107,46 @@ The response is as follows:
     y = 50.0
     z = 99.99999999999999
     Objective value = 399.99999999999994
+
+Working with Quadratic objective matrix
+---------------------------------------
+
+:download:`qp_matrix_example.py <examples/qp_matrix_example.py>`
+
+.. literalinclude:: examples/qp_matrix_example.py
+   :language: python
+   :linenos:
+
+The response is as follows:
+
+.. code-block:: text
+
+   Optimal solution found in 0.16 seconds
+   p1 = 30.770728122083014
+   p2 = 65.38350784293876
+   p3 = 53.84576403497824
+   Minimized cost = 1153.8461538953868
+
+Inspecting the Problem Solution
+-------------------------------
+
+:download:`solution_example.py <examples/solution_example.py>`
+
+.. literalinclude:: examples/solution_example.py
+   :language: python
+   :linenos:
+
+The response is as follows:
+
+.. code-block:: text
+
+    Optimal solution found in 0.02 seconds
+    Objective: 9.0
+    x = 1.0, ReducedCost = 0.0
+    y = 3.0, ReducedCost = 0.0
+    z = 0.0, ReducedCost = 2.999999858578644
+    c1 DualValue = 1.0000000592359144
+    c2 DualValue = 1.0000000821854418
 
 Working with Incumbent Solutions
 --------------------------------

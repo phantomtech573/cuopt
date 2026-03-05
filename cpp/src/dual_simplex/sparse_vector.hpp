@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -9,14 +9,10 @@
 
 #include <dual_simplex/sparse_matrix.hpp>
 #include <dual_simplex/types.hpp>
-#include <utilities/memory_instrumentation.hpp>
 
 #include <vector>
 
 namespace cuopt::linear_programming::dual_simplex {
-
-// Import instrumented vector type
-using cuopt::ins_vector;
 
 // A sparse vector stored as a list of nonzero coefficients and their indices
 template <typename i_t, typename f_t>
@@ -29,23 +25,23 @@ class sparse_vector_t {
   sparse_vector_t(const std::vector<f_t>& in) { from_dense(in); }
   // Construct a sparse vector from a column of a CSC matrix
   sparse_vector_t(const csc_matrix_t<i_t, f_t>& A, i_t col);
+  // Construct a sparse vector from a row of a CSR matrix
+  sparse_vector_t(const csr_matrix_t<i_t, f_t>& A, i_t row);
   // gather a dense vector into a sparse vector
   void from_dense(const std::vector<f_t>& in);
   // convert a sparse vector into a CSC matrix with a single column
   void to_csc(csc_matrix_t<i_t, f_t>& A) const;
   // convert a sparse vector into a dense vector. Dense vector is cleared and resized.
   void to_dense(std::vector<f_t>& x_dense) const;
-  // convert a sparse vector into an instrumented dense vector.
-  void to_dense(ins_vector<f_t>& x_dense) const;
   // scatter a sparse vector into a dense vector. Assumes x_dense is already cleared or
   // preinitialized
   void scatter(std::vector<f_t>& x_dense) const;
-  // scatter into instrumented vector
-  void scatter(ins_vector<f_t>& x_dense) const;
   // inverse permute the current sparse vector
   void inverse_permute_vector(const std::vector<i_t>& p);
   // inverse permute a sparse vector into another sparse vector
   void inverse_permute_vector(const std::vector<i_t>& p, sparse_vector_t<i_t, f_t>& y) const;
+  // compute the dot product of a sparse vector with a dense vector
+  f_t dot(const std::vector<f_t>& x) const;
   // compute the dot product of a sparse vector with a column of a CSC matrix
   f_t sparse_dot(const csc_matrix_t<i_t, f_t>& Y, i_t y_col) const;
   // ensure the coefficients in the sparse vectory are sorted in terms of increasing index
@@ -55,7 +51,6 @@ class sparse_vector_t {
   void negate();
   f_t find_coefficient(i_t index) const;
 
-  // Clear the sparse vector (removes all entries, keeps capacity)
   void clear()
   {
     i.clear();
@@ -65,9 +60,11 @@ class sparse_vector_t {
   // Reset from a column of a CSC matrix
   void from_csc_column(const csc_matrix_t<i_t, f_t>& A, i_t col);
 
+  void squeeze(sparse_vector_t<i_t, f_t>& y) const;
+
   i_t n;
-  ins_vector<i_t> i;
-  ins_vector<f_t> x;
+  std::vector<i_t> i;
+  std::vector<f_t> x;
 };
 
 }  // namespace cuopt::linear_programming::dual_simplex
