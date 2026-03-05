@@ -3481,6 +3481,8 @@ lp_status_t barrier_solver_t<i_t, f_t>::solve(f_t start_time,
     f_t norm_b = vector_norm_inf<i_t, f_t>(data.b, stream_view_);
     f_t norm_c = vector_norm_inf<i_t, f_t>(data.c, stream_view_);
 
+    settings.log.printf("norm_b: %.2e, norm_c: %.2e\n", norm_b, norm_c);
+
     f_t quad_objective = 0.0;
     if (data.Q.n > 0) {
       dense_vector_t<i_t, f_t> Qx(data.Q.n);
