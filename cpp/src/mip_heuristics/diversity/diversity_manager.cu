@@ -153,7 +153,11 @@ void diversity_manager_t<i_t, f_t>::add_user_given_solutions(
     if (problem_ptr->pre_process_assignment(init_sol_assignment)) {
       relaxed_lp_settings_t lp_settings;
       lp_settings.time_limit = std::min(60., timer.remaining_time() / 2);
-      if (timer.deterministic) { lp_settings.work_limit = lp_settings.time_limit; }
+      if (timer.deterministic) {
+        lp_settings.work_limit   = lp_settings.time_limit;
+        lp_settings.work_context = timer.work_context;
+        cuopt_assert(lp_settings.work_context != nullptr, "Missing deterministic work context");
+      }
       lp_settings.tolerance             = problem_ptr->tolerances.absolute_tolerance;
       lp_settings.save_state            = false;
       lp_settings.return_first_feasible = true;
@@ -820,7 +824,11 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
   lp_run_time     = std::min(lp_run_time, timer.remaining_time());
   relaxed_lp_settings_t lp_settings;
   lp_settings.time_limit = lp_run_time;
-  if (timer.deterministic) { lp_settings.work_limit = lp_settings.time_limit; }
+  if (timer.deterministic) {
+    lp_settings.work_limit   = lp_settings.time_limit;
+    lp_settings.work_context = timer.work_context;
+    cuopt_assert(lp_settings.work_context != nullptr, "Missing deterministic work context");
+  }
   lp_settings.tolerance               = context.settings.tolerances.absolute_tolerance;
   lp_settings.return_first_feasible   = false;
   lp_settings.save_state              = true;

@@ -83,6 +83,7 @@ static uint32_t test_full_run_determinism(std::string path,
   init_handler(op_problem.get_handle_ptr());
   // run the problem constructor of MIP, so that we do bounds standardization
   detail::problem_t<int, double> problem(op_problem);
+  problem.deterministic = true;
   problem.preprocess_problem();
 
   setup_device_symbols(op_problem.get_handle_ptr()->get_stream());
@@ -141,6 +142,7 @@ static uint32_t test_initial_solution_determinism(std::string path,
   init_handler(op_problem.get_handle_ptr());
   // run the problem constructor of MIP, so that we do bounds standardization
   detail::problem_t<int, double> problem(op_problem);
+  problem.deterministic = true;
   problem.preprocess_problem();
 
   setup_device_symbols(op_problem.get_handle_ptr()->get_stream());
@@ -200,6 +202,7 @@ static uint32_t test_recombiners_determinism(std::string path,
   init_handler(op_problem.get_handle_ptr());
   // run the problem constructor of MIP, so that we do bounds standardization
   detail::problem_t<int, double> problem(op_problem);
+  problem.deterministic = true;
   problem.preprocess_problem();
 
   setup_device_symbols(op_problem.get_handle_ptr()->get_stream());
@@ -408,14 +411,16 @@ TEST_P(DiversityTestParams, full_run_deterministic)
 
 INSTANTIATE_TEST_SUITE_P(DiversityTest,
                          DiversityTestParams,
-                         testing::Values(std::make_tuple("mip/gen-ip054.mps", 5.0f),
-                                         std::make_tuple("mip/pk1.mps", 5.0f),
-                                         // std::make_tuple("mip/uccase9.mps"),
-                                         //  std::make_tuple("mip/sct2.mps")
-                                         //  std::make_tuple("mip/thor50dday.mps")
-                                         //  std::make_tuple("uccase9.mps"),
-                                         std::make_tuple("mip/neos5.mps", 5.0f),
-                                         // std::make_tuple("mip/50v-10.mps"),
-                                         std::make_tuple("mip/rmatr200-p5.mps", 5.0f)));
+                         testing::Values(
+                           // std::make_tuple("mip/gen-ip054.mps", 5.0f),
+                           // std::make_tuple("mip/pk1.mps", 5.0f),
+                           std::make_tuple("mip/uccase9.mps", 5.0f),
+                           std::make_tuple("mip/sct2.mps", 5.0f),
+                           std::make_tuple("mip/thor50dday.mps", 5.0f),
+                           //  std::make_tuple("uccase9.mps"),
+                           // std::make_tuple("mip/neos5.mps", 5.0f),
+                           std::make_tuple("mip/50v-10.mps", 5.0f)
+                           // std::make_tuple("mip/rmatr200-p5.mps", 5.0f)
+                           ));
 
 }  // namespace cuopt::linear_programming::test

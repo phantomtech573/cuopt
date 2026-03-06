@@ -16,7 +16,94 @@
 #include <utilities/copy_helpers.hpp>
 #include <utilities/seed_generator.cuh>
 
+#include <cmath>
+
 namespace cuopt::linear_programming::detail {
+
+namespace {
+
+constexpr double bounds_repair_setup_base_work            = 5e-4;
+constexpr double bounds_repair_violation_base_work        = 4e-4;
+constexpr double bounds_repair_violation_nnz_work         = 2e-6;
+constexpr double bounds_repair_violation_constraint_work  = 3e-6;
+constexpr double bounds_repair_best_bounds_variable_work  = 2e-6;
+constexpr double bounds_repair_shift_base_work            = 3e-4;
+constexpr double bounds_repair_shift_row_entry_work       = 3e-6;
+constexpr double bounds_repair_shift_candidate_work       = 8e-6;
+constexpr double bounds_repair_shift_neighbor_entry_work  = 3e-6;
+constexpr double bounds_repair_shift_sort_work            = 5e-6;
+constexpr double bounds_repair_damage_base_work           = 3e-4;
+constexpr double bounds_repair_damage_neighbor_entry_work = 8e-6;
+constexpr double bounds_repair_damage_sort_work           = 5e-6;
+constexpr double bounds_repair_move_base_work             = 5e-5;
+constexpr double bounds_repair_no_candidate_base_work     = 4e-4;
+constexpr double bounds_repair_cycle_penalty_work         = 3e-4;
+
+template <typename i_t, typename f_t>
+double estimate_bounds_repair_violation_refresh_work(const problem_t<i_t, f_t>& problem,
+                                                     bool update_best_bounds)
+{
+  double estimate = bounds_repair_violation_base_work +
+                    bounds_repair_violation_nnz_work * (double)problem.nnz +
+                    bounds_repair_violation_constraint_work * (double)problem.n_constraints;
+  if (update_best_bounds) {
+    estimate += bounds_repair_best_bounds_variable_work * (double)problem.n_variables;
+  }
+  return estimate;
+}
+
+template <typename i_t, typename f_t>
+double estimate_bounds_repair_setup_work(const problem_t<i_t, f_t>& problem)
+{
+  return bounds_repair_setup_base_work +
+         estimate_bounds_repair_violation_refresh_work(problem, true);
+}
+
+template <typename i_t, typename f_t>
+double estimate_bounds_repair_shift_work(const problem_t<i_t, f_t>& problem,
+                                         i_t curr_cstr,
+                                         i_t n_candidates,
+                                         bool is_cycle)
+{
+  const auto stream    = problem.handle_ptr->get_stream();
+  const i_t cstr_begin = problem.offsets.element(curr_cstr, stream);
+  const i_t cstr_end   = problem.offsets.element(curr_cstr + 1, stream);
+  const double row_nnz = cstr_end - cstr_begin;
+  const double avg_rev_degree =
+    problem.n_variables > 0 ? ((double)problem.nnz / (double)problem.n_variables) : 0.0;
+  const double sort_work =
+    n_candidates > 1 ? (double)n_candidates * std::log2((double)n_candidates) : 0.0;
+  double estimate = bounds_repair_shift_base_work + bounds_repair_shift_row_entry_work * row_nnz;
+  if (n_candidates == 0) { estimate = bounds_repair_no_candidate_base_work + estimate; }
+  estimate += bounds_repair_shift_candidate_work * (double)n_candidates;
+  estimate += bounds_repair_shift_neighbor_entry_work * (double)n_candidates * avg_rev_degree;
+  estimate += bounds_repair_shift_sort_work * sort_work;
+  if (is_cycle) { estimate += bounds_repair_cycle_penalty_work; }
+  return estimate;
+}
+
+template <typename i_t, typename f_t>
+double estimate_bounds_repair_damage_work(const problem_t<i_t, f_t>& problem, i_t n_candidates)
+{
+  if (n_candidates == 0) { return 0.0; }
+  const double avg_rev_degree =
+    problem.n_variables > 0 ? ((double)problem.nnz / (double)problem.n_variables) : 0.0;
+  const double sort_work =
+    n_candidates > 1 ? (double)n_candidates * std::log2((double)n_candidates) : 0.0;
+  return bounds_repair_damage_base_work +
+         bounds_repair_damage_neighbor_entry_work * (double)n_candidates * avg_rev_degree +
+         bounds_repair_damage_sort_work * sort_work;
+}
+
+template <typename timer_t>
+void record_estimated_work(timer_t& timer, double* total_estimated_work, double work)
+{
+  cuopt_assert(std::isfinite(work) && work >= 0.0, "Bounds repair work estimate must be finite");
+  timer.record_work(work);
+  *total_estimated_work += work;
+}
+
+}  // namespace
 
 template <typename i_t, typename f_t>
 bounds_repair_t<i_t, f_t>::bounds_repair_t(const problem_t<i_t, f_t>& pb,
@@ -400,16 +487,25 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
   CUOPT_LOG_DEBUG("Running bounds repair");
   handle_ptr = handle_ptr_;
   timer      = timer_;
+  cuopt_assert(timer.deterministic == problem.deterministic,
+               "Bounds repair timer/problem determinism mismatch");
   resize(problem);
   reset();
   best_violation = get_ii_violation(problem);
   curr_violation = best_violation;
   best_bounds.update_from(problem, handle_ptr);
+  double total_estimated_work = 0.0;
+  i_t repair_iterations       = 0;
+  if (timer.deterministic) {
+    const double setup_work = estimate_bounds_repair_setup_work(problem);
+    record_estimated_work(timer, &total_estimated_work, setup_work);
+  }
   i_t no_candidate_in_a_row = 0;
   // TODO: do this better
   i_t iter_limit = std::numeric_limits<i_t>::max();
-  if (problem.deterministic) { iter_limit = 20; }
+  if (timer.deterministic) { iter_limit = 20; }
   while (h_n_violated_cstr > 0 && iter_limit-- > 0) {
+    repair_iterations++;
     CUOPT_LOG_TRACE("Bounds repair loop: n_violated %d best_violation %f curr_violation %f",
                     h_n_violated_cstr,
                     best_violation,
@@ -421,6 +517,11 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
     if (is_cycle) { CUOPT_LOG_DEBUG("Repair: cycle detected at cstr %d", curr_cstr); }
     // in parallel compute the best shift and best respective damage
     i_t n_candidates = compute_best_shift(problem, original_problem, curr_cstr);
+    if (timer.deterministic) {
+      const double shift_work =
+        estimate_bounds_repair_shift_work(problem, curr_cstr, n_candidates, is_cycle);
+      record_estimated_work(timer, &total_estimated_work, shift_work);
+    }
     // if no candidate is there continue with another constraint
     if (n_candidates == 0) {
       CUOPT_LOG_DEBUG("Repair: no candidate var found for cstr %d", curr_cstr);
@@ -435,6 +536,10 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
     CUOPT_LOG_TRACE("Repair: number of candidates %d", n_candidates);
     // among the ones that have a valid shift value, compute the damage
     compute_damages(problem, n_candidates);
+    if (timer.deterministic) {
+      const double damage_work = estimate_bounds_repair_damage_work(problem, n_candidates);
+      record_estimated_work(timer, &total_estimated_work, damage_work);
+    }
     // get the best damage
     i_t best_cstr_delta = candidates.cstr_delta.front_element(handle_ptr->get_stream());
     f_t best_damage     = candidates.damage.front_element(handle_ptr->get_stream());
@@ -463,9 +568,22 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
     apply_move(problem, original_problem, best_move_idx);
     reset();
     // TODO we might optimize this to only calculate the changed constraints
-    curr_violation = get_ii_violation(problem);
+    curr_violation                = get_ii_violation(problem);
+    const bool improved_violation = curr_violation < best_violation;
+    if (timer.deterministic) {
+      const double refresh_work =
+        bounds_repair_move_base_work +
+        estimate_bounds_repair_violation_refresh_work(problem, improved_violation);
+      record_estimated_work(timer, &total_estimated_work, refresh_work);
+      CUOPT_LOG_DEBUG("Repair iter work: cstr=%d candidates=%d cycle=%d improved=%d total=%.6f",
+                      curr_cstr,
+                      n_candidates,
+                      (int)is_cycle,
+                      (int)improved_violation,
+                      total_estimated_work);
+    }
 
-    if (curr_violation < best_violation) {
+    if (improved_violation) {
       best_violation = curr_violation;
       // update best bounds
       best_bounds.update_from(problem, handle_ptr);
@@ -475,6 +593,13 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
   bool feasible = h_n_violated_cstr == 0;
   // copy best bounds into problem
   best_bounds.update_to(problem, handle_ptr);
+  if (timer.deterministic) {
+    CUOPT_LOG_DEBUG("Repair work estimate: loops=%d total=%.6f best_violation=%.6f feasible=%d",
+                    repair_iterations,
+                    total_estimated_work,
+                    best_violation,
+                    (int)feasible);
+  }
   CUOPT_LOG_DEBUG("Repair: returning with feas: %d vio %f", feasible, best_violation);
   return feasible;
 }

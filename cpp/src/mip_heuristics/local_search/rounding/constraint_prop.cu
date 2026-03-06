@@ -19,6 +19,8 @@
 #include <thrust/partition.h>
 #include <thrust/sort.h>
 
+#include <chrono>
+
 namespace cuopt::linear_programming::detail {
 
 template <typename i_t, typename f_t>
@@ -937,9 +939,12 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   bool timeout_happened          = false;
   i_t n_failed_repair_iterations = 0;
   while (set_count < unset_integer_vars.size()) {
+    auto iter_start_time = std::chrono::high_resolution_clock::now();
     CUOPT_LOG_TRACE("n_set_vars %d vars to set %lu", set_count, unset_integer_vars.size());
     CUOPT_LOG_DEBUG("unset_integer_vars size %lu", unset_integer_vars.size());
+    const size_t set_count_before = set_count;
     update_host_assignment(sol);
+    auto after_update_host_assignment = std::chrono::high_resolution_clock::now();
     if (max_timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("Second time limit is reached returning nearest rounding!");
       collapse_crossing_bounds(*sol.problem_ptr, *orig_sol.problem_ptr, sol.handle_ptr);
@@ -963,12 +968,14 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
         bounds_prop_interval = 1;
       }
     }
-    i_t n_vars_to_set = recovery_mode ? 1 : bounds_prop_interval;
+    i_t n_vars_to_set   = recovery_mode ? 1 : bounds_prop_interval;
+    const bool did_sort = n_vars_to_set != 1;
     // if we are not at the last stage or if we are in recovery mode, don't sort
     if (n_vars_to_set != 1) {
       sort_by_implied_slack_consumption(
         sol, make_span(unset_integer_vars, set_count, unset_integer_vars.size()), problem_ii);
     }
+    auto after_sort = std::chrono::high_resolution_clock::now();
     std::vector<i_t> host_vars_to_set(n_vars_to_set);
     raft::copy(host_vars_to_set.data(),
                unset_integer_vars.data() + set_count,
@@ -979,6 +986,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
 
     auto var_probe_vals =
       generate_bulk_rounding_vector(sol, orig_sol, host_vars_to_set, probing_config);
+    auto after_generate_probe_vals = std::chrono::high_resolution_clock::now();
 
     CUOPT_LOG_TRACE("var_probe_vals hash 1 0x%x, hash 2 0x%x, hash 3 0x%x",
                     detail::compute_hash(std::get<0>(var_probe_vals)),
@@ -986,18 +994,23 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
                     detail::compute_hash(std::get<2>(var_probe_vals)));
     probe(
       sol, orig_sol.problem_ptr, var_probe_vals, &set_count, unset_integer_vars, probing_config);
+    auto after_probe = std::chrono::high_resolution_clock::now();
     CUOPT_LOG_TRACE(
       "post probe, set count %d, unset var hash 0x%x, size %lu",
       (int)set_count,
       detail::compute_hash(make_span(unset_integer_vars), sol.handle_ptr->get_stream()),
       unset_integer_vars.size());
+    bool repair_attempted = false;
+    bool bounds_repaired  = false;
+    i_t n_fixed_vars      = 0;
     if (!(n_failed_repair_iterations >= max_n_failed_repair_iterations) && rounding_ii &&
         !timeout_happened) {
       // timer_t repair_timer{std::min(timer.remaining_time() / 5, timer.elapsed_time() / 3)};
       work_limit_timer_t repair_timer(context.gpu_heur_loop, timer.remaining_time() / 5);
       save_bounds(sol);
       // update bounds and run repair procedure
-      bool bounds_repaired =
+      repair_attempted = true;
+      bounds_repaired =
         run_repair_procedure(*sol.problem_ptr, *orig_sol.problem_ptr, repair_timer, sol.handle_ptr);
       if (!bounds_repaired) {
         restore_bounds(sol);
@@ -1021,11 +1034,48 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
                                      make_span(sol.problem_ptr->variable_bounds),
                                      make_span(orig_sol.problem_ptr->variable_bounds),
                                      make_span(sol.assignment)});
-        i_t n_fixed_vars = (iter - (unset_vars.begin() + set_count));
+        n_fixed_vars = (iter - (unset_vars.begin() + set_count));
         CUOPT_LOG_TRACE("After repair procedure, number of additional fixed vars %d", n_fixed_vars);
         set_count += n_fixed_vars;
       }
     }
+    auto after_repair = std::chrono::high_resolution_clock::now();
+    const double update_host_assignment_ms =
+      std::chrono::duration<double, std::milli>(after_update_host_assignment - iter_start_time)
+        .count();
+    const double sort_ms =
+      std::chrono::duration<double, std::milli>(after_sort - after_update_host_assignment).count();
+    const double generate_probe_vals_ms =
+      std::chrono::duration<double, std::milli>(after_generate_probe_vals - after_sort).count();
+    const double probe_ms =
+      std::chrono::duration<double, std::milli>(after_probe - after_generate_probe_vals).count();
+    const double repair_ms =
+      std::chrono::duration<double, std::milli>(after_repair - after_probe).count();
+    const double iter_total_ms =
+      std::chrono::duration<double, std::milli>(after_repair - iter_start_time).count();
+    CUOPT_LOG_DEBUG(
+      "CP iter: set_count=%lu->%lu unset=%d interval=%d n_vars_to_set=%d sort=%d recovery=%d "
+      "rounding_ii=%d probe_ii=%d timeout=%d repair_attempted=%d repair_success=%d "
+      "repair_fixed=%d t_ms(update=%.3f sort=%.3f gen=%.3f probe=%.3f repair=%.3f total=%.3f)",
+      set_count_before,
+      set_count,
+      n_curr_unset,
+      bounds_prop_interval,
+      n_vars_to_set,
+      (int)did_sort,
+      (int)recovery_mode,
+      (int)rounding_ii,
+      (int)problem_ii,
+      (int)timeout_happened,
+      (int)repair_attempted,
+      (int)bounds_repaired,
+      n_fixed_vars,
+      update_host_assignment_ms,
+      sort_ms,
+      generate_probe_vals_ms,
+      probe_ms,
+      repair_ms,
+      iter_total_ms);
     // we can keep normal bounds_update here because this is only activated after the  repair
     if (recovery_mode && multi_probe.infeas_constraints_count_0 > 0 &&
         multi_probe.infeas_constraints_count_1 > 0) {
@@ -1061,7 +1111,12 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
        multi_probe.infeas_constraints_count_1 == 0) &&
       !timeout_happened && lp_run_time_after_feasible > 0) {
     relaxed_lp_settings_t lp_settings;
-    lp_settings.time_limit            = lp_run_time_after_feasible;
+    lp_settings.time_limit = lp_run_time_after_feasible;
+    if (timer.deterministic) {
+      lp_settings.work_limit   = lp_settings.time_limit;
+      lp_settings.work_context = timer.work_context;
+      cuopt_assert(lp_settings.work_context != nullptr, "Missing deterministic work context");
+    }
     lp_settings.tolerance             = orig_sol.problem_ptr->tolerances.absolute_tolerance;
     lp_settings.save_state            = false;
     lp_settings.return_first_feasible = true;

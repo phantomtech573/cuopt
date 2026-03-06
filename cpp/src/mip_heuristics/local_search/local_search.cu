@@ -491,7 +491,11 @@ bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solu
     const f_t lp_run_time = 2.;
     relaxed_lp_settings_t lp_settings;
     lp_settings.time_limit = std::min(lp_run_time, timer.remaining_time());
-    if (timer.deterministic) { lp_settings.work_limit = lp_settings.time_limit; }
+    if (timer.deterministic) {
+      lp_settings.work_limit   = lp_settings.time_limit;
+      lp_settings.work_context = timer.work_context;
+      cuopt_assert(lp_settings.work_context != nullptr, "Missing deterministic work context");
+    }
     lp_settings.tolerance = solution.problem_ptr->tolerances.absolute_tolerance;
     run_lp_with_vars_fixed(
       *solution.problem_ptr, solution, solution.problem_ptr->integer_indices, lp_settings);

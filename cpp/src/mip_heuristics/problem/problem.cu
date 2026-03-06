@@ -940,8 +940,12 @@ void problem_t<i_t, f_t>::compute_related_variables(double time_limit)
 
   handle_ptr->sync_stream();
 
-  // CHANGE
-  if (deterministic) { time_limit = std::numeric_limits<f_t>::infinity(); }
+  if (deterministic) {
+    // TODO: Re-enable deterministic related-variable construction once we have a work estimator.
+    related_variables.resize(0, handle_ptr->get_stream());
+    related_variables_offsets.resize(0, handle_ptr->get_stream());
+    return;
+  }
 
   // previously used constants were based on 40GB of memory. Scale accordingly on smaller GPUs
   // We can't rely on querying free memory or allocation try/catch
