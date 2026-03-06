@@ -485,8 +485,11 @@ third_party_presolve_status_t convert_papilo_presolve_status_to_third_party_pres
     case papilo::PresolveStatus::kUnbndOrInfeas:
       return third_party_presolve_status_t::UNBNDORINFEAS;
     case papilo::PresolveStatus::kInfeasible: return third_party_presolve_status_t::INFEASIBLE;
-    case papilo::PresolveStatus::kUnbounded: return third_party_presolve_status_t::UNBOUNDED;
+    case papilo::PresolveStatus::kUnbounded:
+      return third_party_presolve_status_t::UNBOUNDED;
+      // Do not implement default case to trigger compile time error if new enum is added
   }
+  return third_party_presolve_status_t::UNCHANGED;
 }
 
 third_party_presolve_status_t convert_pslp_presolve_status_to_third_party_presolve_status(
@@ -496,8 +499,11 @@ third_party_presolve_status_t convert_pslp_presolve_status_to_third_party_presol
     case PresolveStatus_::UNCHANGED: return third_party_presolve_status_t::UNCHANGED;
     case PresolveStatus_::REDUCED: return third_party_presolve_status_t::REDUCED;
     case PresolveStatus_::INFEASIBLE: return third_party_presolve_status_t::INFEASIBLE;
-    case PresolveStatus_::UNBNDORINFEAS: return third_party_presolve_status_t::UNBNDORINFEAS;
+    case PresolveStatus_::UNBNDORINFEAS:
+      return third_party_presolve_status_t::UNBNDORINFEAS;
+      // Do not implement default case to trigger compile time error if new enum is added
   }
+  return third_party_presolve_status_t::UNCHANGED;
 }
 
 void check_postsolve_status(const papilo::PostsolveStatus& status)
