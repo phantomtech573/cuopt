@@ -1203,7 +1203,7 @@ optimization_problem_solution_t<i_t, f_t> solve_lp(
       CUOPT_LOG_INFO("Third-party presolve is disabled, skipping");
     }
 
-    // Declare result at outer scope so that result->reduced_problem (which may be
+    // Declare result at outer scope so that result.reduced_problem (which may be
     // referenced by problem.original_problem_ptr) remains alive through the solve.
     std::optional<detail::third_party_presolve_result_t<i_t, f_t>> result;
 
@@ -1222,9 +1222,14 @@ optimization_problem_solution_t<i_t, f_t> solve_lp(
                                 settings.tolerances.absolute_primal_tolerance,
                                 settings.tolerances.relative_primal_tolerance,
                                 presolve_time_limit);
-      if (!result.has_value()) {
+      if (result->status == detail::third_party_presolve_status_t::INFEASIBLE) {
         return optimization_problem_solution_t<i_t, f_t>(
           pdlp_termination_status_t::PrimalInfeasible, op_problem.get_handle_ptr()->get_stream());
+      }
+      if (result->status == detail::third_party_presolve_status_t::UNBNDORINFEAS) {
+        return optimization_problem_solution_t<i_t, f_t>(
+          pdlp_termination_status_t::UnboundedOrInfeasible,
+          op_problem.get_handle_ptr()->get_stream());
       }
 
       // Handle case where presolve completely solved the problem (reduced to 0 rows/cols)

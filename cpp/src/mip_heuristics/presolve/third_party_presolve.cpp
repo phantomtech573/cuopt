@@ -569,7 +569,7 @@ void set_presolve_parameters(papilo::Presolve<f_t>& presolver,
 }
 
 template <typename i_t, typename f_t>
-std::optional<third_party_presolve_result_t<i_t, f_t>> third_party_presolve_t<i_t, f_t>::apply_pslp(
+third_party_presolve_result_t<i_t, f_t> third_party_presolve_t<i_t, f_t>::apply_pslp(
   optimization_problem_t<i_t, f_t> const& op_problem, const double time_limit)
 {
   f_t original_obj_offset = op_problem.get_objective_offset();
@@ -583,17 +583,22 @@ std::optional<third_party_presolve_result_t<i_t, f_t>> third_party_presolve_t<i_
   pslp_stgs_      = ctx.settings;
 
   if (ctx.status == PresolveStatus_::INFEASIBLE || ctx.status == PresolveStatus_::UNBNDORINFEAS) {
-    return std::nullopt;
+    auto status = (ctx.status == PresolveStatus_::INFEASIBLE)
+                    ? third_party_presolve_status_t::INFEASIBLE
+                    : third_party_presolve_status_t::UNBNDORINFEAS;
+    optimization_problem_t<i_t, f_t> empty_problem(op_problem.get_handle_ptr());
+    return third_party_presolve_result_t<i_t, f_t>{status, std::move(empty_problem), {}, {}, {}};
   }
 
   auto opt_problem = build_optimization_problem_from_pslp<i_t, f_t>(
     pslp_presolver_, op_problem.get_handle_ptr(), maximize_, original_obj_offset);
 
-  return std::make_optional(third_party_presolve_result_t<i_t, f_t>{opt_problem, {}});
+  return third_party_presolve_result_t<i_t, f_t>{
+    third_party_presolve_status_t::REDUCED, std::move(opt_problem), {}, {}, {}};
 }
 
 template <typename i_t, typename f_t>
-std::optional<third_party_presolve_result_t<i_t, f_t>> third_party_presolve_t<i_t, f_t>::apply(
+third_party_presolve_result_t<i_t, f_t> third_party_presolve_t<i_t, f_t>::apply(
   optimization_problem_t<i_t, f_t> const& op_problem,
   problem_category_t category,
   cuopt::linear_programming::presolver_t presolver,
@@ -643,7 +648,11 @@ std::optional<third_party_presolve_result_t<i_t, f_t>> third_party_presolve_t<i_
   check_presolve_status(result.status);
   if (result.status == papilo::PresolveStatus::kInfeasible ||
       result.status == papilo::PresolveStatus::kUnbndOrInfeas) {
-    return std::nullopt;
+    auto status = (result.status == papilo::PresolveStatus::kInfeasible)
+                    ? third_party_presolve_status_t::INFEASIBLE
+                    : third_party_presolve_status_t::UNBNDORINFEAS;
+    optimization_problem_t<i_t, f_t> empty_problem(op_problem.get_handle_ptr());
+    return third_party_presolve_result_t<i_t, f_t>{status, std::move(empty_problem), {}, {}, {}};
   }
   papilo_post_solve_storage_.reset(new papilo::PostsolveStorage<f_t>(result.postsolve));
   CUOPT_LOG_INFO("Presolve removed: %d constraints, %d variables, %d nonzeros",
@@ -678,8 +687,11 @@ std::optional<third_party_presolve_result_t<i_t, f_t>> third_party_presolve_t<i_
     }
   }
 
-  return std::make_optional(third_party_presolve_result_t<i_t, f_t>{
-    opt_problem, implied_integer_indices, reduced_to_original_map_, original_to_reduced_map_});
+  return third_party_presolve_result_t<i_t, f_t>{third_party_presolve_status_t::REDUCED,
+                                                 std::move(opt_problem),
+                                                 implied_integer_indices,
+                                                 reduced_to_original_map_,
+                                                 original_to_reduced_map_};
 }
 
 template <typename i_t, typename f_t>
