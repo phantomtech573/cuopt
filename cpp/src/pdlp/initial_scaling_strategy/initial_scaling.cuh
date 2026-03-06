@@ -88,6 +88,7 @@ class pdlp_initial_scaling_strategy_t {
   void compute_scaling_vectors(i_t number_of_ruiz_iterations, f_t alpha);
   void ruiz_inf_scaling(i_t number_of_ruiz_iterations);
   void pock_chambolle_scaling(f_t alpha);
+  void reset_integer_variables();
 
   raft::handle_t const* handle_ptr_{nullptr};
   rmm::cuda_stream_view stream_view_;

@@ -15,6 +15,7 @@
 #include <pdlp/pdlp_constants.hpp>
 #include <pdlp/utils.cuh>
 
+#include <raft/core/nvtx.hpp>
 #include <raft/linalg/binary_op.cuh>
 #include <raft/linalg/eltwise.cuh>
 #include <raft/util/cuda_utils.cuh>
@@ -194,6 +195,8 @@ void pdlp_initial_scaling_strategy_t<i_t, f_t>::ruiz_inf_scaling(i_t number_of_r
       op_problem_scaled_.view(), this->view());
     RAFT_CUDA_TRY(cudaPeekAtLastError());
 
+    if (running_mip_) { reset_integer_variables(); }
+
     raft::linalg::binaryOp(cummulative_constraint_matrix_scaling_.data(),
                            cummulative_constraint_matrix_scaling_.data(),
                            iteration_constraint_matrix_scaling_.data(),
@@ -214,6 +217,17 @@ void pdlp_initial_scaling_strategy_t<i_t, f_t>::ruiz_inf_scaling(i_t number_of_r
     RAFT_CUDA_TRY(cudaMemsetAsync(
       iteration_variable_scaling_.data(), 0.0, sizeof(f_t) * primal_size_h_, stream_view_));
   }
+}
+
+template <typename i_t, typename f_t>
+void pdlp_initial_scaling_strategy_t<i_t, f_t>::reset_integer_variables()
+{
+  thrust::scatter(
+    handle_ptr_->get_thrust_policy(),
+    thrust::make_constant_iterator<f_t>(1),
+    thrust::make_constant_iterator<f_t>(1) + op_problem_scaled_.integer_indices.size(),
+    op_problem_scaled_.integer_indices.begin(),
+    iteration_variable_scaling_.begin());
 }
 
 template <typename i_t, typename f_t, int BLOCK_SIZE>
@@ -330,6 +344,8 @@ void pdlp_initial_scaling_strategy_t<i_t, f_t>::pock_chambolle_scaling(f_t alpha
       A_T_offsets_.data(),
       A_T_indices_.data());
   RAFT_CUDA_TRY(cudaPeekAtLastError());
+
+  if (running_mip_) { reset_integer_variables(); }
 
   // divide the sqrt of the vectors of the sums from above to the respective scaling vectors
   // (only if sqrt(sum)>0)
