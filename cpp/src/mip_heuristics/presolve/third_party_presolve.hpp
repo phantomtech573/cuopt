@@ -30,6 +30,7 @@ struct papilo_postsolve_deleter {
 enum class third_party_presolve_status_t {
   INFEASIBLE,
   UNBNDORINFEAS,
+  UNBOUNDED,
   OPTIMAL,
   REDUCED,
   UNCHANGED,

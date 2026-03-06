@@ -1231,6 +1231,10 @@ optimization_problem_solution_t<i_t, f_t> solve_lp(
           pdlp_termination_status_t::UnboundedOrInfeasible,
           op_problem.get_handle_ptr()->get_stream());
       }
+      if (result->status == detail::third_party_presolve_status_t::UNBOUNDED) {
+        return optimization_problem_solution_t<i_t, f_t>(pdlp_termination_status_t::DualInfeasible,
+                                                         op_problem.get_handle_ptr()->get_stream());
+      }
 
       // Handle case where presolve completely solved the problem (reduced to 0 rows/cols)
       // Must check before constructing problem_t since it fails on empty problems

@@ -293,6 +293,11 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
                                         solver_stats_t<i_t, f_t>{},
                                         op_problem.get_handle_ptr()->get_stream());
       }
+      if (result.status == detail::third_party_presolve_status_t::UNBOUNDED) {
+        return mip_solution_t<i_t, f_t>(mip_termination_status_t::Unbounded,
+                                        solver_stats_t<i_t, f_t>{},
+                                        op_problem.get_handle_ptr()->get_stream());
+      }
       presolve_result_opt.emplace(std::move(result));
 
       problem = detail::problem_t<i_t, f_t>(presolve_result_opt->reduced_problem);

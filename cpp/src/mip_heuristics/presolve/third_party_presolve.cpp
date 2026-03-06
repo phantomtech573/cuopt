@@ -476,6 +476,30 @@ void check_presolve_status(const papilo::PresolveStatus& status)
   }
 }
 
+third_party_presolve_status_t convert_papilo_presolve_status_to_third_party_presolve_status(
+  const papilo::PresolveStatus& status)
+{
+  switch (status) {
+    case papilo::PresolveStatus::kUnchanged: return third_party_presolve_status_t::UNCHANGED;
+    case papilo::PresolveStatus::kReduced: return third_party_presolve_status_t::REDUCED;
+    case papilo::PresolveStatus::kUnbndOrInfeas:
+      return third_party_presolve_status_t::UNBNDORINFEAS;
+    case papilo::PresolveStatus::kInfeasible: return third_party_presolve_status_t::INFEASIBLE;
+    case papilo::PresolveStatus::kUnbounded: return third_party_presolve_status_t::UNBOUNDED;
+  }
+}
+
+third_party_presolve_status_t convert_pslp_presolve_status_to_third_party_presolve_status(
+  const PresolveStatus& status)
+{
+  switch (status) {
+    case PresolveStatus_::UNCHANGED: return third_party_presolve_status_t::UNCHANGED;
+    case PresolveStatus_::REDUCED: return third_party_presolve_status_t::REDUCED;
+    case PresolveStatus_::INFEASIBLE: return third_party_presolve_status_t::INFEASIBLE;
+    case PresolveStatus_::UNBNDORINFEAS: return third_party_presolve_status_t::UNBNDORINFEAS;
+  }
+}
+
 void check_postsolve_status(const papilo::PostsolveStatus& status)
 {
   switch (status) {
@@ -582,10 +606,8 @@ third_party_presolve_result_t<i_t, f_t> third_party_presolve_t<i_t, f_t>::apply_
   pslp_presolver_ = ctx.presolver;
   pslp_stgs_      = ctx.settings;
 
+  auto status = convert_pslp_presolve_status_to_third_party_presolve_status(ctx.status);
   if (ctx.status == PresolveStatus_::INFEASIBLE || ctx.status == PresolveStatus_::UNBNDORINFEAS) {
-    auto status = (ctx.status == PresolveStatus_::INFEASIBLE)
-                    ? third_party_presolve_status_t::INFEASIBLE
-                    : third_party_presolve_status_t::UNBNDORINFEAS;
     optimization_problem_t<i_t, f_t> empty_problem(op_problem.get_handle_ptr());
     return third_party_presolve_result_t<i_t, f_t>{status, std::move(empty_problem), {}, {}, {}};
   }
@@ -593,8 +615,7 @@ third_party_presolve_result_t<i_t, f_t> third_party_presolve_t<i_t, f_t>::apply_
   auto opt_problem = build_optimization_problem_from_pslp<i_t, f_t>(
     pslp_presolver_, op_problem.get_handle_ptr(), maximize_, original_obj_offset);
 
-  return third_party_presolve_result_t<i_t, f_t>{
-    third_party_presolve_status_t::REDUCED, std::move(opt_problem), {}, {}, {}};
+  return third_party_presolve_result_t<i_t, f_t>{status, std::move(opt_problem), {}, {}, {}};
 }
 
 template <typename i_t, typename f_t>
@@ -646,11 +667,10 @@ third_party_presolve_result_t<i_t, f_t> third_party_presolve_t<i_t, f_t>::apply(
 
   auto result = papilo_presolver.apply(papilo_problem);
   check_presolve_status(result.status);
+  auto status = convert_papilo_presolve_status_to_third_party_presolve_status(result.status);
   if (result.status == papilo::PresolveStatus::kInfeasible ||
-      result.status == papilo::PresolveStatus::kUnbndOrInfeas) {
-    auto status = (result.status == papilo::PresolveStatus::kInfeasible)
-                    ? third_party_presolve_status_t::INFEASIBLE
-                    : third_party_presolve_status_t::UNBNDORINFEAS;
+      result.status == papilo::PresolveStatus::kUnbndOrInfeas ||
+      result.status == papilo::PresolveStatus::kUnbounded) {
     optimization_problem_t<i_t, f_t> empty_problem(op_problem.get_handle_ptr());
     return third_party_presolve_result_t<i_t, f_t>{status, std::move(empty_problem), {}, {}, {}};
   }
@@ -687,7 +707,7 @@ third_party_presolve_result_t<i_t, f_t> third_party_presolve_t<i_t, f_t>::apply(
     }
   }
 
-  return third_party_presolve_result_t<i_t, f_t>{third_party_presolve_status_t::REDUCED,
+  return third_party_presolve_result_t<i_t, f_t>{status,
                                                  std::move(opt_problem),
                                                  implied_integer_indices,
                                                  reduced_to_original_map_,
