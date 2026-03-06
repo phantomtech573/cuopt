@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /*
@@ -29,6 +29,8 @@ const char* termination_status_to_string(cuopt_int_t termination_status)
       return "Primal feasible";
     case CUOPT_TERIMINATION_STATUS_FEASIBLE_FOUND:
       return "Feasible found";
+    case CUOPT_TERIMINATION_STATUS_UNBOUNDED_OR_INFEASIBLE:
+      return "Unbounded or infeasible";
     default:
       return "Unknown";
   }

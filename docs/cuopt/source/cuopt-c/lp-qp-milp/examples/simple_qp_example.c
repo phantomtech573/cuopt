@@ -46,6 +46,8 @@ const char* termination_status_to_string(cuopt_int_t termination_status)
       return "Primal feasible";
     case CUOPT_TERIMINATION_STATUS_FEASIBLE_FOUND:
       return "Feasible found";
+    case CUOPT_TERIMINATION_STATUS_UNBOUNDED_OR_INFEASIBLE:
+      return "Unbounded or infeasible";
     default:
       return "Unknown";
   }
