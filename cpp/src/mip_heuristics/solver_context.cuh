@@ -7,6 +7,7 @@
 
 #include <cuopt/linear_programming/mip/solver_stats.hpp>
 
+#include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/relaxed_lp/lp_state.cuh>
 #include <pdlp/initial_scaling_strategy/initial_scaling.cuh>
@@ -52,7 +53,7 @@ struct mip_solver_context_t {
     cuopt_assert(problem_ptr != nullptr, "problem_ptr is nullptr");
     stats.set_solution_bound(problem_ptr->maximize ? std::numeric_limits<f_t>::infinity()
                                                    : -std::numeric_limits<f_t>::infinity());
-    gpu_heur_loop.deterministic = settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
+    gpu_heur_loop.deterministic = is_deterministic_mode(settings.determinism_mode);
   }
 
   mip_solver_context_t(const mip_solver_context_t&)            = delete;

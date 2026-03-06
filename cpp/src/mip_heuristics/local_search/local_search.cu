@@ -329,7 +329,9 @@ void local_search_t<i_t, f_t>::generate_fast_solution(solution_t<i_t, f_t>& solu
   fj.settings.update_weights         = true;
   fj.settings.feasibility_run        = true;
   fj.settings.time_limit             = std::min(30., timer.remaining_time());
-  while (!context.diversity_manager_ptr->check_b_b_preemption() && !timer.check_time_limit()) {
+  while ((context.diversity_manager_ptr == nullptr ||
+          !context.diversity_manager_ptr->check_b_b_preemption()) &&
+         !timer.check_time_limit()) {
     work_limit_timer_t constr_prop_timer =
       work_limit_timer_t(context.gpu_heur_loop, std::min(timer.remaining_time(), 2.));
     // do constraint prop on lp optimal solution

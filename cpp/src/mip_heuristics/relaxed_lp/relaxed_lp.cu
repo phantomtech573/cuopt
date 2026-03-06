@@ -21,6 +21,8 @@
 
 #include <thrust/tabulate.h>
 
+#include <atomic>
+
 namespace cuopt::linear_programming::detail {
 
 template <typename i_t, typename f_t>
@@ -40,6 +42,8 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   const relaxed_lp_settings_t& settings)
 {
   raft::common::nvtx::range fun_scope("get_relaxed_lp_solution");
+  static std::atomic<uint64_t> lp_call_counter{0};
+  const uint64_t lp_call_id = lp_call_counter.fetch_add(1, std::memory_order_relaxed);
   // auto function_start_time = std::chrono::high_resolution_clock::now();
 
   // // === PDLP PREDICTOR FEATURES - START ===
@@ -82,9 +86,10 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   pdlp_settings.per_constraint_residual = settings.per_constraint_residual;
   pdlp_settings.first_primal_feasible   = settings.return_first_feasible;
   pdlp_settings.pdlp_solver_mode        = pdlp_solver_mode_t::Stable2;
+  int estim_iters                       = pdlp_settings.iteration_limit;
   if (determinism_mode) {
     // try to estimate the iteration count based on the requested work limit
-    int estim_iters = 100;
+    estim_iters = 100;
     do {
       // TODO: use an actual predictor model here
       double estim_ms = 313 + 200 * op_problem.n_variables - 400 * op_problem.n_constraints +
@@ -99,6 +104,20 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
     pdlp_settings.pdlp_solver_mode = pdlp_solver_mode_t::Stable3;
     pdlp_settings.presolver        = presolver_t::None;
   }
+  CUOPT_LOG_DEBUG(
+    "LP call %lu config: det=%d work_limit=%.6f time_limit=%.6f iter_limit=%d method=%d mode=%d "
+    "presolver=%d save_state=%d has_initial=%d assignment_hash=0x%x",
+    lp_call_id,
+    (int)determinism_mode,
+    settings.work_limit,
+    pdlp_settings.time_limit,
+    pdlp_settings.iteration_limit,
+    (int)pdlp_settings.method,
+    (int)pdlp_settings.pdlp_solver_mode,
+    (int)pdlp_settings.presolver,
+    (int)settings.save_state,
+    (int)settings.has_initial_primal,
+    detail::compute_hash(assignment, op_problem.handle_ptr->get_stream()));
   set_pdlp_solver_mode(pdlp_settings);
   // TODO: set Stable3 here?
   pdlp_solver_t<i_t, f_t> lp_solver(op_problem, pdlp_settings);
@@ -136,6 +155,30 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
     "prev solution sizes primal=%lu dual=%lu", assignment.size(), lp_state.prev_dual.size());
   auto solver_response = lp_solver.run_solver(start_time);
   CUOPT_LOG_DEBUG("post LP primal size %lu", solver_response.get_primal_solution().size());
+  const int actual_iters =
+    solver_response.get_additional_termination_information().number_of_steps_taken;
+  CUOPT_LOG_DEBUG("LP call %lu result: status=%d iters=%d primal_hash=0x%x",
+                  lp_call_id,
+                  (int)solver_response.get_termination_status(),
+                  actual_iters,
+                  solver_response.get_primal_solution().size() != 0
+                    ? detail::compute_hash(solver_response.get_primal_solution(),
+                                           op_problem.handle_ptr->get_stream())
+                    : 0u);
+  if (determinism_mode && settings.work_context != nullptr) {
+    double work_to_record = settings.work_limit;
+    if (estim_iters > 0) {
+      work_to_record =
+        settings.work_limit * std::clamp((double)actual_iters / (double)estim_iters, 0.0, 1.0);
+    }
+    CUOPT_LOG_DEBUG("LP call %lu recording %.6fwu (actual_iters=%d estim_iters=%d requested=%.6f)",
+                    lp_call_id,
+                    work_to_record,
+                    actual_iters,
+                    estim_iters,
+                    settings.work_limit);
+    settings.work_context->record_work_sync_on_horizon(work_to_record);
+  }
 
   if (solver_response.get_primal_solution().size() != 0 &&
       solver_response.get_dual_solution().size() != 0 && settings.save_state) {
@@ -149,6 +192,9 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
                solver_response.get_primal_solution().size(),
                op_problem.handle_ptr->get_stream());
   }
+  CUOPT_LOG_DEBUG("LP call %lu assignment_after_copy hash=0x%x",
+                  lp_call_id,
+                  detail::compute_hash(assignment, op_problem.handle_ptr->get_stream()));
   if (solver_response.get_termination_status() == pdlp_termination_status_t::Optimal) {
     // CUOPT_LOG_DEBUG("feasible solution found with LP objective %f",
     //                 solver_response.get_objective_value());

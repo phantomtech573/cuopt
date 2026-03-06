@@ -227,7 +227,8 @@ class recombiner_t {
       enabled_recombiners.erase(recombiner_enum_t::SUB_MIP);
     }
     // submip not supported in deterministic mode yet
-    if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC ||
+        context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS) {
       enabled_recombiners.erase(recombiner_enum_t::SUB_MIP);
     }
     recombiner_t::enabled_recombiners =

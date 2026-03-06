@@ -76,8 +76,9 @@
 #define CUOPT_RANDOM_SEED                     "random_seed"
 
 /* @brief MIP determinism mode constants */
-#define CUOPT_MODE_OPPORTUNISTIC 0
-#define CUOPT_MODE_DETERMINISTIC 1
+#define CUOPT_MODE_OPPORTUNISTIC                0
+#define CUOPT_MODE_DETERMINISTIC                1
+#define CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS 2
 
 /* @brief LP/MIP termination status constants */
 #define CUOPT_TERIMINATION_STATUS_NO_TERMINATION   0

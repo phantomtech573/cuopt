@@ -109,11 +109,11 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   }
   dm.timer                   = work_limit_timer_t(context.gpu_heur_loop, timer_.get_time_limit());
   const bool run_presolve    = context.settings.presolver != presolver_t::None;
-  f_t time_limit             = context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC
+  f_t time_limit             = is_deterministic_mode(context.settings.determinism_mode)
                                  ? std::numeric_limits<f_t>::infinity()
                                  : timer_.remaining_time();
   double presolve_time_limit = std::min(0.1 * time_limit, 60.0);
-  presolve_time_limit        = context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC
+  presolve_time_limit        = is_deterministic_mode(context.settings.determinism_mode)
                                  ? std::numeric_limits<f_t>::infinity()
                                  : presolve_time_limit;
   bool presolve_success      = run_presolve ? dm.run_presolve(presolve_time_limit, timer_) : true;
@@ -210,9 +210,9 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     branch_and_bound_settings.max_cut_passes        = context.settings.max_cut_passes;
     branch_and_bound_settings.mir_cuts              = context.settings.mir_cuts;
     branch_and_bound_settings.deterministic =
-      context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
+      is_deterministic_mode(context.settings.determinism_mode);
 
-    if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    if (is_deterministic_mode(context.settings.determinism_mode)) {
       branch_and_bound_settings.work_limit = context.settings.work_limit;
     } else {
       branch_and_bound_settings.work_limit = std::numeric_limits<f_t>::infinity();
@@ -276,7 +276,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
         std::bind(&dual_simplex::branch_and_bound_t<i_t, f_t>::set_new_solution,
                   branch_and_bound.get(),
                   std::placeholders::_1);
-    } else if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    } else if (is_deterministic_mode(context.settings.determinism_mode)) {
       branch_and_bound->set_concurrent_lp_root_solve(false);
       // TODO once deterministic GPU heuristics are integrated
       // context.problem_ptr->branch_and_bound_callback =

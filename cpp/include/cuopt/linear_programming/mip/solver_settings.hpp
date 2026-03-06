@@ -116,7 +116,9 @@ class mip_solver_settings_t {
    * - CUOPT_MODE_OPPORTUNISTIC (0): Default mode, allows non-deterministic
    *   parallelism for better performance
    * - CUOPT_MODE_DETERMINISTIC (1): Ensures deterministic results across runs
-   *   at potential cost of performance
+   *   at potential cost of performance. Runs deterministic B&B path without GPU heuristics.
+   * - CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS (2): Enables deterministic work-limit mode while
+   *   still running GPU heuristics.
    */
   int determinism_mode = CUOPT_MODE_OPPORTUNISTIC;
   /**

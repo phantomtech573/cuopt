@@ -30,8 +30,6 @@
 #include <raft/core/handle.hpp>
 #include <raft/util/cudart_utils.hpp>
 
-#include <rmm/mr/cuda_async_memory_resource.hpp>
-
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -40,8 +38,6 @@
 #include <vector>
 
 namespace cuopt::linear_programming::test {
-
-inline auto make_async() { return std::make_shared<rmm::mr::cuda_async_memory_resource>(); }
 
 void init_handler(const raft::handle_t* handle_ptr)
 {
@@ -102,8 +98,6 @@ convert_probe_tuple(std::tuple<std::vector<int>, std::vector<double>, std::vecto
 uint32_t test_probing_cache_determinism(std::string path,
                                         unsigned long seed = std::random_device{}())
 {
-  auto memory_resource = make_async();
-  rmm::mr::set_current_device_resource(memory_resource.get());
   const raft::handle_t handle_{};
   cuopt::mps_parser::mps_data_model_t<int, double> mps_problem =
     cuopt::mps_parser::parse_mps<int, double>(path, false);
@@ -174,8 +168,6 @@ uint32_t test_probing_cache_determinism(std::string path,
 
 uint32_t test_scaling_determinism(std::string path, unsigned long seed = std::random_device{}())
 {
-  auto memory_resource = make_async();
-  rmm::mr::set_current_device_resource(memory_resource.get());
   const raft::handle_t handle_{};
   cuopt::mps_parser::mps_data_model_t<int, double> mps_problem =
     cuopt::mps_parser::parse_mps<int, double>(path, false);
@@ -283,35 +275,35 @@ TEST(presolve, probing_cache_deterministic)
   }
 }
 
-// TEST(presolve, mip_scaling_deterministic)
-// {
-//   spin_stream_raii_t spin_stream_1;
-//   spin_stream_raii_t spin_stream_2;
+TEST(presolve, mip_scaling_deterministic)
+{
+  spin_stream_raii_t spin_stream_1;
+  spin_stream_raii_t spin_stream_2;
 
-//   std::vector<std::string> test_instances = {"mip/sct2.mps",
-//                                              "mip/thor50dday.mps",
-//                                              "mip/uccase9.mps",
-//                                              "mip/neos5-free-bound.mps",
-//                                              "mip/neos5.mps",
-//                                              "mip/50v-10.mps",
-//                                              "mip/gen-ip054.mps",
-//                                              "mip/rmatr200-p5.mps"};
-//   for (const auto& test_instance : test_instances) {
-//     std::cout << "Running: " << test_instance << std::endl;
-//     unsigned long seed = std::random_device{}();
-//     std::cerr << "Tested with seed " << seed << "\n";
-//     auto path          = make_path_absolute(test_instance);
-//     uint32_t gold_hash = 0;
-//     for (int i = 0; i < 10; ++i) {
-//       auto hash = test_scaling_determinism(path, seed);
-//       if (i == 0) {
-//         gold_hash = hash;
-//         std::cout << "Gold hash: " << gold_hash << std::endl;
-//       } else {
-//         EXPECT_EQ(hash, gold_hash);
-//       }
-//     }
-//   }
-// }
+  std::vector<std::string> test_instances = {"mip/sct2.mps",
+                                             "mip/thor50dday.mps",
+                                             "mip/uccase9.mps",
+                                             "mip/neos5-free-bound.mps",
+                                             "mip/neos5.mps",
+                                             "mip/50v-10.mps",
+                                             "mip/gen-ip054.mps",
+                                             "mip/rmatr200-p5.mps"};
+  for (const auto& test_instance : test_instances) {
+    std::cout << "Running: " << test_instance << std::endl;
+    unsigned long seed = std::random_device{}();
+    std::cerr << "Tested with seed " << seed << "\n";
+    auto path          = make_path_absolute(test_instance);
+    uint32_t gold_hash = 0;
+    for (int i = 0; i < 10; ++i) {
+      auto hash = test_scaling_determinism(path, seed);
+      if (i == 0) {
+        gold_hash = hash;
+        std::cout << "Gold hash: " << gold_hash << std::endl;
+      } else {
+        EXPECT_EQ(hash, gold_hash);
+      }
+    }
+  }
+}
 
 }  // namespace cuopt::linear_programming::test

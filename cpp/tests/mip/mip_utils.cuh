@@ -200,7 +200,8 @@ struct fj_state_t {
 static fj_state_t run_fj(detail::problem_t<int, double>& problem,
                          const detail::fj_settings_t& fj_settings,
                          fj_tweaks_t tweaks                   = {},
-                         std::vector<double> initial_solution = {})
+                         std::vector<double> initial_solution = {},
+                         int determinism_mode                 = CUOPT_MODE_OPPORTUNISTIC)
 {
   pdlp_hyper_params::pdlp_hyper_params_t hyper_params{};
   detail::pdlp_initial_scaling_strategy_t<int, double> scaling(problem.handle_ptr,
@@ -214,9 +215,10 @@ static fj_state_t run_fj(detail::problem_t<int, double>& problem,
                                                                hyper_params,
                                                                true);
 
-  auto settings       = mip_solver_settings_t<int, double>{};
-  settings.time_limit = 30.;
-  auto timer          = timer_t(30);
+  auto settings             = mip_solver_settings_t<int, double>{};
+  settings.time_limit       = 30.;
+  settings.determinism_mode = determinism_mode;
+  auto timer                = timer_t(30);
   detail::mip_solver_t<int, double> solver(problem, settings, scaling, timer);
 
   detail::solution_t<int, double> solution(*solver.context.problem_ptr);

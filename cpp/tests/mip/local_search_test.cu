@@ -222,9 +222,9 @@ TEST_P(LocalSearchTestParams, local_search_operator_determinism)
          //"thor50dday.mps",
          "gen-ip054.mps",
          "50v-10.mps",
-         //"seymour1.mps",
+         "seymour1.mps",
          "rmatr200-p5.mps",
-         //"tr12-30.mps",
+         "tr12-30.mps",
          //"sct2.mps",
          //"uccase9.mps"
        }) {
@@ -253,9 +253,9 @@ TEST_P(LocalSearchTestParams, local_search_operator_determinism)
 
 INSTANTIATE_TEST_SUITE_P(LocalSearchTests,
                          LocalSearchTestParams,
-                         testing::Values(  // std::make_tuple(local_search_mode_t::FP),
-                           std::make_tuple(local_search_mode_t::FJ_LINE_SEGMENT),
-                           std::make_tuple(local_search_mode_t::FJ_ON_ZERO),
-                           std::make_tuple(local_search_mode_t::FJ_ANNEALING)));
+                         testing::Values(std::make_tuple(local_search_mode_t::FP),
+                                         std::make_tuple(local_search_mode_t::FJ_LINE_SEGMENT),
+                                         std::make_tuple(local_search_mode_t::FJ_ON_ZERO),
+                                         std::make_tuple(local_search_mode_t::FJ_ANNEALING)));
 
 }  // namespace cuopt::linear_programming::test

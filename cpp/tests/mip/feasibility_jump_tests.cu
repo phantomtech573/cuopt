@@ -50,7 +50,8 @@ void init_handler(const raft::handle_t* handle_ptr)
 static fj_state_t run_fj_instance(std::string test_instance,
                                   const detail::fj_settings_t& fj_settings,
                                   fj_tweaks_t tweaks                   = {},
-                                  std::vector<double> initial_solution = {})
+                                  std::vector<double> initial_solution = {},
+                                  int determinism_mode                 = CUOPT_MODE_DETERMINISTIC)
 {
   const raft::handle_t handle_{};
   std::cout << "Running: " << test_instance << std::endl;
@@ -73,7 +74,7 @@ static fj_state_t run_fj_instance(std::string test_instance,
   detail::problem_t<int, double> problem(op_problem);
   problem.preprocess_problem();
 
-  return run_fj(problem, fj_settings, tweaks, initial_solution);
+  return run_fj(problem, fj_settings, tweaks, initial_solution, determinism_mode);
 }
 
 // FJ had a bug causing objective/violation values to explode in magnitude in certain scenarios.
@@ -110,7 +111,8 @@ static bool run_fj_check_objective(std::string test_instance, int iter_limit, do
   fj_settings.feasibility_run        = obj_target == +std::numeric_limits<double>::infinity();
   fj_settings.iteration_limit        = iter_limit;
 
-  auto state     = run_fj_instance(test_instance, fj_settings);
+  auto state =
+    run_fj_instance(test_instance, fj_settings, fj_tweaks_t{}, {}, CUOPT_MODE_DETERMINISTIC);
   auto& solution = state.solution;
 
   CUOPT_LOG_DEBUG("%s: Solution generated with FJ: is_feasible %d, objective %g (raw %g)",
@@ -170,21 +172,22 @@ static bool run_fj_check_determinism(std::string test_instance, int iter_limit)
   fj_settings.time_limit             = std::numeric_limits<double>::max();
   fj_settings.mode                   = detail::fj_mode_t::EXIT_NON_IMPROVING;
   fj_settings.n_of_minimums_for_exit = 5000 * 1000;
-  fj_settings.work_limit             = 0.5;  // run for 0.5wu (~0.5s)
-  fj_settings.update_weights         = true;
-  fj_settings.feasibility_run        = false;
-  // fj_settings.iteration_limit        = iter_limit;
+  // fj_settings.work_limit             = 0.5;  // run for 0.5wu (~0.5s)
+  fj_settings.update_weights      = true;
+  fj_settings.feasibility_run     = false;
+  fj_settings.iteration_limit     = iter_limit;
   fj_settings.load_balancing_mode = detail::fj_load_balancing_mode_t::ALWAYS_ON;
   fj_settings.seed                = cuopt::seed_generator::get_seed();
 
   auto state     = run_fj_instance(test_instance, fj_settings);
   auto& solution = state.solution;
 
-  CUOPT_LOG_DEBUG("%s: Solution generated with FJ: is_feasible %d, objective %g (raw %g)",
-                  test_instance.c_str(),
-                  solution.get_feasible(),
-                  solution.get_user_objective(),
-                  solution.get_objective());
+  printf("%s[seed=%x]: Solution generated with FJ: is_feasible %d, objective %g (raw %g)",
+         test_instance.c_str(),
+         fj_settings.seed,
+         solution.get_feasible(),
+         solution.get_user_objective(),
+         solution.get_objective());
 
   static std::unordered_map<std::string, double> first_val_map;
   if (first_val_map.count(test_instance) == 0) {

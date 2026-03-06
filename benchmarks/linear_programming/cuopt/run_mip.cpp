@@ -199,12 +199,25 @@ int run_single_file(std::string file_path,
       }
     }
   }
-  settings.time_limit       = time_limit;
-  settings.work_limit       = work_limit;
-  settings.heuristics_only  = heuristics_only;
-  settings.num_cpu_threads  = num_cpu_threads;
-  settings.log_to_console   = log_to_console;
-  settings.determinism_mode = deterministic ? CUOPT_MODE_DETERMINISTIC : CUOPT_MODE_OPPORTUNISTIC;
+  settings.time_limit      = time_limit;
+  settings.work_limit      = work_limit;
+  settings.heuristics_only = heuristics_only;
+  settings.num_cpu_threads = num_cpu_threads;
+  settings.log_to_console  = log_to_console;
+  if (deterministic) {
+    settings.determinism_mode =
+      heuristics_only ? CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS : CUOPT_MODE_DETERMINISTIC;
+  } else {
+    settings.determinism_mode = CUOPT_MODE_OPPORTUNISTIC;
+  }
+  CUOPT_LOG_INFO(
+    "run_mip settings: heuristics_only=%d deterministic=%d determinism_mode=%d "
+    "time_limit=%.6f work_limit=%.6f",
+    (int)heuristics_only,
+    (int)deterministic,
+    settings.determinism_mode,
+    settings.time_limit,
+    settings.work_limit);
   settings.tolerances.relative_tolerance = 1e-12;
   settings.tolerances.absolute_tolerance = 1e-6;
   settings.presolver                     = cuopt::linear_programming::presolver_t::Default;

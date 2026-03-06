@@ -88,7 +88,8 @@ class fp_recombiner_t : public recombiner_t<i_t, f_t> {
       CUOPT_LOG_TRACE("FP rec: running LP with infeasibility detection");
       relaxed_lp_settings_t lp_settings;
       lp_settings.time_limit = fp_recombiner_config_t::infeasibility_detection_time_limit;
-      if (this->context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+      if (this->context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC ||
+          this->context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS) {
         lp_settings.time_limit =
           std::numeric_limits<double>::max();  // TODO should be global time limit
         lp_settings.work_limit = fp_recombiner_config_t::infeasibility_detection_time_limit;
@@ -117,6 +118,13 @@ class fp_recombiner_t : public recombiner_t<i_t, f_t> {
       offspring.handle_ptr->sync_stream();
       offspring.assignment = std::move(fixed_assignment);
       cuopt_func_call(offspring.test_variable_bounds(false));
+      CUOPT_LOG_DEBUG(
+        "FP rec pre-descent: offspring_hash=0x%x fixed_assignment_hash=0x%x "
+        "problem_fingerprint=0x%x fixed_n_integer_vars=%d",
+        offspring.get_hash(),
+        detail::compute_hash(offspring.assignment, offspring.handle_ptr->get_stream()),
+        fixed_problem.get_fingerprint(),
+        fixed_problem.n_integer_vars);
       work_limit_timer_t timer(this->context.gpu_heur_loop, fp_recombiner_config_t::fp_time_limit);
       fp.timer = timer;
       fp.cycle_queue.reset(offspring);

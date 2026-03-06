@@ -769,10 +769,7 @@ bool constraint_prop_t<i_t, f_t>::run_repair_procedure(problem_t<i_t, f_t>& prob
   i_t n_of_repairs_needed_for_feasible = 0;
   // TODO: do this better
   i_t iter_limit = std::numeric_limits<i_t>::max();
-  if (this->context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-    timer      = work_limit_timer_t(context.gpu_heur_loop, std::numeric_limits<f_t>::infinity());
-    iter_limit = 100;
-  }
+  if (is_deterministic_mode(this->context.settings.determinism_mode)) { iter_limit = 100; }
   do {
     n_of_repairs_needed_for_feasible++;
     if (timer.check_time_limit() || iter_limit-- <= 0) {

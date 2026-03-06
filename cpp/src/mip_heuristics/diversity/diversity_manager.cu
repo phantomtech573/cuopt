@@ -13,6 +13,7 @@
 #include <mip_heuristics/presolve/probing_cache.cuh>
 #include <mip_heuristics/presolve/trivial_presolve.cuh>
 #include <mip_heuristics/problem/problem_helpers.cuh>
+#include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
 
 #include <pdlp/solve.cuh>
 
@@ -110,8 +111,7 @@ diversity_manager_t<i_t, f_t>::diversity_manager_t(mip_solver_context_t<i_t, f_t
     }
   }
 
-  context.gpu_heur_loop.deterministic =
-    context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
+  context.gpu_heur_loop.deterministic = is_deterministic_mode(context.settings.determinism_mode);
 }
 
 // this function is to specialize the local search with config from diversity manager
@@ -203,7 +203,7 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
   bool run_probing_cache = !fj_only_run;
   // Don't run probing cache in deterministic mode yet as neither B&B nor CPUFJ need it
   // and it doesn't make use of work units yet
-  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) { run_probing_cache = false; }
+  if (is_deterministic_mode(context.settings.determinism_mode)) { run_probing_cache = false; }
   if (run_probing_cache) {
     // Run probing cache before trivial presolve to discover variable implications
     const f_t max_time_on_probing = diversity_config.max_time_on_probing;
@@ -344,9 +344,9 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
 {
   raft::common::nvtx::range fun_scope("run_solver");
 
-  CUOPT_LOG_DEBUG("Determinism mode: %s",
-                  context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC ? "deterministic"
-                                                                                : "opportunistic");
+  CUOPT_LOG_DEBUG(
+    "Determinism mode: %s",
+    is_deterministic_mode(context.settings.determinism_mode) ? "deterministic" : "opportunistic");
 
   // to automatically compute the solving time on scope exit
   auto timer_raii_guard =
@@ -387,7 +387,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   }
 
   population.timer     = timer;
-  const f_t time_limit = timer.remaining_time();
+  const f_t time_limit = timer.deterministic ? timer.get_time_limit() : timer.remaining_time();
   const f_t lp_time_limit =
     std::min(diversity_config.max_time_on_lp, time_limit * diversity_config.time_ratio_on_init_lp);
   // after every change to the problem, we should resize all the relevant vars
@@ -410,10 +410,12 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   population.allocate_solutions();
   if (check_b_b_preemption()) { return population.best_feasible(); }
   add_user_given_solutions(initial_sol_vector);
+  CUOPT_LOG_DEBUG("DM bootstrap: initial_sol_vector size after user solutions = %lu",
+                  initial_sol_vector.size());
   // Run CPUFJ early to find quick initial solutions
   ls_cpufj_raii_guard_t ls_cpufj_raii_guard(ls);  // RAII to stop cpufj threads on solve stop
 
-  if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
+  if (!diversity_config.dry_run && context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
     ls.start_cpufj_scratch_threads(population);
   }
 
@@ -432,21 +434,55 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     if (tolerance_divisor == 0) { tolerance_divisor = 1; }
     f_t absolute_tolerance = context.settings.tolerances.absolute_tolerance;
 
-    pdlp_solver_settings_t<i_t, f_t> pdlp_settings{};
-    pdlp_settings.tolerances.relative_primal_tolerance = absolute_tolerance / tolerance_divisor;
-    pdlp_settings.tolerances.relative_dual_tolerance   = absolute_tolerance / tolerance_divisor;
-    pdlp_settings.time_limit                           = lp_time_limit;
-    if (timer.deterministic) { pdlp_settings.iteration_limit = 100000; }
-    pdlp_settings.first_primal_feasible = false;
-    pdlp_settings.concurrent_halt       = &global_concurrent_halt;
-    pdlp_settings.method                = method_t::Concurrent;
-    pdlp_settings.inside_mip            = true;
-    pdlp_settings.pdlp_solver_mode      = pdlp_solver_mode_t::Stable2;
-    pdlp_settings.num_gpus              = context.settings.num_gpus;
-    pdlp_settings.presolver             = presolver_t::None;
-
-    timer_t lp_timer(lp_time_limit);
-    auto lp_result = solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);
+    auto lp_result = [&]() {
+      if (timer.deterministic) {
+        relaxed_lp_settings_t lp_settings{};
+        lp_settings.time_limit              = lp_time_limit;
+        lp_settings.work_limit              = lp_time_limit;
+        lp_settings.tolerance               = absolute_tolerance;
+        lp_settings.check_infeasibility     = true;
+        lp_settings.return_first_feasible   = false;
+        lp_settings.save_state              = true;
+        lp_settings.per_constraint_residual = true;
+        lp_settings.has_initial_primal      = false;
+        lp_settings.concurrent_halt         = &global_concurrent_halt;
+        lp_settings.work_context            = &context.gpu_heur_loop;
+        cuopt_assert(lp_settings.work_context != nullptr, "Missing deterministic work context");
+        CUOPT_LOG_DEBUG(
+          "DM root LP config: dry_run=%d deterministic=%d work_limit=%.6f time_limit=%.6f",
+          (int)diversity_config.dry_run,
+          (int)timer.deterministic,
+          lp_settings.work_limit,
+          lp_settings.time_limit);
+        return get_relaxed_lp_solution<i_t, f_t>(
+          *problem_ptr, lp_optimal_solution, lp_state, lp_settings);
+      }
+      pdlp_solver_settings_t<i_t, f_t> pdlp_settings{};
+      pdlp_settings.tolerances.relative_primal_tolerance = absolute_tolerance / tolerance_divisor;
+      pdlp_settings.tolerances.relative_dual_tolerance   = absolute_tolerance / tolerance_divisor;
+      pdlp_settings.time_limit                           = lp_time_limit;
+      pdlp_settings.first_primal_feasible                = false;
+      pdlp_settings.concurrent_halt                      = &global_concurrent_halt;
+      pdlp_settings.method                               = method_t::Concurrent;
+      pdlp_settings.inside_mip                           = true;
+      pdlp_settings.pdlp_solver_mode                     = pdlp_solver_mode_t::Stable2;
+      pdlp_settings.num_gpus                             = context.settings.num_gpus;
+      pdlp_settings.presolver                            = presolver_t::None;
+      CUOPT_LOG_DEBUG(
+        "DM root LP config: dry_run=%d deterministic=%d lp_time_limit=%.6f iter_limit=%d",
+        (int)diversity_config.dry_run,
+        (int)timer.deterministic,
+        pdlp_settings.time_limit,
+        pdlp_settings.iteration_limit);
+      timer_t lp_timer(lp_time_limit);
+      return solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);
+    }();
+    CUOPT_LOG_DEBUG(
+      "DM root LP result: status=%d iters=%d user_obj=%.12f primal_hash=0x%x",
+      (int)lp_result.get_termination_status(),
+      lp_result.get_additional_termination_information().number_of_steps_taken,
+      lp_result.get_objective_value(),
+      detail::compute_hash(lp_result.get_primal_solution(), problem_ptr->handle_ptr->get_stream()));
 
     {
       std::lock_guard<std::mutex> guard(relaxed_solution_mutex);
@@ -532,19 +568,38 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
 
     // in case the pdlp returned var boudns that are out of bounds
     clamp_within_var_bounds(lp_optimal_solution, problem_ptr, problem_ptr->handle_ptr);
+    CUOPT_LOG_DEBUG(
+      "DM root LP post-clamp: lp_optimal_solution hash=0x%x",
+      detail::compute_hash(lp_optimal_solution, problem_ptr->handle_ptr->get_stream()));
   }
 
   if (ls.lp_optimal_exists) {
     solution_t<i_t, f_t> lp_rounded_sol(*problem_ptr);
     lp_rounded_sol.copy_new_assignment(lp_optimal_solution);
+    CUOPT_LOG_DEBUG("DM bootstrap candidate (LP raw): hash=0x%x feas=%d obj=%.12f",
+                    lp_rounded_sol.get_hash(),
+                    (int)lp_rounded_sol.get_feasible(),
+                    lp_rounded_sol.get_user_objective());
     lp_rounded_sol.round_nearest();
     lp_rounded_sol.compute_feasibility();
+    CUOPT_LOG_DEBUG("DM bootstrap candidate (LP rounded): hash=0x%x feas=%d obj=%.12f",
+                    lp_rounded_sol.get_hash(),
+                    (int)lp_rounded_sol.get_feasible(),
+                    lp_rounded_sol.get_user_objective());
     population.add_solution(std::move(lp_rounded_sol));
-    if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
+    if (!diversity_config.dry_run &&
+        context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
       ls.start_cpufj_lptopt_scratch_threads(population);
     }
   }
 
+  for (size_t i = 0; i < initial_sol_vector.size(); ++i) {
+    CUOPT_LOG_DEBUG("DM bootstrap candidate (initial_sol_vector[%lu]): hash=0x%x feas=%d obj=%.12f",
+                    i,
+                    initial_sol_vector[i].get_hash(),
+                    (int)initial_sol_vector[i].get_feasible(),
+                    initial_sol_vector[i].get_user_objective());
+  }
   population.add_solutions_from_vec(std::move(initial_sol_vector));
 
   if (check_b_b_preemption()) { return population.best_feasible(); }
@@ -715,7 +770,7 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
                   sol1.get_feasible(),
                   sol2.get_quality(population.weights),
                   sol2.get_feasible());
-  bool deterministic                = context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
+  bool deterministic                = is_deterministic_mode(context.settings.determinism_mode);
   double best_objective_of_parents  = std::min(sol1.get_objective(), sol2.get_objective());
   bool at_least_one_parent_feasible = sol1.get_feasible() || sol2.get_feasible();
   // randomly choose among 3 recombiners

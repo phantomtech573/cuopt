@@ -172,7 +172,7 @@ termination_criterion_t bound_presolve_t<i_t, f_t>::bound_update_loop(problem_t<
   termination_criterion_t criteria = termination_criterion_t::ITERATION_LIMIT;
 
   // CHANGE once we have a work predictor
-  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+  if (is_deterministic_mode(context.settings.determinism_mode)) {
     timer                    = timer_t(std::numeric_limits<f_t>::infinity());
     settings.iteration_limit = std::min(settings.iteration_limit, 50);
   }

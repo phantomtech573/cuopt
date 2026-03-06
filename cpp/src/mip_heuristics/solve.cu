@@ -246,8 +246,9 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
     double presolve_time = 0.0;
     std::unique_ptr<detail::third_party_presolve_t<i_t, f_t>> presolver;
     std::optional<detail::third_party_presolve_result_t<i_t, f_t>> presolve_result;
-    detail::problem_t<i_t, f_t> problem(
-      op_problem, settings.get_tolerances(), settings.determinism_mode == CUOPT_MODE_DETERMINISTIC);
+    detail::problem_t<i_t, f_t> problem(op_problem,
+                                        settings.get_tolerances(),
+                                        detail::is_deterministic_mode(settings.determinism_mode));
 
     auto run_presolve              = settings.presolver != presolver_t::None;
     run_presolve                   = run_presolve && settings.initial_solutions.size() == 0;
@@ -272,7 +273,7 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
       // allocate not more than 10% of the time limit to presolve.
       // Note that this is not the presolve time, but the time limit for presolve.
       double presolve_time_limit = std::min(0.1 * time_limit, 60.0);
-      if (settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+      if (detail::is_deterministic_mode(settings.determinism_mode)) {
         presolve_time_limit = std::numeric_limits<double>::infinity();
       }
       presolver   = std::make_unique<detail::third_party_presolve_t<i_t, f_t>>();

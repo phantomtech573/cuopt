@@ -36,6 +36,7 @@
 #include <pdlp/step_size_strategy/adaptive_step_size_strategy.hpp>
 #include <pdlp/utilities/problem_checking.cuh>
 #include <utilities/common_utils.hpp>
+#include <utilities/logger.hpp>
 #include <utilities/seed_generator.cuh>
 
 #include <raft/sparse/detail/cusparse_wrappers.h>
@@ -68,7 +69,8 @@ void init_handler(const raft::handle_t* handle_ptr)
 static void setup_device_symbols(rmm::cuda_stream_view stream_view) { (void)stream_view; }
 
 static uint32_t test_full_run_determinism(std::string path,
-                                          unsigned long seed = std::random_device{}())
+                                          unsigned long seed = std::random_device{}(),
+                                          float work_limit   = 10.0f)
 {
   const raft::handle_t handle_{};
 
@@ -99,16 +101,16 @@ static uint32_t test_full_run_determinism(std::string path,
 
   auto settings             = mip_solver_settings_t<int, double>{};
   settings.time_limit       = 3000.;
-  settings.work_limit       = 10;  // about 10 seconds of runtime
-  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
+  settings.work_limit       = work_limit;
+  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS;
   settings.heuristics_only  = true;
   auto timer                = cuopt::timer_t(3000);
   detail::mip_solver_t<int, double> solver(problem, settings, scaling, timer);
   problem.tolerances = settings.get_tolerances();
 
   detail::diversity_manager_t<int, double> diversity_manager(solver.context);
-  work_limit_context_t work_limit_context("DiversityManager");
-  diversity_manager.timer = work_limit_timer_t(work_limit_context, 60000);
+  solver.context.gpu_heur_loop.deterministic = true;
+  diversity_manager.timer = work_limit_timer_t(solver.context.gpu_heur_loop, settings.work_limit);
   diversity_manager.run_solver();
 
   std::vector<uint32_t> hashes;
@@ -157,7 +159,7 @@ static uint32_t test_initial_solution_determinism(std::string path,
 
   auto settings             = mip_solver_settings_t<int, double>{};
   settings.time_limit       = 3000.;
-  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
+  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS;
   settings.heuristics_only  = true;
   auto timer                = cuopt::timer_t(3000);
   detail::mip_solver_t<int, double> solver(problem, settings, scaling, timer);
@@ -165,7 +167,8 @@ static uint32_t test_initial_solution_determinism(std::string path,
 
   detail::diversity_manager_t<int, double> diversity_manager(solver.context);
   work_limit_context_t work_limit_context("DiversityManager");
-  diversity_manager.timer = work_limit_timer_t(work_limit_context, 60000);
+  work_limit_context.deterministic = true;
+  diversity_manager.timer          = work_limit_timer_t(work_limit_context, 60000);
   diversity_manager.diversity_config.initial_solution_only = true;
   diversity_manager.run_solver();
 
@@ -215,7 +218,7 @@ static uint32_t test_recombiners_determinism(std::string path,
 
   auto settings             = mip_solver_settings_t<int, double>{};
   settings.time_limit       = 3000.;
-  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
+  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS;
   settings.heuristics_only  = true;
   auto timer                = cuopt::timer_t(3000);
   detail::mip_solver_t<int, double> solver(problem, settings, scaling, timer);
@@ -223,6 +226,7 @@ static uint32_t test_recombiners_determinism(std::string path,
 
   detail::diversity_manager_t<int, double> diversity_manager(solver.context);
   work_limit_context_t work_limit_context("DiversityManager");
+  work_limit_context.deterministic           = true;
   diversity_manager.timer                    = work_limit_timer_t(work_limit_context, 60000);
   diversity_manager.diversity_config.dry_run = true;
   diversity_manager.run_solver();
@@ -236,14 +240,18 @@ static uint32_t test_recombiners_determinism(std::string path,
     fj_settings.feasibility_run = false;
     fj_settings.iteration_limit = 1000 + i * 100;
     fj_settings.seed            = seed + i;
-    auto solution =
-      run_fj(problem, fj_settings, fj_tweaks_t{}, random_initial_solution.get_host_assignment())
-        .solution;
+    auto solution               = run_fj(problem,
+                           fj_settings,
+                           fj_tweaks_t{},
+                           random_initial_solution.get_host_assignment(),
+                           CUOPT_MODE_DETERMINISTIC)
+                      .solution;
     printf("population %d hash: 0x%x\n", i, solution.get_hash());
     diversity_manager.population.add_solution(std::move(solution));
   }
 
   auto pop_vector = diversity_manager.get_population_pointer()->population_to_vector();
+  int pop_size    = std::min(6, (int)pop_vector.size());
 
   std::vector<uint32_t> hashes;
 
@@ -252,8 +260,8 @@ static uint32_t test_recombiners_determinism(std::string path,
   for (auto recombiner : {detail::recombiner_enum_t::LINE_SEGMENT,
                           detail::recombiner_enum_t::BOUND_PROP,
                           detail::recombiner_enum_t::FP}) {
-    for (int i = 1; i < (int)pop_vector.size(); i++) {
-      for (int j = i + 1; j < (int)pop_vector.size(); j++) {
+    for (int i = 1; i < pop_size; i++) {
+      for (int j = i + 1; j < pop_size; j++) {
         printf("recombining %d and %d w/ recombiner %s\n",
                i,
                j,
@@ -299,67 +307,41 @@ static uint32_t test_recombiners_determinism(std::string path,
   return final_hash;
 }
 
-class DiversityTestParams : public testing::TestWithParam<std::tuple<std::string>> {};
+class DiversityTestParams : public testing::TestWithParam<std::tuple<std::string, float>> {};
 
-// TEST_P(DiversityTestParams, recombiners_deterministic)
-// {
-//   cuopt::default_logger().set_pattern("[%n] [%-6l] %v");
+TEST_P(DiversityTestParams, recombiners_deterministic)
+{
+  // cuopt::init_logger_t log("", true);
+  cuopt::default_logger().set_pattern("[%n] [%-6l] %v");
+  cuopt::default_logger().set_level(rapids_logger::level_enum::debug);
+  cuopt::default_logger().flush_on(rapids_logger::level_enum::debug);
 
-//   spin_stream_raii_t spin_stream_1;
-//   spin_stream_raii_t spin_stream_2;
+  spin_stream_raii_t spin_stream_1;
+  spin_stream_raii_t spin_stream_2;
 
-//   auto test_instance = std::get<0>(GetParam());
-//   std::cout << "Running: " << test_instance << std::endl;
-//   int seed =
-//     std::getenv("CUOPT_SEED") ? std::stoi(std::getenv("CUOPT_SEED")) : std::random_device{}();
-//   std::cerr << "Tested with seed " << seed << "\n";
-//   auto path     = make_path_absolute(test_instance);
-//   test_instance = std::getenv("CUOPT_INSTANCE") ? std::getenv("CUOPT_INSTANCE") : test_instance;
-//   uint32_t gold_hash = 0;
-//   for (int i = 0; i < 2; ++i) {
-//     cuopt::seed_generator::set_seed(seed);
-//     std::cout << "Running " << test_instance << " " << i << std::endl;
-//     std::cout << "-------------------------------------------------------------\n";
-//     auto hash = test_recombiners_determinism(path, seed);
-//     if (i == 0) {
-//       gold_hash = hash;
-//       std::cout << "Gold hash: " << gold_hash << std::endl;
-//     } else {
-//       ASSERT_EQ(hash, gold_hash);
-//     }
-//   }
-// }
+  auto test_instance = std::get<0>(GetParam());
+  std::cout << "Running: " << test_instance << std::endl;
+  int seed =
+    std::getenv("CUOPT_SEED") ? std::stoi(std::getenv("CUOPT_SEED")) : std::random_device{}();
+  std::cerr << "Tested with seed " << seed << "\n";
+  auto path     = make_path_absolute(test_instance);
+  test_instance = std::getenv("CUOPT_INSTANCE") ? std::getenv("CUOPT_INSTANCE") : test_instance;
+  uint32_t gold_hash = 0;
+  for (int i = 0; i < 2; ++i) {
+    cuopt::seed_generator::set_seed(seed);
+    std::cout << "Running " << test_instance << " " << i << std::endl;
+    std::cout << "-------------------------------------------------------------\n";
+    auto hash = test_recombiners_determinism(path, seed);
+    if (i == 0) {
+      gold_hash = hash;
+      std::cout << "Gold hash: " << gold_hash << std::endl;
+    } else {
+      ASSERT_EQ(hash, gold_hash);
+    }
+  }
+}
 
-// TEST_P(DiversityTestParams, initial_solution_deterministic)
-// {
-//   cuopt::default_logger().set_pattern("[%n] [%-6l] %v");
-
-//   spin_stream_raii_t spin_stream_1;
-//   spin_stream_raii_t spin_stream_2;
-
-//   auto test_instance = std::get<0>(GetParam());
-//   std::cout << "Running: " << test_instance << std::endl;
-//   int seed =
-//     std::getenv("CUOPT_SEED") ? std::stoi(std::getenv("CUOPT_SEED")) : std::random_device{}();
-//   std::cerr << "Tested with seed " << seed << "\n";
-//   auto path     = make_path_absolute(test_instance);
-//   test_instance = std::getenv("CUOPT_INSTANCE") ? std::getenv("CUOPT_INSTANCE") : test_instance;
-//   uint32_t gold_hash = 0;
-//   for (int i = 0; i < 2; ++i) {
-//     cuopt::seed_generator::set_seed(seed);
-//     std::cout << "Running " << test_instance << " " << i << std::endl;
-//     std::cout << "-------------------------------------------------------------\n";
-//     auto hash = test_initial_solution_determinism(path, seed);
-//     if (i == 0) {
-//       gold_hash = hash;
-//       std::cout << "Gold hash: " << gold_hash << std::endl;
-//     } else {
-//       ASSERT_EQ(hash, gold_hash);
-//     }
-//   }
-// }
-
-TEST_P(DiversityTestParams, full_run_deterministic)
+TEST_P(DiversityTestParams, initial_solution_deterministic)
 {
   cuopt::default_logger().set_pattern("[%n] [%-6l] %v");
 
@@ -371,17 +353,50 @@ TEST_P(DiversityTestParams, full_run_deterministic)
   int seed =
     std::getenv("CUOPT_SEED") ? std::stoi(std::getenv("CUOPT_SEED")) : std::random_device{}();
   std::cerr << "Tested with seed " << seed << "\n";
+  auto path     = make_path_absolute(test_instance);
+  test_instance = std::getenv("CUOPT_INSTANCE") ? std::getenv("CUOPT_INSTANCE") : test_instance;
+  uint32_t gold_hash = 0;
+  for (int i = 0; i < 2; ++i) {
+    cuopt::seed_generator::set_seed(seed);
+    std::cout << "Running " << test_instance << " " << i << std::endl;
+    std::cout << "-------------------------------------------------------------\n";
+    auto hash = test_initial_solution_determinism(path, seed);
+    if (i == 0) {
+      gold_hash = hash;
+      std::cout << "Gold hash: " << gold_hash << std::endl;
+    } else {
+      ASSERT_EQ(hash, gold_hash);
+    }
+  }
+}
+
+TEST_P(DiversityTestParams, full_run_deterministic)
+{
+  cuopt::init_logger_t log("", true);
+  // cuopt::default_logger().set_pattern("[%n] [%-6l] %v");
+  cuopt::default_logger().set_level(rapids_logger::level_enum::debug);
+  cuopt::default_logger().flush_on(rapids_logger::level_enum::debug);
+
+  // spin_stream_raii_t spin_stream_1;
+  // spin_stream_raii_t spin_stream_2;
+
+  auto test_instance     = std::get<0>(GetParam());
+  const float work_limit = std::get<1>(GetParam());
+  std::cout << "Running: " << test_instance << std::endl;
+  int seed =
+    std::getenv("CUOPT_SEED") ? std::stoi(std::getenv("CUOPT_SEED")) : std::random_device{}();
+  std::cerr << "Tested with seed " << seed << "\n";
   auto path = make_path_absolute(test_instance);
   if (std::getenv("CUOPT_INSTANCE")) {
     test_instance = std::getenv("CUOPT_INSTANCE");
     path          = make_path_absolute(test_instance);
   }
   uint32_t gold_hash = 0;
-  for (int i = 0; i < 2; ++i) {
+  for (int i = 0; i < 4; ++i) {
     cuopt::seed_generator::set_seed(seed);
     std::cout << "Running " << test_instance << " " << i << std::endl;
     std::cout << "-------------------------------------------------------------\n";
-    auto hash = test_full_run_determinism(path, seed);
+    auto hash = test_full_run_determinism(path, seed, work_limit);
     if (i == 0) {
       gold_hash = hash;
       std::cout << "Gold hash: " << gold_hash << std::endl;
@@ -393,15 +408,14 @@ TEST_P(DiversityTestParams, full_run_deterministic)
 
 INSTANTIATE_TEST_SUITE_P(DiversityTest,
                          DiversityTestParams,
-                         testing::Values(  // std::make_tuple("gen-ip054.mps"),
-                                           // std::make_tuple("pk1.mps")
-                           std::make_tuple("uccase9.mps"),
-                           // std::make_tuple("mip/sct2.mps")
-                           // std::make_tuple("mip/thor50dday.mps")
-                           // std::make_tuple("uccase9.mps"),
-                           // std::make_tuple("mip/neos5.mps")
-                           std::make_tuple("50v-10.mps")
-                           // std::make_tuple("rmatr200-p5.mps")
-                           ));
+                         testing::Values(std::make_tuple("mip/gen-ip054.mps", 5.0f),
+                                         std::make_tuple("mip/pk1.mps", 5.0f),
+                                         // std::make_tuple("mip/uccase9.mps"),
+                                         //  std::make_tuple("mip/sct2.mps")
+                                         //  std::make_tuple("mip/thor50dday.mps")
+                                         //  std::make_tuple("uccase9.mps"),
+                                         std::make_tuple("mip/neos5.mps", 5.0f),
+                                         // std::make_tuple("mip/50v-10.mps"),
+                                         std::make_tuple("mip/rmatr200-p5.mps", 5.0f)));
 
 }  // namespace cuopt::linear_programming::test

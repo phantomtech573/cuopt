@@ -142,8 +142,6 @@ multi_probe_results(
 
 uint32_t test_multi_probe(std::string path, unsigned long seed = std::random_device{}())
 {
-  auto memory_resource = make_async();
-  rmm::mr::set_current_device_resource(memory_resource.get());
   const raft::handle_t handle_{};
   cuopt::mps_parser::mps_data_model_t<int, double> mps_problem =
     cuopt::mps_parser::parse_mps<int, double>(path, false);
@@ -215,16 +213,16 @@ uint32_t test_multi_probe(std::string path, unsigned long seed = std::random_dev
   return detail::compute_hash(hashes);
 }
 
-// TEST(presolve, multi_probe)
-// {
-//   std::vector<std::string> test_instances = {
-//     "mip/50v-10-free-bound.mps", "mip/neos5-free-bound.mps", "mip/neos5.mps"};
-//   for (const auto& test_instance : test_instances) {
-//     std::cout << "Running: " << test_instance << std::endl;
-//     auto path = make_path_absolute(test_instance);
-//     test_multi_probe(path);
-//   }
-// }
+TEST(presolve, multi_probe)
+{
+  std::vector<std::string> test_instances = {
+    "mip/50v-10-free-bound.mps", "mip/neos5-free-bound.mps", "mip/neos5.mps"};
+  for (const auto& test_instance : test_instances) {
+    std::cout << "Running: " << test_instance << std::endl;
+    auto path = make_path_absolute(test_instance);
+    test_multi_probe(path);
+  }
+}
 
 TEST(presolve, multi_probe_deterministic)
 {

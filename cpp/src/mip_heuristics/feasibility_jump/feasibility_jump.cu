@@ -868,7 +868,7 @@ void fj_t<i_t, f_t>::refresh_lhs_and_violation(const rmm::cuda_stream_view& stre
     thrust::plus<f_t>());
   data.violation_score.set_value_async(violation, stream);
   data.weighted_violation_score.set_value_async(weighted_violation, stream);
-  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+  if (is_deterministic_mode(context.settings.determinism_mode)) {
     data.violated_constraints.sort(stream);
   }
 #if FJ_SINGLE_STEP
@@ -1090,9 +1090,10 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
     // every now and then, ensure external solutions are added to the population
     // this is done here because FJ is called within FP and also after recombiners
     // so FJ is one of the most inner and most frequent functions to be called
-    if (steps % 10000 == 0) {
-      context.diversity_manager_ptr->get_population_pointer()
-        ->add_external_solutions_to_population();
+    if (steps % 10000 == 0 && context.diversity_manager_ptr != nullptr) {
+      auto* population_ptr = context.diversity_manager_ptr->get_population_pointer();
+      cuopt_assert(population_ptr != nullptr, "");
+      population_ptr->add_external_solutions_to_population();
     }
 
 #if !FJ_SINGLE_STEP
@@ -1279,13 +1280,22 @@ template <typename i_t, typename f_t>
 i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range scope("fj_solve");
-  work_limit_timer_t timer(context.gpu_heur_loop, settings.time_limit);
+  bool deterministic = is_deterministic_mode(context.settings.determinism_mode);
+  if (deterministic) {
+    settings.time_limit = std::max((f_t)0.0, settings.time_limit);
+    settings.work_limit = settings.time_limit;
+  }
   handle_ptr = const_cast<raft::handle_t*>(solution.handle_ptr);
   pb_ptr     = solution.problem_ptr;
   if (settings.mode != fj_mode_t::ROUNDING) {
     cuopt_func_call(solution.test_variable_bounds(true));
     cuopt_assert(solution.test_number_all_integer(), "All integers must be rounded");
   }
+  if (deterministic && settings.work_limit == 0.0) {
+    CUOPT_LOG_DEBUG("FJ: skipping solve due to exhausted deterministic work budget");
+    return solution.compute_feasibility();
+  }
+  work_limit_timer_t timer(context.gpu_heur_loop, settings.time_limit);
   pb_ptr->check_problem_representation(true);
   resize_vectors(solution.handle_ptr);
 
@@ -1299,8 +1309,6 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
                   detail::compute_hash(cstr_left_weights, handle_ptr->get_stream()),
                   detail::compute_hash(cstr_right_weights, handle_ptr->get_stream()));
 
-  bool deterministic = context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
-  if (deterministic) { settings.work_limit = settings.time_limit; }
   // if work_limit is set: compute an estimate of the number of iterations required
   if (deterministic && settings.work_limit != std::numeric_limits<double>::infinity()) {
     std::map<std::string, float> features_map = get_feature_vector(0);
@@ -1408,7 +1416,7 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
       // Compute the work unit corresponding to the number of iterations elapsed
       // by incrementally guessing work units until the model predicts >= actual iterations
       // TODO: awfully ugly, change
-      if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC && iterations > 0) {
+      if (is_deterministic_mode(context.settings.determinism_mode) && iterations > 0) {
         double guessed_work         = 0.0;
         const double work_increment = 0.1;
         const double max_work       = settings.work_limit * 2.0;  // Safety limit
