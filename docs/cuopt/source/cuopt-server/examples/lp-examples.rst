@@ -402,7 +402,9 @@ In case the user needs to update solver settings through CLI, the option ``-ss``
    export port=5000
    cuopt_sh data.json -t LP -i $ip -p $port -ss '{"tolerances": {"optimality": 0.0001}, "time_limit": 5}'
 
-In the case of batch mode, you can send a bunch of ``mps`` files at once, and acquire results. The batch mode works only for ``mps`` in the case of CLI.
+For solving multiple ``mps`` files, you can send them together (they will be
+solved sequentially). This multi-file mode works only for ``mps`` in the case of
+CLI.
 
 .. note::
    LP batch mode is deprecated. Multiple problems are now solved sequentially.

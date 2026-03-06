@@ -1,8 +1,8 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# LP Batch Mode CLI Example
+# Sequential LP Solve CLI Example
 #
 # This example demonstrates how to solve multiple LP problems using MPS files
 # with the cuopt_sh CLI tool. Multiple problems are solved sequentially.
@@ -46,11 +46,11 @@ RHS
 ENDATA
 EOF
 
-echo "=== Solving Multiple MPS Files in Batch Mode ==="
+echo "=== Solving Multiple MPS Files (Sequential LP Solve) ==="
 # Submit multiple MPS files at once
 # -t LP: Problem type
 # -ss: Solver settings (JSON format)
 cuopt_sh "$mps_file" "$mps_file" "$mps_file" -t LP -i $ip -p $port -ss '{"tolerances": {"optimality": 0.0001}, "time_limit": 5}'
 
 echo ""
-echo "Note: Multiple LPs are solved sequentially (batch mode is deprecated)."
+echo "Note: Multiple LPs are solved sequentially."

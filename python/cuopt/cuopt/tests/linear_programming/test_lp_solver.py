@@ -479,8 +479,6 @@ def test_parser_and_batch_solver():
     settings.set_optimality_tolerance(1e-4)
 
     # Call BatchSolve (deprecated; use sequential Solve instead)
-    # DeprecationWarning is emitted when running against a build with the
-    # deprecation; CI asserts it via pytest.warns
     batch_solution, solve_time = solver.BatchSolve(data_model_list, settings)
 
     # Call Solve on each individual data model object

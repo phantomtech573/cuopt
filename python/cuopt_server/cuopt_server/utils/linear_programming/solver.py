@@ -352,13 +352,13 @@ def solve(
             ]
             sol = []
             total_solve_time = 0.0
-            cswarnings, solver_settings = create_solver(
-                LP_data[0], warmstart_data
-            )
-            warnings.extend(cswarnings)
             for i_data in LP_data:
                 i_warnings, data_model = create_data_model(i_data)
                 warnings.extend(i_warnings)
+                cswarnings, solver_settings = create_solver(
+                    i_data, warmstart_data
+                )
+                warnings.extend(cswarnings)
                 i_sol = linear_programming.Solve(
                     data_model, solver_settings=solver_settings
                 )
