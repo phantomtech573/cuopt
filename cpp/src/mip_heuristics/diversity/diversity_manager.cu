@@ -395,10 +395,10 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     // f_t tolerance_divisor  = 100.;
 
     pdlp_solver_settings_t<i_t, f_t> pdlp_settings{};
-    // pdlp_settings.tolerances.absolute_dual_tolerance   = absolute_tolerance;
+    pdlp_settings.tolerances.absolute_dual_tolerance = absolute_tolerance;
     pdlp_settings.tolerances.relative_dual_tolerance =
       context.settings.tolerances.relative_tolerance;
-    // pdlp_settings.tolerances.absolute_primal_tolerance = absolute_tolerance;
+    pdlp_settings.tolerances.absolute_primal_tolerance = absolute_tolerance;
     pdlp_settings.tolerances.relative_primal_tolerance =
       context.settings.tolerances.relative_tolerance;
     pdlp_settings.time_limit              = lp_time_limit;
