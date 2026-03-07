@@ -37,8 +37,8 @@
 namespace cuopt::linear_programming::detail {
 
 constexpr int row_scaling_max_iterations             = 8;
-constexpr double row_scaling_min_initial_log2_spread = 5.0;
-constexpr int row_scaling_factor_exponent            = 20;
+constexpr double row_scaling_min_initial_log2_spread = 12.0;
+constexpr int row_scaling_factor_exponent            = 8;
 constexpr int row_scaling_big_m_soft_factor_exponent = 4;
 constexpr double row_scaling_min_factor =
   1.0 / static_cast<double>(std::uint64_t{1} << row_scaling_factor_exponent);
@@ -50,7 +50,16 @@ constexpr double row_scaling_big_m_soft_max_factor       = 1.0;
 constexpr double row_scaling_spread_rel_tol              = 1.0e-2;
 constexpr double integer_coefficient_rel_tol             = 1.0e-6;
 constexpr double integer_multiplier_rounding_tolerance   = 1.0e-6;
-constexpr double min_abs_objective_coefficient_threshold = 1.0e-4;
+constexpr double min_abs_objective_coefficient_threshold = 1.0e-2;
+constexpr double max_obj_scaling_coefficient             = 1.0e3;
+
+constexpr int cumulative_row_scaling_exponent = 10;
+constexpr double cumulative_row_scaling_min =
+  1.0 / static_cast<double>(std::uint64_t{1} << cumulative_row_scaling_exponent);
+constexpr double cumulative_row_scaling_max =
+  static_cast<double>(std::uint64_t{1} << cumulative_row_scaling_exponent);
+
+constexpr double post_scaling_max_ratio_warn = 1.0e15;
 
 constexpr double big_m_abs_threshold   = 1.0e4;
 constexpr double big_m_ratio_threshold = 1.0e4;
@@ -291,9 +300,12 @@ void scale_objective(cuopt::linear_programming::optimization_problem_t<i_t, f_t>
     return;
   }
 
-  const f_t obj_scaling_coefficient =
+  f_t obj_scaling_coefficient =
     static_cast<f_t>(min_abs_objective_coefficient_threshold) / min_abs_objective_coefficient;
   if (!std::isfinite(obj_scaling_coefficient) || obj_scaling_coefficient <= f_t(1)) { return; }
+  if (obj_scaling_coefficient > static_cast<f_t>(max_obj_scaling_coefficient)) {
+    obj_scaling_coefficient = static_cast<f_t>(max_obj_scaling_coefficient);
+  }
 
   thrust::transform(op_problem.get_handle_ptr()->get_thrust_policy(),
                     objective_coefficients.begin(),
@@ -304,6 +316,7 @@ void scale_objective(cuopt::linear_programming::optimization_problem_t<i_t, f_t>
                     });
   op_problem.set_objective_scaling_factor(op_problem.get_objective_scaling_factor() /
                                           obj_scaling_coefficient);
+  op_problem.set_objective_offset(op_problem.get_objective_offset() * obj_scaling_coefficient);
 
   CUOPT_LOG_INFO("MIP objective scaling applied: min_abs_coeff=%g scale=%g",
                  static_cast<double>(min_abs_objective_coefficient),
@@ -434,6 +447,9 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
   thrust::fill(
     handle_ptr_->get_thrust_policy(), row_skip_scaling.begin(), row_skip_scaling.end(), i_t(0));
   rmm::device_uvector<f_t> iteration_scaling(static_cast<size_t>(n_rows), stream_view_);
+  rmm::device_uvector<f_t> cumulative_scaling(static_cast<size_t>(n_rows), stream_view_);
+  thrust::fill(
+    handle_ptr_->get_thrust_policy(), cumulative_scaling.begin(), cumulative_scaling.end(), f_t(1));
   rmm::device_uvector<i_t> coefficient_row_index(static_cast<size_t>(nnz), stream_view_);
 
   thrust::upper_bound(handle_ptr_->get_thrust_policy(),
@@ -573,25 +589,37 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
 
     thrust::transform(
       handle_ptr_->get_thrust_policy(),
-      thrust::make_zip_iterator(thrust::make_tuple(
-        row_inf_norm.begin(), row_skip_scaling.begin(), row_integer_gcd.begin())),
-      thrust::make_zip_iterator(
-        thrust::make_tuple(row_inf_norm.end(), row_skip_scaling.end(), row_integer_gcd.end())),
+      thrust::make_zip_iterator(thrust::make_tuple(row_inf_norm.begin(),
+                                                   row_skip_scaling.begin(),
+                                                   row_integer_gcd.begin(),
+                                                   cumulative_scaling.begin())),
+      thrust::make_zip_iterator(thrust::make_tuple(row_inf_norm.end(),
+                                                   row_skip_scaling.end(),
+                                                   row_integer_gcd.end(),
+                                                   cumulative_scaling.end())),
       iteration_scaling.begin(),
       [target_norm] __device__(auto row_info) -> f_t {
         const f_t row_norm               = thrust::get<0>(row_info);
         const i_t is_big_m               = thrust::get<1>(row_info);
         const std::int64_t row_coeff_gcd = thrust::get<2>(row_info);
+        const f_t cum_scale              = thrust::get<3>(row_info);
         if (row_norm == f_t(0)) { return f_t(1); }
 
         const f_t desired_scaling = target_norm / row_norm;
         if (!isfinite(desired_scaling) || desired_scaling <= f_t(0)) { return f_t(1); }
 
-        const f_t min_scaling = is_big_m ? static_cast<f_t>(row_scaling_big_m_soft_min_factor)
-                                         : static_cast<f_t>(row_scaling_min_factor);
-        const f_t max_scaling = is_big_m ? static_cast<f_t>(row_scaling_big_m_soft_max_factor)
-                                         : static_cast<f_t>(row_scaling_max_factor);
-        f_t row_scaling       = desired_scaling;
+        f_t min_scaling = is_big_m ? static_cast<f_t>(row_scaling_big_m_soft_min_factor)
+                                   : static_cast<f_t>(row_scaling_min_factor);
+        f_t max_scaling = is_big_m ? static_cast<f_t>(row_scaling_big_m_soft_max_factor)
+                                   : static_cast<f_t>(row_scaling_max_factor);
+
+        const f_t cum_lower = static_cast<f_t>(cumulative_row_scaling_min) / cum_scale;
+        const f_t cum_upper = static_cast<f_t>(cumulative_row_scaling_max) / cum_scale;
+        if (cum_lower > min_scaling) { min_scaling = cum_lower; }
+        if (cum_upper < max_scaling) { max_scaling = cum_upper; }
+        if (min_scaling > max_scaling) { return f_t(1); }
+
+        f_t row_scaling = desired_scaling;
         if (row_scaling < min_scaling) { row_scaling = min_scaling; }
         if (row_scaling > max_scaling) { row_scaling = max_scaling; }
 
@@ -632,6 +660,13 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
       thrust::multiplies<f_t>{});
 
     thrust::transform(handle_ptr_->get_thrust_policy(),
+                      cumulative_scaling.begin(),
+                      cumulative_scaling.end(),
+                      iteration_scaling.begin(),
+                      cumulative_scaling.begin(),
+                      thrust::multiplies<f_t>{});
+
+    thrust::transform(handle_ptr_->get_thrust_policy(),
                       constraint_lower_bounds.begin(),
                       constraint_lower_bounds.end(),
                       iteration_scaling.begin(),
@@ -652,6 +687,33 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
                         thrust::multiplies<f_t>{});
     }
   }
+
+  const f_t post_max_coeff         = thrust::transform_reduce(handle_ptr_->get_thrust_policy(),
+                                                      matrix_values.begin(),
+                                                      matrix_values.end(),
+                                                      abs_value_transform_t<f_t>{},
+                                                      f_t(0),
+                                                      max_op_t<f_t>{});
+  const f_t post_min_nonzero_coeff = thrust::transform_reduce(handle_ptr_->get_thrust_policy(),
+                                                              matrix_values.begin(),
+                                                              matrix_values.end(),
+                                                              nonzero_abs_or_inf_transform_t<f_t>{},
+                                                              std::numeric_limits<f_t>::infinity(),
+                                                              min_op_t<f_t>{});
+  if (std::isfinite(static_cast<double>(post_max_coeff)) &&
+      std::isfinite(static_cast<double>(post_min_nonzero_coeff)) &&
+      post_min_nonzero_coeff > f_t(0)) {
+    const double post_ratio =
+      static_cast<double>(post_max_coeff) / static_cast<double>(post_min_nonzero_coeff);
+    if (post_ratio > post_scaling_max_ratio_warn) {
+      CUOPT_LOG_WARN(
+        "MIP row scaling: extreme coefficient ratio after scaling: max=%g min_nz=%g ratio=%g",
+        static_cast<double>(post_max_coeff),
+        static_cast<double>(post_min_nonzero_coeff),
+        post_ratio);
+    }
+  }
+
   CUOPT_LOG_INFO("MIP row scaling completed");
   op_problem_scaled_.print_scaling_information();
 }
