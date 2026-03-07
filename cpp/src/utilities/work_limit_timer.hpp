@@ -115,7 +115,7 @@ class work_limit_timer_t {
     if (deterministic) {
       if (!work_context) { return work_limit; }
       double elapsed_since_start = work_context->current_work() - work_units_at_start;
-      return work_limit - elapsed_since_start;
+      return std::max(0.0, work_limit - elapsed_since_start);
     } else {
       return timer.remaining_time();
     }

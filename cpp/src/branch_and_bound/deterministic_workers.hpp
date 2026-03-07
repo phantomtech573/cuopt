@@ -11,6 +11,7 @@
 #include <branch_and_bound/branch_and_bound_worker.hpp>
 #include <branch_and_bound/diving_heuristics.hpp>
 #include <branch_and_bound/node_queue.hpp>
+#include <cuopt/linear_programming/utilities/internals.hpp>
 
 #include <utilities/work_limit_context.hpp>
 
@@ -44,6 +45,8 @@ struct queued_integer_solution_t {
   int worker_id{-1};
   int sequence_id{0};
   double work_timestamp{0.0};
+  cuopt::internals::mip_solution_origin_t origin{
+    cuopt::internals::mip_solution_origin_t::BRANCH_AND_BOUND_NODE};
 
   bool operator<(const queued_integer_solution_t& other) const
   {
@@ -339,7 +342,13 @@ class deterministic_diving_worker_t
   void queue_integer_solution(f_t objective, const std::vector<f_t>& solution, i_t depth)
   {
     this->integer_solutions.push_back(
-      {objective, solution, depth, this->worker_id, this->next_solution_seq++});
+      {objective,
+       solution,
+       depth,
+       this->worker_id,
+       this->next_solution_seq++,
+       this->clock,
+       cuopt::internals::mip_solution_origin_t::BRANCH_AND_BOUND_DIVING});
     ++this->total_integer_solutions;
   }
 

@@ -131,7 +131,10 @@ class branch_and_bound_t {
   void set_new_solution(const std::vector<f_t>& solution);
 
   // This queues the solution to be processed at the correct work unit timestamp
-  void queue_external_solution_deterministic(const std::vector<f_t>& solution, double work_unit_ts);
+  void queue_external_solution_deterministic(const std::vector<f_t>& solution,
+                                             double work_unit_ts,
+                                             cuopt::internals::mip_solution_origin_t origin =
+                                               cuopt::internals::mip_solution_origin_t::UNKNOWN);
 
   void set_user_bound_callback(std::function<void(f_t)> callback)
   {
@@ -214,7 +217,12 @@ class branch_and_bound_t {
 
   // Mutex for repair
   omp_mutex_t mutex_repair_;
-  std::vector<std::vector<f_t>> repair_queue_;
+  struct queued_repair_solution_t {
+    std::vector<f_t> solution;
+    cuopt::internals::mip_solution_origin_t origin{
+      cuopt::internals::mip_solution_origin_t::UNKNOWN};
+  };
+  std::vector<queued_repair_solution_t> repair_queue_;
 
   // Variables for the root node in the search tree.
   std::vector<variable_status_t> root_vstatus_;
@@ -265,6 +273,14 @@ class branch_and_bound_t {
               i_t node_depth,
               i_t node_int_infeas,
               double work_time = -1);
+  void emit_solution_callback(std::vector<f_t>& original_x,
+                              f_t objective,
+                              cuopt::internals::mip_solution_origin_t origin,
+                              double work_timestamp = -1.0);
+  void emit_solution_callback_from_crushed(const std::vector<f_t>& crushed_solution,
+                                           f_t objective,
+                                           cuopt::internals::mip_solution_origin_t origin,
+                                           double work_timestamp = -1.0);
 
   // Set the solution when found at the root node
   void set_solution_at_root(mip_solution_t<i_t, f_t>& solution,
@@ -337,7 +353,14 @@ class branch_and_bound_t {
   void run_deterministic_coordinator(const csr_matrix_t<i_t, f_t>& Arow);
 
   // Gather all events generated, sort by WU timestamp, apply
-  void deterministic_sort_replay_events(const bb_event_batch_t<i_t, f_t>& events);
+  struct deterministic_replay_solution_t {
+    queued_integer_solution_t<i_t, f_t> solution;
+    search_strategy_t strategy{search_strategy_t::BEST_FIRST};
+  };
+
+  void deterministic_sort_replay_events(
+    const bb_event_batch_t<i_t, f_t>& events,
+    std::vector<deterministic_replay_solution_t>& replay_solutions);
 
   // Prune nodes held by workers based on new incumbent
   void deterministic_prune_worker_nodes_vs_incumbent();
@@ -370,10 +393,14 @@ class branch_and_bound_t {
   void deterministic_assign_diving_nodes();
 
   // Collect and merge diving solutions at sync
-  void deterministic_collect_diving_solutions_and_update_pseudocosts();
+  void deterministic_collect_diving_solutions_and_update_pseudocosts(
+    std::vector<deterministic_replay_solution_t>& replay_solutions);
 
   template <typename PoolT, typename WorkerTypeGetter>
-  void deterministic_process_worker_solutions(PoolT& pool, WorkerTypeGetter get_worker_type);
+  void deterministic_collect_worker_solutions(
+    PoolT& pool,
+    WorkerTypeGetter get_worker_type,
+    std::vector<deterministic_replay_solution_t>& replay_solutions);
 
   template <typename PoolT>
   void deterministic_merge_pseudo_cost_updates(PoolT& pool);

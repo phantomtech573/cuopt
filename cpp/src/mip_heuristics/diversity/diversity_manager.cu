@@ -155,7 +155,7 @@ void diversity_manager_t<i_t, f_t>::generate_solution(f_t time_limit, bool rando
   sol.compute_feasibility();
   // if a feasible is found, it is added to the population
   ls.generate_solution(sol, random_start, &population, time_limit);
-  population.add_solution(std::move(sol));
+  population.add_solution(std::move(sol), internals::mip_solution_origin_t::QUICK_FEASIBLE);
 }
 
 template <typename i_t, typename f_t>
@@ -192,7 +192,7 @@ void diversity_manager_t<i_t, f_t>::add_user_given_solutions(
                      is_feasible,
                      sol.get_user_objective(),
                      sol.get_total_excess());
-      population.run_solution_callbacks(sol);
+      population.run_solution_callbacks(sol, internals::mip_solution_origin_t::USER_INITIAL);
       initial_sol_vector.emplace_back(std::move(sol));
     } else {
       CUOPT_LOG_ERROR(
@@ -298,13 +298,13 @@ void diversity_manager_t<i_t, f_t>::generate_quick_feasible_solution()
   // do very short LP run to get somewhere close to the optimal point
   ls.generate_fast_solution(solution, sol_timer);
   if (solution.get_feasible()) {
-    population.run_solution_callbacks(solution);
+    population.run_solution_callbacks(solution, internals::mip_solution_origin_t::QUICK_FEASIBLE);
     initial_sol_vector.emplace_back(std::move(solution));
     problem_ptr->handle_ptr->sync_stream();
     solution_t<i_t, f_t> searched_sol(initial_sol_vector.back());
     ls_config_t<i_t, f_t> ls_config;
     run_local_search(searched_sol, population.weights, sol_timer, ls_config);
-    population.run_solution_callbacks(searched_sol);
+    population.run_solution_callbacks(searched_sol, internals::mip_solution_origin_t::LOCAL_SEARCH);
     initial_sol_vector.emplace_back(std::move(searched_sol));
     auto& feas_sol = initial_sol_vector.back().get_feasible()
                        ? initial_sol_vector.back()
@@ -406,29 +406,6 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
 
   // Debug: Allow disabling GPU heuristics to test B&B tree determinism in isolation
   const char* disable_heuristics_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
-  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-    CUOPT_LOG_INFO("Running deterministic mode with CPUFJ heuristic");
-    population.initialize_population();
-    population.allocate_solutions();
-
-    // Start CPUFJ in deterministic mode with B&B integration
-    if (context.branch_and_bound_ptr != nullptr) {
-      ls.start_cpufj_deterministic(*context.branch_and_bound_ptr);
-    }
-
-    while (!check_b_b_preemption()) {
-      if (timer.check_time_limit()) break;
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    // Stop CPUFJ when B&B is done
-    ls.stop_cpufj_deterministic();
-
-    population.add_external_solutions_to_population();
-    auto& best_sol = population.best_feasible();
-    log_return_solution("deterministic_cpufj", best_sol);
-    return best_sol;
-  }
   if (disable_heuristics_env != nullptr && std::string(disable_heuristics_env) == "1") {
     CUOPT_LOG_INFO("GPU heuristics disabled via CUOPT_DISABLE_GPU_HEURISTICS=1");
     population.initialize_population();
@@ -449,7 +426,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     producer_sync.deregister_producer(context.gpu_heur_loop.producer_progress_ptr());
     context.gpu_heur_loop.detach_producer_sync();
   });
-  if (is_gpu_heuristics_deterministic_mode(context.settings.determinism_mode) &&
+  if (is_deterministic_mode(context.settings.determinism_mode) &&
       context.branch_and_bound_ptr != nullptr) {
     auto& producer_sync = context.branch_and_bound_ptr->get_producer_sync();
     context.gpu_heur_loop.attach_producer_sync(&producer_sync);
@@ -666,7 +643,8 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
                     lp_rounded_sol.get_hash(),
                     (int)lp_rounded_sol.get_feasible(),
                     lp_rounded_sol.get_user_objective());
-    population.add_solution(std::move(lp_rounded_sol));
+    population.add_solution(std::move(lp_rounded_sol),
+                            internals::mip_solution_origin_t::LP_ROUNDING);
     if (!diversity_config.dry_run &&
         context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
       ls.start_cpufj_lptopt_scratch_threads(population);
@@ -680,7 +658,8 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
                     (int)initial_sol_vector[i].get_feasible(),
                     initial_sol_vector[i].get_user_objective());
   }
-  population.add_solutions_from_vec(std::move(initial_sol_vector));
+  population.add_solutions_from_vec(std::move(initial_sol_vector),
+                                    internals::mip_solution_origin_t::USER_INITIAL);
 
   if (check_b_b_preemption()) {
     auto& best_sol = population.best_feasible();
@@ -753,8 +732,10 @@ void diversity_manager_t<i_t, f_t>::diversity_step(i_t max_iterations_without_im
       auto [sol1, sol2]         = population.get_two_random(tournament);
       cuopt_assert(population.test_invariant(), "");
       auto [lp_offspring, offspring]        = recombine_and_local_search(sol1, sol2);
-      auto [inserted_pos_1, best_updated_1] = population.add_solution(std::move(lp_offspring));
-      auto [inserted_pos_2, best_updated_2] = population.add_solution(std::move(offspring));
+      auto [inserted_pos_1, best_updated_1] = population.add_solution(
+        std::move(lp_offspring), internals::mip_solution_origin_t::RECOMBINATION);
+      auto [inserted_pos_2, best_updated_2] = population.add_solution(
+        std::move(offspring), internals::mip_solution_origin_t::RECOMBINATION);
       if (best_updated_1 || best_updated_2) { recombine_stats.add_best_updated(); }
       cuopt_assert(population.test_invariant(), "");
       if ((inserted_pos_1 != -1 && inserted_pos_1 <= 2) ||
@@ -796,10 +777,12 @@ void diversity_manager_t<i_t, f_t>::recombine_and_ls_with_all(solution_t<i_t, f_
         auto [offspring, lp_offspring] =
           recombine_and_local_search(curr_sol, solution, recombiner_type);
         if (!add_only_feasible || lp_offspring.get_feasible()) {
-          population.add_solution(std::move(lp_offspring));
+          population.add_solution(std::move(lp_offspring),
+                                  internals::mip_solution_origin_t::RECOMBINATION);
         }
         if (!add_only_feasible || offspring.get_feasible()) {
-          population.add_solution(std::move(offspring));
+          population.add_solution(std::move(offspring),
+                                  internals::mip_solution_origin_t::RECOMBINATION);
         }
         if (work_limit_reached()) { return; }
       }
@@ -817,7 +800,8 @@ void diversity_manager_t<i_t, f_t>::recombine_and_ls_with_all(
     // add all solutions because time limit might have been consumed and we might have exited before
     for (auto& sol : solutions) {
       cuopt_func_call(sol.test_feasibility(true));
-      population.add_solution(std::move(solution_t<i_t, f_t>(sol)));
+      population.add_solution(std::move(solution_t<i_t, f_t>(sol)),
+                              internals::mip_solution_origin_t::BRANCH_AND_BOUND);
     }
     for (auto& sol : solutions) {
       if (work_limit_reached()) { return; }

@@ -8,6 +8,8 @@
 #include "diversity_manager.cuh"
 #include "population.cuh"
 
+#include <branch_and_bound/branch_and_bound.hpp>
+
 #include <thrust/for_each.h>
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/utils.cuh>
@@ -47,7 +49,8 @@ population_t<i_t, f_t>::population_t(std::string const& name_,
     population_hash_map(*problem_ptr),
     timer(context.gpu_heur_loop, 0)
 {
-  best_feasible_objective = std::numeric_limits<f_t>::max();
+  best_feasible_objective          = std::numeric_limits<f_t>::max();
+  best_callback_feasible_objective = std::numeric_limits<f_t>::max();
 }
 
 template <typename i_t>
@@ -126,11 +129,12 @@ std::pair<solution_t<i_t, f_t>, solution_t<i_t, f_t>> population_t<i_t, f_t>::ge
 }
 
 template <typename i_t, typename f_t>
-void population_t<i_t, f_t>::add_solutions_from_vec(std::vector<solution_t<i_t, f_t>>&& solutions)
+void population_t<i_t, f_t>::add_solutions_from_vec(
+  std::vector<solution_t<i_t, f_t>>&& solutions, internals::mip_solution_origin_t callback_origin)
 {
   raft::common::nvtx::range fun_scope("add_solution_from_vec");
   for (auto&& sol : solutions) {
-    add_solution(std::move(sol));
+    add_solution(std::move(sol), callback_origin);
   }
 }
 
@@ -292,29 +296,127 @@ void population_t<i_t, f_t>::invoke_get_solution_callback(
 }
 
 template <typename i_t, typename f_t>
-void population_t<i_t, f_t>::run_solution_callbacks(solution_t<i_t, f_t>& sol)
+void population_t<i_t, f_t>::invoke_get_solution_callback_ext(
+  solution_t<i_t, f_t>& sol,
+  internals::get_solution_callback_ext_t* callback,
+  const internals::mip_solution_callback_info_t& callback_info)
+{
+  f_t user_objective = sol.get_user_objective();
+  f_t user_bound     = context.stats.get_solution_bound();
+  solution_t<i_t, f_t> temp_sol(sol);
+  problem_ptr->post_process_assignment(temp_sol.assignment);
+  if (context.settings.mip_scaling) {
+    rmm::device_uvector<f_t> dummy(0, temp_sol.handle_ptr->get_stream());
+    context.scaling.unscale_solutions(temp_sol.assignment, dummy);
+  }
+  if (problem_ptr->has_papilo_presolve_data()) {
+    problem_ptr->papilo_uncrush_assignment(temp_sol.assignment);
+  }
+
+  std::vector<f_t> user_objective_vec(1);
+  std::vector<f_t> user_bound_vec(1);
+  std::vector<f_t> user_assignment_vec(temp_sol.assignment.size());
+  user_objective_vec[0] = user_objective;
+  user_bound_vec[0]     = user_bound;
+  raft::copy(user_assignment_vec.data(),
+             temp_sol.assignment.data(),
+             temp_sol.assignment.size(),
+             temp_sol.handle_ptr->get_stream());
+  temp_sol.handle_ptr->sync_stream();
+  callback->get_solution(user_assignment_vec.data(),
+                         user_objective_vec.data(),
+                         user_bound_vec.data(),
+                         &callback_info,
+                         callback->get_user_data());
+}
+
+template <typename i_t, typename f_t>
+void population_t<i_t, f_t>::invoke_get_solution_callbacks(
+  solution_t<i_t, f_t>& sol,
+  internals::mip_solution_origin_t callback_origin,
+  double work_timestamp)
+{
+  internals::mip_solution_callback_info_t callback_info{};
+  auto user_callbacks = context.settings.get_mip_callbacks();
+  if (work_timestamp < 0.0 && is_deterministic_mode(context.settings.determinism_mode)) {
+    work_timestamp = context.gpu_heur_loop.current_work();
+  }
+  callback_info.origin         = callback_origin;
+  callback_info.work_timestamp = work_timestamp;
+  CUOPT_LOG_DEBUG("Publishing incumbent: obj=%g wut=%.6f origin=%s callbacks=%zu",
+                  sol.get_user_objective(),
+                  work_timestamp,
+                  internals::mip_solution_origin_to_string(callback_origin),
+                  user_callbacks.size());
+  for (auto callback : user_callbacks) {
+    if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION) {
+      auto get_sol_callback = static_cast<internals::get_solution_callback_t*>(callback);
+      invoke_get_solution_callback(sol, get_sol_callback);
+    } else if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION_EXT) {
+      auto get_sol_callback_ext = static_cast<internals::get_solution_callback_ext_t*>(callback);
+      invoke_get_solution_callback_ext(sol, get_sol_callback_ext, callback_info);
+    }
+  }
+}
+
+template <typename i_t, typename f_t>
+bool population_t<i_t, f_t>::try_publish_new_best_feasible_to_get_callbacks(
+  solution_t<i_t, f_t>& sol,
+  internals::mip_solution_origin_t callback_origin,
+  double work_timestamp)
+{
+  std::lock_guard<std::mutex> lock(solution_callback_mutex);
+  if (!sol.get_feasible()) { return false; }
+  cuopt_assert(std::isfinite(sol.get_objective()), "Feasible incumbent objective must be finite");
+  if (!(sol.get_objective() < best_callback_feasible_objective)) { return false; }
+
+  if (context.settings.benchmark_info_ptr != nullptr) {
+    context.settings.benchmark_info_ptr->last_improvement_of_best_feasible = timer.elapsed_time();
+  }
+  CUOPT_LOG_DEBUG("Population: Found new best solution %g", sol.get_user_objective());
+  invoke_get_solution_callbacks(sol, callback_origin, work_timestamp);
+
+  // Save the best objective here, because unscaling can make the callback-side solution infeasible.
+  best_callback_feasible_objective = sol.get_objective();
+  return true;
+}
+
+template <typename i_t, typename f_t>
+void population_t<i_t, f_t>::run_solution_callbacks(
+  solution_t<i_t, f_t>& sol, internals::mip_solution_origin_t callback_origin)
 {
   bool better_solution_found = is_better_than_best_feasible(sol);
   auto user_callbacks        = context.settings.get_mip_callbacks();
   if (better_solution_found) {
-    if (context.settings.benchmark_info_ptr != nullptr) {
-      context.settings.benchmark_info_ptr->last_improvement_of_best_feasible = timer.elapsed_time();
-    }
-    CUOPT_LOG_DEBUG("Population: Found new best solution %g", sol.get_user_objective());
-    if (problem_ptr->branch_and_bound_callback != nullptr) {
-      problem_ptr->branch_and_bound_callback(sol.get_host_assignment());
-    }
-    for (auto callback : user_callbacks) {
-      if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION) {
-        auto get_sol_callback = static_cast<internals::get_solution_callback_t*>(callback);
-        invoke_get_solution_callback(sol, get_sol_callback);
+    const bool deterministic_callback_owner_is_bb =
+      is_deterministic_mode(context.settings.determinism_mode) &&
+      context.branch_and_bound_ptr != nullptr;
+    if (deterministic_callback_owner_is_bb) {
+      cuopt_assert(sol.get_feasible(),
+                   "Deterministic heuristic posting requires a feasible solution");
+      cuopt_assert(sol.get_objective() < best_feasible_objective,
+                   "Deterministic heuristic posting must strictly improve best feasible objective");
+      const double work_timestamp = context.gpu_heur_loop.current_producer_work();
+      cuopt_assert(std::isfinite(work_timestamp),
+                   "Deterministic heuristic work timestamp must be finite");
+      CUOPT_LOG_DEBUG(
+        "Submitting deterministic heuristic incumbent: obj=%g wut=%.6f origin=%s hash=0x%x",
+        sol.get_user_objective(),
+        work_timestamp,
+        internals::mip_solution_origin_to_string(callback_origin),
+        sol.get_hash());
+      context.branch_and_bound_ptr->queue_external_solution_deterministic(
+        sol.get_host_assignment(), work_timestamp, callback_origin);
+      // In deterministic mode, B&B replay is the single owner of GET_SOLUTION callback ordering.
+      best_feasible_objective = sol.get_objective();
+    } else {
+      if (problem_ptr->branch_and_bound_callback != nullptr) {
+        problem_ptr->branch_and_bound_callback(sol.get_host_assignment());
       }
+      const bool published =
+        try_publish_new_best_feasible_to_get_callbacks(sol, callback_origin, -1.0);
+      cuopt_assert(published, "New best feasible solution should publish to GET callbacks");
     }
-    // save the best objective here, because we might not have been able to return the solution to
-    // the user because of the unscaling that causes infeasibility.
-    // This prevents an issue of repaired, or a fully feasible solution being reported in the call
-    // back in next run.
-    best_feasible_objective = sol.get_objective();
   }
 
   for (auto callback : user_callbacks) {
@@ -410,7 +512,8 @@ void population_t<i_t, f_t>::adjust_weights_according_to_best_feasible()
 }
 
 template <typename i_t, typename f_t>
-std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(solution_t<i_t, f_t>&& sol)
+std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(
+  solution_t<i_t, f_t>&& sol, internals::mip_solution_origin_t callback_origin)
 {
   std::lock_guard<std::recursive_mutex> lock(write_mutex);
   raft::common::nvtx::range fun_scope("add_solution");
@@ -438,7 +541,7 @@ std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(solution_t<i_t, f_t>&&
   // We store the best feasible found so far at index 0.
   if (sol.get_feasible() &&
       (solutions[0].first == false || sol_cost + OBJECTIVE_EPSILON < indices[0].second)) {
-    run_solution_callbacks(sol);
+    run_solution_callbacks(sol, callback_origin);
     solutions[0].first = true;
     // we only have move assignment operator
     solution_t<i_t, f_t> temp_sol(sol);

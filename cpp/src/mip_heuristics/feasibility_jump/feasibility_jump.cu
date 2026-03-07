@@ -1063,14 +1063,15 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
 {
   auto& data = *climbers[climber_idx];
   auto v     = data.view();  // == climber_views[climber_idx]
-  const bool post_incumbents_to_bb =
-    is_gpu_heuristics_deterministic_mode(context.settings.determinism_mode) &&
+  const bool deterministic_bnb_integration =
+    is_deterministic_mode(context.settings.determinism_mode) &&
     context.branch_and_bound_ptr != nullptr;
   const double work_units_at_start = context.gpu_heur_loop.current_work();
-  const bool publish_progress      = post_incumbents_to_bb && std::isfinite(settings.work_limit) &&
-                                settings.work_limit > 0.0 && settings.iteration_limit > 0 &&
+  const bool publish_progress      = deterministic_bnb_integration &&
+                                std::isfinite(settings.work_limit) && settings.work_limit > 0.0 &&
+                                settings.iteration_limit > 0 &&
                                 settings.iteration_limit != std::numeric_limits<i_t>::max();
-  f_t last_posted_objective = std::numeric_limits<f_t>::infinity();
+  f_t last_published_objective = std::numeric_limits<f_t>::infinity();
 
   auto climber_stream = data.stream.view();
   if (climber_idx == 0) climber_stream = handle_ptr->get_stream();
@@ -1167,15 +1168,18 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
       bool is_feasible = solution.compute_feasibility();
       solution.handle_ptr->sync_stream();
 
-      if (post_incumbents_to_bb && is_feasible &&
-          solution.get_objective() < last_posted_objective) {
-        const double work_timestamp = context.gpu_heur_loop.current_producer_work();
-        context.branch_and_bound_ptr->queue_external_solution_deterministic(
-          solution.get_host_assignment(), work_timestamp);
-        last_posted_objective = solution.get_objective();
-        CUOPT_DETERMINISM_LOG_INFO("FJ deterministic post: obj=%f work_ts=%f hash=0x%x",
+      if (deterministic_bnb_integration && is_feasible &&
+          solution.get_objective() < last_published_objective) {
+        cuopt_assert(context.diversity_manager_ptr != nullptr,
+                     "Deterministic FJ publication requires diversity manager context");
+        auto* population_ptr = context.diversity_manager_ptr->get_population_pointer();
+        cuopt_assert(population_ptr != nullptr,
+                     "Deterministic FJ publication requires a population");
+        population_ptr->add_solution(solution_t<i_t, f_t>(solution),
+                                     internals::mip_solution_origin_t::FEASIBILITY_JUMP);
+        last_published_objective = solution.get_objective();
+        CUOPT_DETERMINISM_LOG_INFO("FJ deterministic publish via population: obj=%f hash=0x%x",
                                    solution.get_user_objective(),
-                                   work_timestamp,
                                    solution.get_hash());
       }
 

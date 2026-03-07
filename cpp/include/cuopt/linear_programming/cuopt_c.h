@@ -71,6 +71,27 @@ typedef int32_t cuopt_int_t;
 typedef int64_t cuopt_int_t;
 #endif
 
+typedef enum {
+  CUOPT_MIP_SOLUTION_ORIGIN_UNKNOWN               = 0,
+  CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND_NODE = 1,
+  CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND      = CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND_NODE,
+  CUOPT_MIP_SOLUTION_ORIGIN_FEASIBILITY_JUMP      = 2,
+  CUOPT_MIP_SOLUTION_ORIGIN_LOCAL_SEARCH          = 3,
+  CUOPT_MIP_SOLUTION_ORIGIN_QUICK_FEASIBLE        = 4,
+  CUOPT_MIP_SOLUTION_ORIGIN_USER_INITIAL          = 5,
+  CUOPT_MIP_SOLUTION_ORIGIN_LP_ROUNDING           = 6,
+  CUOPT_MIP_SOLUTION_ORIGIN_RECOMBINATION         = 7,
+  CUOPT_MIP_SOLUTION_ORIGIN_SUB_MIP               = 8,
+  CUOPT_MIP_SOLUTION_ORIGIN_CPU_FEASIBILITY_JUMP  = 9,
+  CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND_DIVING = 10,
+} cuOptMIPSolutionOrigin;
+
+typedef struct {
+  uint64_t struct_size;
+  cuOptMIPSolutionOrigin origin;
+  double work_timestamp;
+} cuOptMIPSolutionCallbackInfo;
+
 /**
  * @brief Get the size of the float type.
  *
@@ -714,6 +735,25 @@ typedef void (*cuOptMIPGetSolutionCallback)(const cuopt_float_t* solution,
                                             void* user_data);
 
 /**
+ * @brief Type of callback for receiving incumbent MIP solutions with extensible metadata.
+ *
+ * @param[in] solution - Pointer to incumbent solution values.
+ * @param[in] objective_value - Pointer to incumbent objective value.
+ * @param[in] solution_bound - Pointer to current solution (dual/user) bound.
+ * @param[in] callback_info - Pointer to callback metadata. `struct_size` is always set and can be
+ * used to detect future extensions safely.
+ * @param[in] user_data - Pointer to user data.
+ * @note All pointer arguments refer to host memory and are only valid during the callback
+ * invocation. Do not pass device/GPU pointers. Copy any data you need to keep after the callback
+ * returns.
+ */
+typedef void (*cuOptMIPGetSolutionCallbackExt)(const cuopt_float_t* solution,
+                                               const cuopt_float_t* objective_value,
+                                               const cuopt_float_t* solution_bound,
+                                               const cuOptMIPSolutionCallbackInfo* callback_info,
+                                               void* user_data);
+
+/**
  * @brief Type of callback for injecting MIP solutions with user context.
  *
  * @param[out] solution - Pointer to solution values to set.
@@ -747,6 +787,19 @@ typedef void (*cuOptMIPSetSolutionCallback)(cuopt_float_t* solution,
 cuopt_int_t cuOptSetMIPGetSolutionCallback(cuOptSolverSettings settings,
                                            cuOptMIPGetSolutionCallback callback,
                                            void* user_data);
+
+/**
+ * @brief Register an extended callback to receive incumbent MIP solutions with origin metadata.
+ *
+ * @param[in] settings - The solver settings object.
+ * @param[in] callback - Callback function to receive incumbent solutions and callback metadata.
+ * @param[in] user_data - User-defined pointer passed through to the callback.
+ *
+ * @return A status code indicating success or failure.
+ */
+cuopt_int_t cuOptSetMIPGetSolutionCallbackExt(cuOptSolverSettings settings,
+                                              cuOptMIPGetSolutionCallbackExt callback,
+                                              void* user_data);
 
 /**
  * @brief Register a callback to inject MIP solutions.

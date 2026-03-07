@@ -11,6 +11,7 @@
 #include <cuopt/linear_programming/constants.h>
 #include <cuopt/linear_programming/mip/solver_settings.hpp>
 #include <cuopt/linear_programming/solve.hpp>
+#include <cuopt/linear_programming/utilities/internals.hpp>
 #include <mps_parser/parser.hpp>
 #include <utilities/common_utils.hpp>
 #include <utilities/copy_helpers.hpp>
@@ -71,6 +72,118 @@ void expect_solutions_bitwise_equal(const mip_solution_t<int, double>& sol1,
   ASSERT_EQ(x1.size(), x2.size()) << label << "Solution sizes differ";
   for (size_t i = 0; i < x1.size(); ++i) {
     EXPECT_EQ(x1[i], x2[i]) << label << "Variable " << i << " differs";
+  }
+}
+
+struct callback_solution_t {
+  std::vector<double> assignment;
+  double objective{};
+  double solution_bound{};
+  internals::mip_solution_origin_t origin{internals::mip_solution_origin_t::UNKNOWN};
+};
+
+class first_n_get_solution_callback_t : public cuopt::internals::get_solution_callback_ext_t {
+ public:
+  first_n_get_solution_callback_t(std::vector<callback_solution_t>& solutions_in,
+                                  int n_variables_,
+                                  size_t max_solutions_,
+                                  void* expected_user_data_)
+    : solutions(solutions_in),
+      expected_user_data(expected_user_data_),
+      n_variables(n_variables_),
+      max_solutions(max_solutions_)
+  {
+  }
+
+  void get_solution(void* data,
+                    void* cost,
+                    void* solution_bound,
+                    const internals::mip_solution_callback_info_t* callback_info,
+                    void* user_data) override
+  {
+    EXPECT_EQ(user_data, expected_user_data);
+    ASSERT_NE(callback_info, nullptr);
+    EXPECT_GE(callback_info->struct_size, sizeof(internals::mip_solution_callback_info_t));
+    n_calls++;
+
+    auto assignment_ptr     = static_cast<double*>(data);
+    auto objective_ptr      = static_cast<double*>(cost);
+    auto solution_bound_ptr = static_cast<double*>(solution_bound);
+    EXPECT_FALSE(std::isnan(objective_ptr[0]));
+    EXPECT_FALSE(std::isnan(solution_bound_ptr[0]));
+
+    if (solutions.size() >= max_solutions) { return; }
+
+    callback_solution_t callback_solution;
+    callback_solution.assignment.assign(assignment_ptr, assignment_ptr + n_variables);
+    callback_solution.objective      = objective_ptr[0];
+    callback_solution.solution_bound = solution_bound_ptr[0];
+    callback_solution.origin         = callback_info->origin;
+    solutions.push_back(std::move(callback_solution));
+  }
+
+  std::vector<callback_solution_t>& solutions;
+  void* expected_user_data;
+  int n_calls{0};
+  int n_variables;
+  size_t max_solutions;
+};
+
+bool is_gpu_callback_origin(internals::mip_solution_origin_t origin)
+{
+  switch (origin) {
+    case internals::mip_solution_origin_t::FEASIBILITY_JUMP:
+    case internals::mip_solution_origin_t::LOCAL_SEARCH:
+    case internals::mip_solution_origin_t::QUICK_FEASIBLE:
+    case internals::mip_solution_origin_t::LP_ROUNDING:
+    case internals::mip_solution_origin_t::RECOMBINATION:
+    case internals::mip_solution_origin_t::SUB_MIP: return true;
+    default: return false;
+  }
+}
+
+size_t count_callbacks_with_origin(const std::vector<callback_solution_t>& callbacks,
+                                   internals::mip_solution_origin_t origin)
+{
+  return std::count_if(callbacks.begin(),
+                       callbacks.end(),
+                       [origin](const callback_solution_t& sol) { return sol.origin == origin; });
+}
+
+size_t count_gpu_callbacks(const std::vector<callback_solution_t>& callbacks)
+{
+  return std::count_if(callbacks.begin(), callbacks.end(), [](const callback_solution_t& sol) {
+    return is_gpu_callback_origin(sol.origin);
+  });
+}
+
+size_t count_branch_and_bound_callbacks(const std::vector<callback_solution_t>& callbacks)
+{
+  return std::count_if(callbacks.begin(), callbacks.end(), [](const callback_solution_t& sol) {
+    return sol.origin == internals::mip_solution_origin_t::BRANCH_AND_BOUND_NODE ||
+           sol.origin == internals::mip_solution_origin_t::BRANCH_AND_BOUND_DIVING;
+  });
+}
+
+void expect_callback_prefixes_bitwise_equal(const std::vector<callback_solution_t>& lhs,
+                                            const std::vector<callback_solution_t>& rhs,
+                                            size_t prefix_size,
+                                            const std::string& label)
+{
+  ASSERT_GE(lhs.size(), prefix_size) << label << "Left callback prefix missing entries";
+  ASSERT_GE(rhs.size(), prefix_size) << label << "Right callback prefix missing entries";
+  for (size_t i = 0; i < prefix_size; ++i) {
+    EXPECT_EQ(lhs[i].objective, rhs[i].objective)
+      << label << "Callback objective differs at index " << i;
+    EXPECT_EQ(lhs[i].solution_bound, rhs[i].solution_bound)
+      << label << "Callback bound differs at index " << i;
+    EXPECT_EQ(lhs[i].origin, rhs[i].origin) << label << "Callback origin differs at index " << i;
+    ASSERT_EQ(lhs[i].assignment.size(), rhs[i].assignment.size())
+      << label << "Callback assignment size differs at index " << i;
+    for (size_t j = 0; j < lhs[i].assignment.size(); ++j) {
+      EXPECT_EQ(lhs[i].assignment[j], rhs[i].assignment[j])
+        << label << "Callback assignment differs at callback " << i << " variable " << j;
+    }
   }
 }
 
@@ -204,6 +317,157 @@ TEST_F(DeterministicBBTest, reproducible_solution_vector)
   EXPECT_EQ(solution1.get_termination_status(), solution2.get_termination_status());
   EXPECT_DOUBLE_EQ(solution1.get_objective_value(), solution2.get_objective_value());
   expect_solutions_bitwise_equal(solution1, solution2, handle_);
+}
+
+TEST_F(DeterministicBBTest, reproducible_with_gpu_pipeline_in_deterministic_mode)
+{
+  auto path    = make_path_absolute("/mip/50v-10.mps");
+  auto problem = mps_parser::parse_mps<int, double>(path, false);
+  handle_.sync_stream();
+
+  mip_solver_settings_t<int, double> settings;
+  settings.time_limit               = 60.0;
+  settings.determinism_mode         = CUOPT_MODE_DETERMINISTIC;
+  settings.num_cpu_threads          = 8;
+  settings.work_limit               = 30;
+  settings.gpu_heur_work_unit_scale = 0.1;
+  settings.cpufj_work_unit_scale    = 1.0;
+
+  auto seed = std::random_device{}() & 0x7fffffff;
+  std::cout << "Tested with seed " << seed << "\n";
+  settings.seed = seed;
+
+  cuopt::seed_generator::set_seed(seed);
+  auto solution1 = solve_mip(&handle_, problem, settings);
+  cuopt::seed_generator::set_seed(seed);
+  auto solution2 = solve_mip(&handle_, problem, settings);
+  cuopt::seed_generator::set_seed(seed);
+  auto solution3 = solve_mip(&handle_, problem, settings);
+
+  EXPECT_EQ(solution1.get_termination_status(), solution2.get_termination_status());
+  EXPECT_EQ(solution1.get_termination_status(), solution3.get_termination_status());
+
+  EXPECT_DOUBLE_EQ(solution1.get_objective_value(), solution2.get_objective_value());
+  EXPECT_DOUBLE_EQ(solution1.get_objective_value(), solution3.get_objective_value());
+
+  EXPECT_DOUBLE_EQ(solution1.get_solution_bound(), solution2.get_solution_bound());
+  EXPECT_DOUBLE_EQ(solution1.get_solution_bound(), solution3.get_solution_bound());
+
+  expect_solutions_bitwise_equal(
+    solution1, solution2, handle_, "Deterministic GPU pipeline run 1 vs 2: ");
+  expect_solutions_bitwise_equal(
+    solution1, solution3, handle_, "Deterministic GPU pipeline run 1 vs 3: ");
+}
+
+TEST_F(DeterministicBBTest, deterministic_gpu_pipeline_ignores_cpufj_work_scale)
+{
+  auto path    = make_path_absolute("/mip/50v-10.mps");
+  auto problem = mps_parser::parse_mps<int, double>(path, false);
+  handle_.sync_stream();
+
+  mip_solver_settings_t<int, double> base_settings;
+  base_settings.time_limit               = 60.0;
+  base_settings.determinism_mode         = CUOPT_MODE_DETERMINISTIC;
+  base_settings.num_cpu_threads          = 8;
+  base_settings.work_limit               = 30;
+  base_settings.gpu_heur_work_unit_scale = 0.1;
+
+  auto seed = std::random_device{}() & 0x7fffffff;
+  std::cout << "Tested with seed " << seed << "\n";
+  base_settings.seed = seed;
+
+  auto settings_without_cpufj                  = base_settings;
+  settings_without_cpufj.cpufj_work_unit_scale = 1.0;
+  cuopt::seed_generator::set_seed(seed);
+  auto solution_without_cpufj = solve_mip(&handle_, problem, settings_without_cpufj);
+
+  auto settings_with_cpufj_scale                  = base_settings;
+  settings_with_cpufj_scale.cpufj_work_unit_scale = 17.0;
+  cuopt::seed_generator::set_seed(seed);
+  auto solution_with_cpufj_scale = solve_mip(&handle_, problem, settings_with_cpufj_scale);
+
+  EXPECT_EQ(solution_without_cpufj.get_termination_status(),
+            solution_with_cpufj_scale.get_termination_status());
+  EXPECT_DOUBLE_EQ(solution_without_cpufj.get_objective_value(),
+                   solution_with_cpufj_scale.get_objective_value());
+  EXPECT_DOUBLE_EQ(solution_without_cpufj.get_solution_bound(),
+                   solution_with_cpufj_scale.get_solution_bound());
+  expect_solutions_bitwise_equal(solution_without_cpufj,
+                                 solution_with_cpufj_scale,
+                                 handle_,
+                                 "Deterministic GPU pipeline should ignore CPUFJ scale: ");
+}
+
+TEST_F(DeterministicBBTest, deterministic_callback_sequence_reproducible_with_gpu_pipeline)
+{
+  constexpr size_t callback_compare_count = 5;
+  constexpr size_t callback_capture_limit = 32;
+  constexpr size_t min_gpu_callback_count = 3;
+  constexpr size_t min_bnb_callback_count = 3;
+
+  auto path    = make_path_absolute("/mip/50v-10.mps");
+  auto problem = mps_parser::parse_mps<int, double>(path, false);
+  handle_.sync_stream();
+
+  mip_solver_settings_t<int, double> settings;
+  settings.time_limit               = 360.0;
+  settings.determinism_mode         = CUOPT_MODE_DETERMINISTIC;
+  settings.num_cpu_threads          = 2;
+  settings.work_limit               = 60;
+  settings.gpu_heur_work_unit_scale = 0.05;
+  settings.cpufj_work_unit_scale    = 1.0;
+
+  auto seed = std::random_device{}() & 0x7fffffff;
+  std::cout << "Tested with seed " << seed << "\n";
+  settings.seed = seed;
+
+  const int n_variables = problem.get_variable_lower_bounds().size();
+  int user_data         = 7;
+
+  std::vector<callback_solution_t> callbacks_run1;
+  first_n_get_solution_callback_t callback_run1(
+    callbacks_run1, n_variables, callback_capture_limit, &user_data);
+  auto settings_run1 = settings;
+  settings_run1.set_mip_callback(&callback_run1, &user_data);
+  cuopt::seed_generator::set_seed(seed);
+  auto solution1 = solve_mip(&handle_, problem, settings_run1);
+
+  std::vector<callback_solution_t> callbacks_run2;
+  first_n_get_solution_callback_t callback_run2(
+    callbacks_run2, n_variables, callback_capture_limit, &user_data);
+  auto settings_run2 = settings;
+  settings_run2.set_mip_callback(&callback_run2, &user_data);
+  cuopt::seed_generator::set_seed(seed);
+  auto solution2 = solve_mip(&handle_, problem, settings_run2);
+
+  std::vector<callback_solution_t> callbacks_run3;
+  first_n_get_solution_callback_t callback_run3(
+    callbacks_run3, n_variables, callback_capture_limit, &user_data);
+  auto settings_run3 = settings;
+  settings_run3.set_mip_callback(&callback_run3, &user_data);
+  cuopt::seed_generator::set_seed(seed);
+  auto solution3 = solve_mip(&handle_, problem, settings_run3);
+
+  EXPECT_EQ(solution1.get_termination_status(), solution2.get_termination_status());
+  EXPECT_EQ(solution1.get_termination_status(), solution3.get_termination_status());
+  EXPECT_GE(callback_run1.n_calls, (int)callback_compare_count);
+  EXPECT_GE(callback_run2.n_calls, (int)callback_compare_count);
+  EXPECT_GE(callback_run3.n_calls, (int)callback_compare_count);
+  ASSERT_GE(callbacks_run1.size(), callback_compare_count);
+  ASSERT_GE(callbacks_run2.size(), callback_compare_count);
+  ASSERT_GE(callbacks_run3.size(), callback_compare_count);
+
+  EXPECT_GE(count_gpu_callbacks(callbacks_run1), min_gpu_callback_count);
+  EXPECT_GE(count_gpu_callbacks(callbacks_run2), min_gpu_callback_count);
+  EXPECT_GE(count_gpu_callbacks(callbacks_run3), min_gpu_callback_count);
+  EXPECT_GE(count_branch_and_bound_callbacks(callbacks_run1), min_bnb_callback_count);
+  EXPECT_GE(count_branch_and_bound_callbacks(callbacks_run2), min_bnb_callback_count);
+  EXPECT_GE(count_branch_and_bound_callbacks(callbacks_run3), min_bnb_callback_count);
+
+  expect_callback_prefixes_bitwise_equal(
+    callbacks_run1, callbacks_run2, callback_compare_count, "Deterministic callback run 1 vs 2: ");
+  expect_callback_prefixes_bitwise_equal(
+    callbacks_run1, callbacks_run3, callback_compare_count, "Deterministic callback run 1 vs 3: ");
 }
 
 class DeterministicGpuHeuristicsInstanceTest : public ::testing::TestWithParam<std::string> {

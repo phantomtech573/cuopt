@@ -68,6 +68,8 @@ local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context
 template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::start_cpufj_scratch_threads(population_t<i_t, f_t>& population)
 {
+  cuopt_assert(context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC,
+               "Scratch CPUFJ must remain opportunistic-only");
   pop_ptr = &population;
 
   std::vector<f_t> default_weights(context.problem_ptr->n_constraints, 1.);
@@ -116,6 +118,8 @@ template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::start_cpufj_lptopt_scratch_threads(
   population_t<i_t, f_t>& population)
 {
+  cuopt_assert(context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC,
+               "LP-opt CPUFJ scratch must remain opportunistic-only");
   pop_ptr = &population;
 
   std::vector<f_t> default_weights(context.problem_ptr->n_constraints, 1.);
@@ -186,7 +190,8 @@ void local_search_t<i_t, f_t>::start_cpufj_deterministic(
   // Set up callback to send solutions to B&B with work unit timestamps
   deterministic_cpu_fj.fj_cpu->improvement_callback =
     [&bb](f_t obj, const std::vector<f_t>& h_vec, double work_units) {
-      bb.queue_external_solution_deterministic(h_vec, work_units);
+      bb.queue_external_solution_deterministic(
+        h_vec, work_units, cuopt::internals::mip_solution_origin_t::CPU_FEASIBILITY_JUMP);
     };
 
   deterministic_cpu_fj.start_cpu_solver();
@@ -214,6 +219,7 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
                                            const std::string& source)
 {
   if (time_limit == 0.) return solution.get_feasible();
+  const bool use_cpufj_local_search = context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC;
 
   work_limit_timer_t timer(context.gpu_heur_loop, time_limit);
   const auto old_n_cstr_weights      = in_fj.cstr_weights.size();
@@ -235,22 +241,24 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
     }
   }
 
-  auto h_weights          = cuopt::host_copy(in_fj.cstr_weights, solution.handle_ptr->get_stream());
-  auto h_objective_weight = in_fj.objective_weight.value(solution.handle_ptr->get_stream());
-  for (auto& cpu_fj : ls_cpu_fj) {
-    cpu_fj.fj_cpu = cpu_fj.fj_ptr->create_cpu_climber(solution,
-                                                      h_weights,
-                                                      h_weights,
-                                                      h_objective_weight,
-                                                      context.preempt_heuristic_solver_,
-                                                      fj_settings_t{},
-                                                      true);
+  if (use_cpufj_local_search) {
+    auto h_weights = cuopt::host_copy(in_fj.cstr_weights, solution.handle_ptr->get_stream());
+    auto h_objective_weight = in_fj.objective_weight.value(solution.handle_ptr->get_stream());
+    for (auto& cpu_fj : ls_cpu_fj) {
+      cpu_fj.fj_cpu = cpu_fj.fj_ptr->create_cpu_climber(solution,
+                                                        h_weights,
+                                                        h_weights,
+                                                        h_objective_weight,
+                                                        context.preempt_heuristic_solver_,
+                                                        fj_settings_t{},
+                                                        true);
+    }
   }
 
   auto solution_copy = solution;
 
   // Start CPU solver in background thread
-  if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
+  if (use_cpufj_local_search) {
     for (auto& cpu_fj : ls_cpu_fj) {
       cpu_fj.start_cpu_solver();
     }
@@ -262,7 +270,7 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
   in_fj.solve(solution);
 
   // Stop CPU solver
-  if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
+  if (use_cpufj_local_search) {
     for (auto& cpu_fj : ls_cpu_fj) {
       cpu_fj.stop_cpu_solver();
     }
@@ -275,7 +283,7 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
 
   f_t best_cpu_obj = std::numeric_limits<f_t>::max();
   // // Wait for CPU solver to finish
-  if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
+  if (use_cpufj_local_search) {
     for (auto& cpu_fj : ls_cpu_fj) {
       bool cpu_sol_found = cpu_fj.wait_for_cpu_solver();
       if (cpu_sol_found) {
@@ -680,7 +688,8 @@ void local_search_t<i_t, f_t>::reset_alpha_and_save_solution(
   solution_t<i_t, f_t> solution_copy(solution);
   solution_copy.problem_ptr = old_problem_ptr;
   solution_copy.resize_to_problem();
-  population_ptr->add_solution(std::move(solution_copy));
+  population_ptr->add_solution(std::move(solution_copy),
+                               internals::mip_solution_origin_t::LOCAL_SEARCH);
   population_ptr->add_external_solutions_to_population();
   if (!cutting_plane_added_for_active_run) {
     solution.problem_ptr = &problem_with_objective_cut;

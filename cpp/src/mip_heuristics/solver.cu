@@ -63,9 +63,37 @@ struct branch_and_bound_solution_helper_t {
 
   void solution_callback(std::vector<f_t>& solution, f_t objective)
   {
-    if (is_deterministic_mode(settings_.deterministic_mode)) { return; }
-    dm->population.add_external_solution(solution, objective, solution_origin_t::BRANCH_AND_BOUND);
-    dm->rins.new_best_incumbent_callback(solution);
+    if (!settings_.deterministic) {
+      dm->population.add_external_solution(
+        solution, objective, solution_origin_t::BRANCH_AND_BOUND);
+      dm->rins.new_best_incumbent_callback(solution);
+    }
+  }
+
+  void solution_callback_ext(std::vector<f_t>& solution,
+                             f_t objective,
+                             const internals::mip_solution_callback_info_t& callback_info,
+                             double work_timestamp)
+  {
+    if (!settings_.deterministic) {
+      dm->population.add_external_solution(
+        solution, objective, solution_origin_t::BRANCH_AND_BOUND);
+      dm->rins.new_best_incumbent_callback(solution);
+      return;
+    }
+
+    cuopt_assert(dm != nullptr, "Diversity manager pointer must be valid");
+    cuopt_assert(dm->context.problem_ptr != nullptr, "Problem pointer must be valid");
+    cuopt_assert(solution.size() == (size_t)dm->context.problem_ptr->n_variables,
+                 "Deterministic B&B callback solution size mismatch");
+
+    solution_t<i_t, f_t> incumbent(*dm->context.problem_ptr);
+    incumbent.copy_new_assignment(solution);
+    incumbent.compute_feasibility();
+    cuopt_assert(incumbent.get_feasible(),
+                 "Deterministic B&B callback must provide a feasible incumbent");
+    dm->population.try_publish_new_best_feasible_to_get_callbacks(
+      incumbent, callback_info.origin, work_timestamp);
   }
 
   void set_simplex_solution(std::vector<f_t>& solution,
@@ -100,12 +128,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     CUOPT_LOG_INFO("Problem fully reduced in presolve");
     solution_t<i_t, f_t> sol(*context.problem_ptr);
     sol.set_problem_fully_reduced();
-    for (auto callback : context.settings.get_mip_callbacks()) {
-      if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION) {
-        auto get_sol_callback = static_cast<internals::get_solution_callback_t*>(callback);
-        dm.population.invoke_get_solution_callback(sol, get_sol_callback);
-      }
-    }
+    dm.population.invoke_get_solution_callbacks(sol);
     context.problem_ptr->post_process_solution(sol);
     return sol;
   }
@@ -130,12 +153,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     CUOPT_LOG_INFO("Problem full reduced in presolve");
     solution_t<i_t, f_t> sol(*context.problem_ptr);
     sol.set_problem_fully_reduced();
-    for (auto callback : context.settings.get_mip_callbacks()) {
-      if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION) {
-        auto get_sol_callback = static_cast<internals::get_solution_callback_t*>(callback);
-        dm.population.invoke_get_solution_callback(sol, get_sol_callback);
-      }
-    }
+    dm.population.invoke_get_solution_callbacks(sol);
     context.problem_ptr->post_process_solution(sol);
     return sol;
   }
@@ -168,12 +186,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       sol.set_problem_fully_reduced();
     }
     if (opt_sol.get_termination_status() == pdlp_termination_status_t::Optimal) {
-      for (auto callback : context.settings.get_mip_callbacks()) {
-        if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION) {
-          auto get_sol_callback = static_cast<internals::get_solution_callback_t*>(callback);
-          dm.population.invoke_get_solution_callback(sol, get_sol_callback);
-        }
-      }
+      dm.population.invoke_get_solution_callbacks(sol);
     }
     context.problem_ptr->post_process_solution(sol);
     return sol;
@@ -244,6 +257,13 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
                 &solution_helper,
                 std::placeholders::_1,
                 std::placeholders::_2);
+    branch_and_bound_settings.solution_callback_ext =
+      std::bind(&branch_and_bound_solution_helper_t<i_t, f_t>::solution_callback_ext,
+                &solution_helper,
+                std::placeholders::_1,
+                std::placeholders::_2,
+                std::placeholders::_3,
+                std::placeholders::_4);
     // heuristic_preemption_callback is needed in both modes to properly stop the heuristic thread
     branch_and_bound_settings.heuristic_preemption_callback = std::bind(
       &branch_and_bound_solution_helper_t<i_t, f_t>::preempt_heuristic_solver, &solution_helper);

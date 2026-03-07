@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -21,7 +22,46 @@ class Callback {
   virtual ~Callback() {}
 };
 
-enum class base_solution_callback_type { GET_SOLUTION, SET_SOLUTION };
+enum class mip_solution_origin_t : uint32_t {
+  UNKNOWN                 = 0,
+  BRANCH_AND_BOUND_NODE   = 1,
+  BRANCH_AND_BOUND        = BRANCH_AND_BOUND_NODE,
+  FEASIBILITY_JUMP        = 2,
+  LOCAL_SEARCH            = 3,
+  QUICK_FEASIBLE          = 4,
+  USER_INITIAL            = 5,
+  LP_ROUNDING             = 6,
+  RECOMBINATION           = 7,
+  SUB_MIP                 = 8,
+  CPU_FEASIBILITY_JUMP    = 9,
+  BRANCH_AND_BOUND_DIVING = 10,
+};
+
+constexpr const char* mip_solution_origin_to_string(mip_solution_origin_t origin)
+{
+  switch (origin) {
+    case mip_solution_origin_t::UNKNOWN: return "unknown";
+    case mip_solution_origin_t::BRANCH_AND_BOUND_NODE: return "branch_and_bound_node";
+    case mip_solution_origin_t::BRANCH_AND_BOUND_DIVING: return "branch_and_bound_diving";
+    case mip_solution_origin_t::FEASIBILITY_JUMP: return "feasibility_jump";
+    case mip_solution_origin_t::LOCAL_SEARCH: return "local_search";
+    case mip_solution_origin_t::QUICK_FEASIBLE: return "quick_feasible";
+    case mip_solution_origin_t::USER_INITIAL: return "user_initial";
+    case mip_solution_origin_t::LP_ROUNDING: return "lp_rounding";
+    case mip_solution_origin_t::RECOMBINATION: return "recombination";
+    case mip_solution_origin_t::SUB_MIP: return "sub_mip";
+    case mip_solution_origin_t::CPU_FEASIBILITY_JUMP: return "cpu_feasibility_jump";
+    default: return "unknown";
+  }
+}
+
+struct mip_solution_callback_info_t {
+  uint64_t struct_size{sizeof(mip_solution_callback_info_t)};
+  mip_solution_origin_t origin{mip_solution_origin_t::UNKNOWN};
+  double work_timestamp{-1.0};
+};
+
+enum class base_solution_callback_type { GET_SOLUTION, GET_SOLUTION_EXT, SET_SOLUTION };
 
 class base_solution_callback_t : public Callback {
  public:
@@ -52,6 +92,19 @@ class get_solution_callback_t : public base_solution_callback_t {
   base_solution_callback_type get_type() const override
   {
     return base_solution_callback_type::GET_SOLUTION;
+  }
+};
+
+class get_solution_callback_ext_t : public base_solution_callback_t {
+ public:
+  virtual void get_solution(void* data,
+                            void* objective_value,
+                            void* solution_bound,
+                            const mip_solution_callback_info_t* callback_info,
+                            void* user_data) = 0;
+  base_solution_callback_type get_type() const override
+  {
+    return base_solution_callback_type::GET_SOLUTION_EXT;
   }
 };
 
