@@ -100,6 +100,10 @@ class mip_solver_settings_t {
   i_t mip_batch_pdlp_strong_branching = 0;
   i_t num_gpus                        = 1;
   bool log_to_console                 = true;
+  // Scales deterministic CPUFJ producer work units before they are exposed to B&B replay/sync.
+  f_t cpufj_work_unit_scale = 1.0;
+  // Scales deterministic GPU heuristic producer work units/timestamps exposed to B&B replay/sync.
+  f_t gpu_heur_work_unit_scale = 1.0;
 
   std::string log_file;
   std::string sol_file;

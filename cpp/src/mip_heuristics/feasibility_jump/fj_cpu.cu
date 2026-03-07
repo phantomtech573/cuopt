@@ -11,11 +11,15 @@
 #include "feasibility_jump_impl_common.cuh"
 #include "fj_cpu.cuh"
 
+#include <utilities/determinism_log.hpp>
 #include <utilities/seed_generator.cuh>
 
 #include <raft/core/nvtx.hpp>
 
+#include <cerrno>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <iomanip>
 #include <mutex>
 #include <random>
@@ -37,6 +41,24 @@
 #endif
 
 namespace cuopt::linear_programming::detail {
+
+namespace {
+
+double read_positive_work_unit_scale(const char* env_name)
+{
+  const char* env_value = std::getenv(env_name);
+  if (env_value == nullptr || env_value[0] == '\0') { return 1.0; }
+
+  errno                     = 0;
+  char* end_ptr             = nullptr;
+  const double parsed_value = std::strtod(env_value, &end_ptr);
+  const bool valid_value    = errno == 0 && end_ptr != env_value && *end_ptr == '\0' &&
+                           std::isfinite(parsed_value) && parsed_value > 0.0;
+  cuopt_assert(valid_value, "Invalid CPUFJ work-unit scale env var");
+  return parsed_value;
+}
+
+}  // namespace
 
 template <typename i_t, typename f_t, typename ArrayType>
 thrust::tuple<f_t, f_t> get_mtm_for_bound(const typename fj_t<i_t, f_t>::climber_data_t::view_t& fj,
@@ -1308,6 +1330,15 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> fj_t<i_t, f_t>::create_cpu_climber(
 
   // Initialize fj_cpu with all the data
   init_fj_cpu(*fj_cpu, solution, left_weights, right_weights, objective_weight);
+  const double cpu_work_unit_scale =
+    context.settings.cpufj_work_unit_scale != 1.0
+      ? context.settings.cpufj_work_unit_scale
+      : read_positive_work_unit_scale("CUOPT_CPUFJ_WORK_UNIT_SCALE");
+  fj_cpu->work_unit_bias *= cpu_work_unit_scale;
+  if (cpu_work_unit_scale != 1.0) {
+    CUOPT_DETERMINISM_LOG_DEBUG(
+      "CPUFJ using work-unit scale %f (bias=%f)", cpu_work_unit_scale, fj_cpu->work_unit_bias);
+  }
   fj_cpu->settings = settings;
   if (randomize_params) {
     auto rng                 = std::mt19937(cuopt::seed_generator::get_seed());

@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -42,6 +42,8 @@ class seed_generator {
 #else
   static int64_t get_seed() { return seed_++; }
 #endif
+
+  static int64_t peek_seed() { return seed_; }
 
  public:
   seed_generator(seed_generator const&) = delete;

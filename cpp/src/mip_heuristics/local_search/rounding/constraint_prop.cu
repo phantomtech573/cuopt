@@ -1008,10 +1008,56 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
       // timer_t repair_timer{std::min(timer.remaining_time() / 5, timer.elapsed_time() / 3)};
       work_limit_timer_t repair_timer(context.gpu_heur_loop, timer.remaining_time() / 5);
       save_bounds(sol);
+      auto remaining_unset = make_span(unset_integer_vars, set_count, unset_integer_vars.size());
+      const auto orig_pb_fingerprint = orig_sol.problem_ptr->get_fingerprint();
+      const auto curr_pb_fingerprint = sol.problem_ptr->get_fingerprint();
+      CUOPT_LOG_DEBUG(
+        "CP repair entry: set_count=%lu unset_remaining=%lu unset_hash=0x%x assign_hash=0x%x "
+        "bounds_hash=0x%x orig_pb_hash=0x%x curr_pb_hash=0x%x ii_counts=%d/%d recovery=%d "
+        "rounding_ii=%d failed_repairs=%d interval=%d timer_rem=%.6f max_timer_rem=%.6f "
+        "repair_budget=%.6f",
+        set_count,
+        remaining_unset.size(),
+        detail::compute_hash(remaining_unset, sol.handle_ptr->get_stream()),
+        sol.get_hash(),
+        detail::compute_hash(make_span(sol.problem_ptr->variable_bounds),
+                             sol.handle_ptr->get_stream()),
+        orig_pb_fingerprint,
+        curr_pb_fingerprint,
+        multi_probe.infeas_constraints_count_0,
+        multi_probe.infeas_constraints_count_1,
+        (int)recovery_mode,
+        (int)rounding_ii,
+        n_failed_repair_iterations,
+        bounds_prop_interval,
+        timer.remaining_time(),
+        max_timer.remaining_time(),
+        repair_timer.remaining_time());
       // update bounds and run repair procedure
       repair_attempted = true;
       bounds_repaired =
         run_repair_procedure(*sol.problem_ptr, *orig_sol.problem_ptr, repair_timer, sol.handle_ptr);
+      remaining_unset = make_span(unset_integer_vars, set_count, unset_integer_vars.size());
+      CUOPT_LOG_DEBUG(
+        "CP repair exit: success=%d set_count=%lu unset_remaining=%lu unset_hash=0x%x "
+        "assign_hash=0x%x bounds_hash=0x%x curr_pb_hash=0x%x ii_counts=%d/%d "
+        "infeas_after_bounds_update=%d timer_rem=%.6f max_timer_rem=%.6f repair_elapsed=%.6f "
+        "repair_remaining=%.6f",
+        (int)bounds_repaired,
+        set_count,
+        remaining_unset.size(),
+        detail::compute_hash(remaining_unset, sol.handle_ptr->get_stream()),
+        sol.get_hash(),
+        detail::compute_hash(make_span(sol.problem_ptr->variable_bounds),
+                             sol.handle_ptr->get_stream()),
+        curr_pb_fingerprint,
+        multi_probe.infeas_constraints_count_0,
+        multi_probe.infeas_constraints_count_1,
+        bounds_update.infeas_constraints_count,
+        timer.remaining_time(),
+        max_timer.remaining_time(),
+        repair_timer.elapsed_time(),
+        repair_timer.remaining_time());
       if (!bounds_repaired) {
         restore_bounds(sol);
         n_failed_repair_iterations++;

@@ -17,6 +17,7 @@
 
 #include <pdlp/solve.cuh>
 
+#include <utilities/determinism_log.hpp>
 #include <utilities/scope_guard.hpp>
 
 #include <memory>
@@ -85,6 +86,21 @@ diversity_manager_t<i_t, f_t>::diversity_manager_t(mip_solver_context_t<i_t, f_t
     ls_recombiner_config_t::initial_n_of_vars_from_other;
   bp_recombiner_config_t::max_n_of_vars_from_other =
     bp_recombiner_config_t::initial_n_of_vars_from_other;
+  sub_mip_recombiner_config_t::max_n_of_vars_from_other =
+    sub_mip_recombiner_config_t::initial_n_of_vars_from_other;
+
+  CUOPT_DETERMINISM_LOG_INFO(
+    "Deterministic solve start diversity state: seed_state=%lld fp_max=%zu "
+    "ls_max=%zu bp_max=%zu sub_mip_max=%zu last_lm=%d last_ls=%d "
+    "enabled_recombiners=%zu",
+    (long long)cuopt::seed_generator::peek_seed(),
+    fp_recombiner_config_t::max_n_of_vars_from_other,
+    ls_recombiner_config_t::max_n_of_vars_from_other,
+    bp_recombiner_config_t::max_n_of_vars_from_other,
+    sub_mip_recombiner_config_t::max_n_of_vars_from_other,
+    (int)mab_ls_config_t<i_t, f_t>::last_lm_config,
+    (int)mab_ls_config_t<i_t, f_t>::last_ls_mab_option,
+    recombiner_t<i_t, f_t>::enabled_recombiners.size());
 
   // Read configuration ID from environment variable
   int max_config = -1;
@@ -329,10 +345,31 @@ void diversity_manager_t<i_t, f_t>::run_fj_alone(solution_t<i_t, f_t>& solution)
 template <typename i_t, typename f_t>
 void diversity_manager_t<i_t, f_t>::run_fp_alone()
 {
-  CUOPT_LOG_DEBUG("Running FP alone!");
+  CUOPT_DETERMINISM_LOG_INFO("Deterministic FP alone enter");
   solution_t<i_t, f_t> sol(population.best_feasible());
+  sol.handle_ptr->sync_stream();
+  CUOPT_DETERMINISM_LOG_INFO(
+    "Deterministic FP alone input: hash=0x%x feasible=%d obj=%.16e excess=%.16e",
+    sol.get_hash(),
+    (int)sol.get_feasible(),
+    sol.get_user_objective(),
+    sol.get_total_excess());
   ls.run_fp(sol, timer, &population, diversity_config.n_fp_iterations);
-  CUOPT_LOG_DEBUG("FP alone finished!");
+  sol.handle_ptr->sync_stream();
+  CUOPT_DETERMINISM_LOG_INFO(
+    "Deterministic FP alone output: hash=0x%x feasible=%d obj=%.16e excess=%.16e",
+    sol.get_hash(),
+    (int)sol.get_feasible(),
+    sol.get_user_objective(),
+    sol.get_total_excess());
+  auto& best_sol = population.best_feasible();
+  best_sol.handle_ptr->sync_stream();
+  CUOPT_DETERMINISM_LOG_INFO(
+    "Deterministic FP alone population best after: hash=0x%x feasible=%d obj=%.16e excess=%.16e",
+    best_sol.get_hash(),
+    (int)best_sol.get_feasible(),
+    best_sol.get_user_objective(),
+    best_sol.get_total_excess());
 }
 
 template <typename i_t, typename f_t>
@@ -355,6 +392,17 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   // to automatically compute the solving time on scope exit
   auto timer_raii_guard =
     cuopt::scope_guard([&]() { stats.total_solve_time = timer.elapsed_time(); });
+  auto log_return_solution = [&](const char* reason, solution_t<i_t, f_t>& sol) {
+    sol.handle_ptr->sync_stream();
+    CUOPT_DETERMINISM_LOG_INFO(
+      "Deterministic run_solver return: reason=%s hash=0x%x feasible=%d "
+      "obj=%.16e excess=%.16e",
+      reason,
+      sol.get_hash(),
+      (int)sol.get_feasible(),
+      sol.get_user_objective(),
+      sol.get_total_excess());
+  };
 
   // Debug: Allow disabling GPU heuristics to test B&B tree determinism in isolation
   const char* disable_heuristics_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
@@ -377,7 +425,9 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     ls.stop_cpufj_deterministic();
 
     population.add_external_solutions_to_population();
-    return population.best_feasible();
+    auto& best_sol = population.best_feasible();
+    log_return_solution("deterministic_cpufj", best_sol);
+    return best_sol;
   }
   if (disable_heuristics_env != nullptr && std::string(disable_heuristics_env) == "1") {
     CUOPT_LOG_INFO("GPU heuristics disabled via CUOPT_DISABLE_GPU_HEURISTICS=1");
@@ -387,7 +437,25 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     while (!check_b_b_preemption()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    return population.best_feasible();
+    auto& best_sol = population.best_feasible();
+    log_return_solution("heuristics_disabled", best_sol);
+    return best_sol;
+  }
+
+  bool gpu_heuristic_producer_registered = false;
+  auto gpu_heuristic_producer_guard      = cuopt::scope_guard([&]() {
+    if (!gpu_heuristic_producer_registered || context.branch_and_bound_ptr == nullptr) { return; }
+    auto& producer_sync = context.branch_and_bound_ptr->get_producer_sync();
+    producer_sync.deregister_producer(context.gpu_heur_loop.producer_progress_ptr());
+    context.gpu_heur_loop.detach_producer_sync();
+  });
+  if (is_gpu_heuristics_deterministic_mode(context.settings.determinism_mode) &&
+      context.branch_and_bound_ptr != nullptr) {
+    auto& producer_sync = context.branch_and_bound_ptr->get_producer_sync();
+    context.gpu_heur_loop.attach_producer_sync(&producer_sync);
+    producer_sync.register_producer(context.gpu_heur_loop.producer_progress_ptr());
+    producer_sync.registration_complete();
+    gpu_heuristic_producer_registered = true;
   }
 
   population.timer     = timer;
@@ -412,7 +480,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     "The problem must not be ii");
   population.initialize_population();
   population.allocate_solutions();
-  if (check_b_b_preemption()) { return population.best_feasible(); }
+  if (check_b_b_preemption()) {
+    auto& best_sol = population.best_feasible();
+    log_return_solution("preempted_after_population_init", best_sol);
+    return best_sol;
+  }
   add_user_given_solutions(initial_sol_vector);
   CUOPT_LOG_DEBUG("DM bootstrap: initial_sol_vector size after user solutions = %lu",
                   initial_sol_vector.size());
@@ -423,7 +495,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     ls.start_cpufj_scratch_threads(population);
   }
 
-  if (check_b_b_preemption()) { return population.best_feasible(); }
+  if (check_b_b_preemption()) {
+    auto& best_sol = population.best_feasible();
+    log_return_solution("preempted_before_lp", best_sol);
+    return best_sol;
+  }
   lp_state_t<i_t, f_t>& lp_state = problem_ptr->lp_state;
   // resize because some constructor might be called before the presolve
   lp_state.resize(*problem_ptr, problem_ptr->handle_ptr->get_stream());
@@ -452,7 +528,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
         lp_settings.concurrent_halt         = &global_concurrent_halt;
         lp_settings.work_context            = &context.gpu_heur_loop;
         cuopt_assert(lp_settings.work_context != nullptr, "Missing deterministic work context");
-        CUOPT_LOG_DEBUG(
+        CUOPT_DETERMINISM_LOG_DEBUG(
           "DM root LP config: dry_run=%d deterministic=%d work_limit=%.6f time_limit=%.6f",
           (int)diversity_config.dry_run,
           (int)timer.deterministic,
@@ -472,7 +548,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
       pdlp_settings.pdlp_solver_mode                     = pdlp_solver_mode_t::Stable2;
       pdlp_settings.num_gpus                             = context.settings.num_gpus;
       pdlp_settings.presolver                            = presolver_t::None;
-      CUOPT_LOG_DEBUG(
+      CUOPT_DETERMINISM_LOG_DEBUG(
         "DM root LP config: dry_run=%d deterministic=%d lp_time_limit=%.6f iter_limit=%d",
         (int)diversity_config.dry_run,
         (int)timer.deterministic,
@@ -481,7 +557,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
       timer_t lp_timer(lp_time_limit);
       return solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);
     }();
-    CUOPT_LOG_DEBUG(
+    CUOPT_DETERMINISM_LOG_DEBUG(
       "DM root LP result: status=%d iters=%d user_obj=%.12f primal_hash=0x%x",
       (int)lp_result.get_termination_status(),
       lp_result.get_additional_termination_information().number_of_steps_taken,
@@ -572,7 +648,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
 
     // in case the pdlp returned var boudns that are out of bounds
     clamp_within_var_bounds(lp_optimal_solution, problem_ptr, problem_ptr->handle_ptr);
-    CUOPT_LOG_DEBUG(
+    CUOPT_DETERMINISM_LOG_DEBUG(
       "DM root LP post-clamp: lp_optimal_solution hash=0x%x",
       detail::compute_hash(lp_optimal_solution, problem_ptr->handle_ptr->get_stream()));
   }
@@ -606,32 +682,53 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   }
   population.add_solutions_from_vec(std::move(initial_sol_vector));
 
-  if (check_b_b_preemption()) { return population.best_feasible(); }
+  if (check_b_b_preemption()) {
+    auto& best_sol = population.best_feasible();
+    log_return_solution("preempted_after_initial_population", best_sol);
+    return best_sol;
+  }
 
   if (context.settings.benchmark_info_ptr != nullptr) {
     context.settings.benchmark_info_ptr->objective_of_initial_population =
       population.best_feasible().get_user_objective();
   }
 
-  if (diversity_config.dry_run) { return population.best_feasible(); }
+  if (diversity_config.dry_run) {
+    auto& best_sol = population.best_feasible();
+    log_return_solution("dry_run", best_sol);
+    return best_sol;
+  }
   if (diversity_config.fj_only_run) {
     solution_t<i_t, f_t> sol(*problem_ptr);
     run_fj_alone(sol);
+    log_return_solution("fj_only_run", sol);
     return sol;
   }
   if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) { rins.enable(); }
 
   generate_solution(timer.remaining_time(), false);
-  if (diversity_config.initial_solution_only) { return population.best_feasible(); }
+  if (diversity_config.initial_solution_only) {
+    auto& best_sol = population.best_feasible();
+    log_return_solution("initial_solution_only", best_sol);
+    return best_sol;
+  }
   if (work_limit_reached()) {
     population.add_external_solutions_to_population();
-    return population.best_feasible();
+    auto& best_sol = population.best_feasible();
+    log_return_solution("work_limit_reached", best_sol);
+    return best_sol;
   }
-  if (check_b_b_preemption()) { return population.best_feasible(); }
+  if (check_b_b_preemption()) {
+    auto& best_sol = population.best_feasible();
+    log_return_solution("preempted_before_fp", best_sol);
+    return best_sol;
+  }
 
   run_fp_alone();
   population.add_external_solutions_to_population();
-  return population.best_feasible();
+  auto& best_sol = population.best_feasible();
+  log_return_solution("post_fp_alone", best_sol);
+  return best_sol;
 };
 
 template <typename i_t, typename f_t>
@@ -902,6 +999,14 @@ std::pair<solution_t<i_t, f_t>, bool> diversity_manager_t<i_t, f_t>::recombine(
       }
     }
   }
+  CUOPT_DETERMINISM_LOG_INFO(
+    "Deterministic recombiner selection: requested=%s selected_index=%d chosen=%s "
+    "enabled_size=%zu last_choice_before=%d",
+    recombiner_t<i_t, f_t>::recombiner_name(recombiner_type),
+    (int)selected_index,
+    recombiner_t<i_t, f_t>::recombiner_name(recombiner),
+    recombiner_t<i_t, f_t>::enabled_recombiners.size(),
+    mab_recombiner.last_chosen_option);
   mab_recombiner.set_last_chosen_option(selected_index);
   recombine_stats.add_attempt((recombiner_enum_t)recombiner);
   recombine_stats.start_recombiner_time();

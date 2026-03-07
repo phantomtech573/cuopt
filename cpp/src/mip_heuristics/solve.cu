@@ -14,6 +14,7 @@
 #include <mip_heuristics/solver.cuh>
 #include <mip_heuristics/utilities/sort_csr.cuh>
 #include <mip_heuristics/utils.cuh>
+#include <utilities/determinism_log.hpp>
 
 #include <pdlp/initial_scaling_strategy/initial_scaling.cuh>
 #include <pdlp/pdlp.cuh>
@@ -219,6 +220,15 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
 
     // Initialize seed generator if a specific seed is requested
     if (settings.seed >= 0) { cuopt::seed_generator::set_seed(settings.seed); }
+    CUOPT_DETERMINISM_LOG_INFO(
+      "Deterministic solve start settings: seed=%lld seed_state=%lld det_mode=%d "
+      "work_limit=%.6f max_cut_passes=%d num_cpu_threads=%d",
+      (long long)settings.seed,
+      (long long)cuopt::seed_generator::peek_seed(),
+      (int)settings.determinism_mode,
+      (double)settings.work_limit,
+      settings.max_cut_passes,
+      settings.num_cpu_threads);
 
     raft::common::nvtx::range fun_scope("Running solver");
 
@@ -241,14 +251,13 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
                                       op_problem.get_handle_ptr()->get_stream());
     }
 
-    auto timer = timer_t(time_limit);
+    auto timer                   = timer_t(time_limit);
+    const bool deterministic_run = detail::is_deterministic_mode(settings.determinism_mode);
 
     double presolve_time = 0.0;
     std::unique_ptr<detail::third_party_presolve_t<i_t, f_t>> presolver;
     std::optional<detail::third_party_presolve_result_t<i_t, f_t>> presolve_result;
-    detail::problem_t<i_t, f_t> problem(op_problem,
-                                        settings.get_tolerances(),
-                                        detail::is_deterministic_mode(settings.determinism_mode));
+    detail::problem_t<i_t, f_t> problem(op_problem, settings.get_tolerances(), deterministic_run);
 
     auto run_presolve              = settings.presolver != presolver_t::None;
     run_presolve                   = run_presolve && settings.initial_solutions.size() == 0;
@@ -273,9 +282,7 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
       // allocate not more than 10% of the time limit to presolve.
       // Note that this is not the presolve time, but the time limit for presolve.
       double presolve_time_limit = std::min(0.1 * time_limit, 60.0);
-      if (detail::is_deterministic_mode(settings.determinism_mode)) {
-        presolve_time_limit = std::numeric_limits<double>::infinity();
-      }
+      if (deterministic_run) { presolve_time_limit = std::numeric_limits<double>::infinity(); }
       presolver   = std::make_unique<detail::third_party_presolve_t<i_t, f_t>>();
       auto result = presolver->apply(op_problem,
                                      cuopt::linear_programming::problem_category_t::MIP,
@@ -292,7 +299,8 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
       }
       presolve_result.emplace(std::move(*result));
 
-      problem = detail::problem_t<i_t, f_t>(presolve_result->reduced_problem);
+      problem = detail::problem_t<i_t, f_t>(
+        presolve_result->reduced_problem, settings.get_tolerances(), deterministic_run);
       problem.set_papilo_presolve_data(presolver.get(),
                                        presolve_result->reduced_to_original_map,
                                        presolve_result->original_to_reduced_map,
@@ -335,7 +343,8 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
                      reduced_costs.data(),
                      reduced_costs.data() + reduced_costs.size(),
                      std::numeric_limits<f_t>::signaling_NaN());
-        detail::problem_t<i_t, f_t> full_problem(op_problem);
+        detail::problem_t<i_t, f_t> full_problem(
+          op_problem, settings.get_tolerances(), deterministic_run);
         detail::solution_t<i_t, f_t> full_sol(full_problem);
         full_sol.copy_new_assignment(
           cuopt::host_copy(primal_solution, op_problem.get_handle_ptr()->get_stream()));

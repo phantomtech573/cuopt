@@ -44,7 +44,7 @@ class work_limit_timer_t {
       work_limit(work_limit_),
       timer(work_limit_),
       work_context(&context),
-      work_units_at_start(context.deterministic ? context.global_work_units_elapsed : 0)
+      work_units_at_start(context.deterministic ? context.current_work() : 0)
   {
   }
 
@@ -67,7 +67,7 @@ class work_limit_timer_t {
     if (deterministic) {
       if (!work_context) { return false; }
       // Check if global work has exceeded our budget (snapshot + limit)
-      double elapsed_since_start = work_context->global_work_units_elapsed - work_units_at_start;
+      double elapsed_since_start = work_context->current_work() - work_units_at_start;
       bool finished_now          = elapsed_since_start >= work_limit;
       if (finished_now && !finished) {
         finished                   = true;
@@ -82,7 +82,7 @@ class work_limit_timer_t {
             caller,
             actual_elapsed_time,
             work_limit,
-            work_context->global_work_units_elapsed,
+            work_context->current_work(),
             work_units_at_start);
         }
       }
@@ -105,7 +105,7 @@ class work_limit_timer_t {
                       caller,
                       work_units,
                       timer.elapsed_time(),
-                      work_context->global_work_units_elapsed);
+                      work_context->current_work());
       work_context->record_work_sync_on_horizon(work_units);
     }
   }
@@ -114,7 +114,7 @@ class work_limit_timer_t {
   {
     if (deterministic) {
       if (!work_context) { return work_limit; }
-      double elapsed_since_start = work_context->global_work_units_elapsed - work_units_at_start;
+      double elapsed_since_start = work_context->current_work() - work_units_at_start;
       return work_limit - elapsed_since_start;
     } else {
       return timer.remaining_time();
@@ -126,7 +126,7 @@ class work_limit_timer_t {
   double elapsed_time() const noexcept
   {
     if (deterministic) {
-      return work_context->global_work_units_elapsed - work_units_at_start;
+      return work_context->current_work() - work_units_at_start;
     } else {
       return timer.elapsed_time();
     }
@@ -143,7 +143,7 @@ class work_limit_timer_t {
   {
     if (deterministic) {
       if (!work_context) { return false; }
-      double elapsed_since_start = work_context->global_work_units_elapsed - work_units_at_start;
+      double elapsed_since_start = work_context->current_work() - work_units_at_start;
       return elapsed_since_start >= work_limit / 2;
     } else {
       return timer.check_half_time();

@@ -13,6 +13,7 @@
 #include <mip_heuristics/utils.cuh>
 #include <pdlp/utils.cuh>
 #include <utilities/copy_helpers.hpp>
+#include <utilities/determinism_log.hpp>
 #include <utilities/seed_generator.cuh>
 
 #include <mutex>
@@ -179,6 +180,7 @@ void population_t<i_t, f_t>::add_external_solution(const std::vector<f_t>& solut
 template <typename i_t, typename f_t>
 void population_t<i_t, f_t>::add_external_solutions_to_population()
 {
+  if (is_deterministic_mode(context.settings.determinism_mode)) { return; }
   // don't do early exit checks here. mutex needs to be acquired to prevent race conditions
   auto new_sol_vector = get_external_solutions();
   add_solutions_from_vec(std::move(new_sol_vector));
@@ -418,13 +420,21 @@ std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(solution_t<i_t, f_t>&&
   // for hash computation, quality calculation, and similarity comparisons.
   sol.handle_ptr->sync_stream();
   population_hash_map.insert(sol);
-  double sol_cost   = sol.get_quality(weights);
-  bool best_updated = false;
+  double sol_cost                     = sol.get_quality(weights);
+  bool best_updated                   = false;
+  const bool had_best_feasible_before = solutions[0].first;
+  const uint32_t best_hash_before = had_best_feasible_before ? solutions[0].second.get_hash() : 0U;
+  const f_t best_user_objective_before = had_best_feasible_before
+                                           ? solutions[0].second.get_user_objective()
+                                           : std::numeric_limits<f_t>::infinity();
+  const f_t best_quality_before =
+    had_best_feasible_before ? indices[0].second : std::numeric_limits<f_t>::infinity();
+  const uint32_t candidate_hash = sol.get_hash();
   CUOPT_LOG_DEBUG("Adding solution with quality %f and objective %f n_integers %d, hash %x!",
                   sol_cost,
                   sol.get_user_objective(),
                   sol.n_assigned_integers,
-                  sol.get_hash());
+                  candidate_hash);
   // We store the best feasible found so far at index 0.
   if (sol.get_feasible() &&
       (solutions[0].first == false || sol_cost + OBJECTIVE_EPSILON < indices[0].second)) {
@@ -436,11 +446,40 @@ std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(solution_t<i_t, f_t>&&
     solutions[0].second = std::move(temp_sol);
     indices[0].second   = sol_cost;
     best_updated        = true;
+    CUOPT_DETERMINISM_LOG_INFO(
+      "Deterministic population best update: candidate_hash=0x%x candidate_feasible=%d "
+      "candidate_obj=%.16e candidate_quality=%.16e best_hash_before=0x%x "
+      "best_obj_before=%.16e best_quality_before=%.16e best_hash_after=0x%x "
+      "best_obj_after=%.16e best_quality_after=%.16e",
+      candidate_hash,
+      (int)sol.get_feasible(),
+      sol.get_user_objective(),
+      sol_cost,
+      best_hash_before,
+      best_user_objective_before,
+      best_quality_before,
+      solutions[0].second.get_hash(),
+      solutions[0].second.get_user_objective(),
+      indices[0].second);
   }
 
   // Fast reject
   if (indices.size() == max_solutions && indices.back().second <= sol_cost + OBJECTIVE_EPSILON) {
     CUOPT_LOG_TRACE("Rejecting solution objective is not better!");
+    CUOPT_DETERMINISM_LOG_INFO(
+      "Deterministic population add decision: candidate_hash=0x%x candidate_feasible=%d "
+      "candidate_obj=%.16e candidate_quality=%.16e action=reject_fast best_updated=%d "
+      "best_hash_before=0x%x best_obj_before=%.16e best_quality_before=%.16e "
+      "worst_quality=%.16e",
+      candidate_hash,
+      (int)sol.get_feasible(),
+      sol.get_user_objective(),
+      sol_cost,
+      (int)best_updated,
+      best_hash_before,
+      best_user_objective_before,
+      best_quality_before,
+      indices.back().second);
     return std::make_pair(-1, best_updated);
   }
 
@@ -471,6 +510,24 @@ std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(solution_t<i_t, f_t>&&
     int inserted_pos = insert_index(std::pair<size_t, double>((size_t)hint, sol_cost));
     cuopt_assert(test_invariant(), "Population invariant doesn't hold");
     test_invariant();
+    CUOPT_DETERMINISM_LOG_INFO(
+      "Deterministic population add decision: candidate_hash=0x%x candidate_feasible=%d "
+      "candidate_obj=%.16e candidate_quality=%.16e action=insert_new inserted_pos=%d "
+      "best_updated=%d best_hash_before=0x%x best_obj_before=%.16e best_quality_before=%.16e "
+      "best_hash_after=0x%x best_obj_after=%.16e best_quality_after=%.16e",
+      candidate_hash,
+      (int)solutions[hint].second.get_feasible(),
+      solutions[hint].second.get_user_objective(),
+      sol_cost,
+      inserted_pos,
+      (int)best_updated,
+      best_hash_before,
+      best_user_objective_before,
+      best_quality_before,
+      solutions[0].first ? solutions[0].second.get_hash() : 0U,
+      solutions[0].first ? solutions[0].second.get_user_objective()
+                         : std::numeric_limits<f_t>::infinity(),
+      solutions[0].first ? indices[0].second : std::numeric_limits<f_t>::infinity());
     return std::make_pair(inserted_pos, best_updated);
 
   } else if (sol_cost + OBJECTIVE_EPSILON < indices[index].second) {
@@ -485,11 +542,50 @@ std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(solution_t<i_t, f_t>&&
     int inserted_pos = insert_index(std::pair<size_t, double>((size_t)free, sol_cost));
     cuopt_assert(test_invariant(), "Population invariant doesn't hold");
     test_invariant();
+    CUOPT_DETERMINISM_LOG_INFO(
+      "Deterministic population add decision: candidate_hash=0x%x candidate_feasible=%d "
+      "candidate_obj=%.16e candidate_quality=%.16e action=replace_similar similar_index=%zu "
+      "inserted_pos=%d best_updated=%d best_hash_before=0x%x best_obj_before=%.16e "
+      "best_quality_before=%.16e best_hash_after=0x%x best_obj_after=%.16e "
+      "best_quality_after=%.16e",
+      candidate_hash,
+      (int)solutions[free].second.get_feasible(),
+      solutions[free].second.get_user_objective(),
+      sol_cost,
+      index,
+      inserted_pos,
+      (int)best_updated,
+      best_hash_before,
+      best_user_objective_before,
+      best_quality_before,
+      solutions[0].first ? solutions[0].second.get_hash() : 0U,
+      solutions[0].first ? solutions[0].second.get_user_objective()
+                         : std::numeric_limits<f_t>::infinity(),
+      solutions[0].first ? indices[0].second : std::numeric_limits<f_t>::infinity());
     return std::make_pair(inserted_pos, best_updated);
   }
   CUOPT_LOG_TRACE("Adding solution failed!");
   cuopt_assert(test_invariant(), "Population invariant doesn't hold");
   test_invariant();
+  CUOPT_DETERMINISM_LOG_INFO(
+    "Deterministic population add decision: candidate_hash=0x%x candidate_feasible=%d "
+    "candidate_obj=%.16e candidate_quality=%.16e action=reject_similar_or_worse "
+    "similar_index=%zu best_updated=%d best_hash_before=0x%x best_obj_before=%.16e "
+    "best_quality_before=%.16e best_hash_after=0x%x best_obj_after=%.16e "
+    "best_quality_after=%.16e",
+    candidate_hash,
+    (int)sol.get_feasible(),
+    sol.get_user_objective(),
+    sol_cost,
+    index,
+    (int)best_updated,
+    best_hash_before,
+    best_user_objective_before,
+    best_quality_before,
+    solutions[0].first ? solutions[0].second.get_hash() : 0U,
+    solutions[0].first ? solutions[0].second.get_user_objective()
+                       : std::numeric_limits<f_t>::infinity(),
+    solutions[0].first ? indices[0].second : std::numeric_limits<f_t>::infinity());
   return std::make_pair(-1, best_updated);
 }
 

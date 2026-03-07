@@ -79,8 +79,8 @@ void work_unit_scheduler_t::wait_for_next_sync(work_limit_context_t& ctx)
 {
   if (is_shutdown()) return;
 
-  double next_sync              = current_sync_target();
-  ctx.global_work_units_elapsed = next_sync;
+  double next_sync = current_sync_target();
+  ctx.set_current_work(next_sync, false);
   wait_at_sync_point(ctx, next_sync);
 }
 

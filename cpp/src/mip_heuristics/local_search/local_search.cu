@@ -15,6 +15,7 @@
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
 #include <mip_heuristics/utils.cuh>
+#include <utilities/determinism_log.hpp>
 #include <utilities/seed_generator.cuh>
 #include <utilities/work_limit_timer.hpp>
 
@@ -25,6 +26,9 @@
 #include <future>
 
 namespace cuopt::linear_programming::detail {
+
+static double local_search_best_obj       = std::numeric_limits<double>::max();
+static population_t<int, double>* pop_ptr = nullptr;
 
 template <typename i_t, typename f_t>
 local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context_,
@@ -53,10 +57,13 @@ local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context
     cpu_fj.fj_ptr = &fj;
   }
   scratch_cpu_fj_on_lp_opt.fj_ptr = &fj;
+  CUOPT_DETERMINISM_LOG_INFO(
+    "Deterministic solve start local_search state: seed_state=%lld "
+    "local_search_best_obj=%.16e pop_ptr_set=%d",
+    (long long)cuopt::seed_generator::peek_seed(),
+    local_search_best_obj,
+    (int)(pop_ptr != nullptr));
 }
-
-static double local_search_best_obj       = std::numeric_limits<double>::max();
-static population_t<int, double>* pop_ptr = nullptr;
 
 template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::start_cpufj_scratch_threads(population_t<i_t, f_t>& population)

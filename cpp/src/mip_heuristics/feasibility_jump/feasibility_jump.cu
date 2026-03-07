@@ -14,6 +14,7 @@
 #include <mip_heuristics/diversity/population.cuh>
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/utils.cuh>
+#include <utilities/determinism_log.hpp>
 #include <utilities/seed_generator.cuh>
 #include <utilities/timer.hpp>
 
@@ -1062,6 +1063,14 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
 {
   auto& data = *climbers[climber_idx];
   auto v     = data.view();  // == climber_views[climber_idx]
+  const bool post_incumbents_to_bb =
+    is_gpu_heuristics_deterministic_mode(context.settings.determinism_mode) &&
+    context.branch_and_bound_ptr != nullptr;
+  const double work_units_at_start = context.gpu_heur_loop.current_work();
+  const bool publish_progress      = post_incumbents_to_bb && std::isfinite(settings.work_limit) &&
+                                settings.work_limit > 0.0 && settings.iteration_limit > 0 &&
+                                settings.iteration_limit != std::numeric_limits<i_t>::max();
+  f_t last_posted_objective = std::numeric_limits<f_t>::infinity();
 
   auto climber_stream = data.stream.view();
   if (climber_idx == 0) climber_stream = handle_ptr->get_stream();
@@ -1138,6 +1147,12 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
       }
 
       i_t iterations = data.iterations.value(climber_stream);
+      if (publish_progress) {
+        const double progress_ratio =
+          std::min(1.0, (double)iterations / (double)settings.iteration_limit);
+        const double published_work = work_units_at_start + settings.work_limit * progress_ratio;
+        context.gpu_heur_loop.set_current_work(published_work);
+      }
       // make sure we have the current incumbent saved (e.g. in the case of a timeout)
       update_best_solution_kernel<i_t, f_t><<<1, blocks_resetmoves, 0, climber_stream>>>(v);
       // check feasibility with the relative tolerance rather than the violation score
@@ -1151,6 +1166,18 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
       // FIRST_FEASIBLE mode, we can remove the following too.
       bool is_feasible = solution.compute_feasibility();
       solution.handle_ptr->sync_stream();
+
+      if (post_incumbents_to_bb && is_feasible &&
+          solution.get_objective() < last_posted_objective) {
+        const double work_timestamp = context.gpu_heur_loop.current_producer_work();
+        context.branch_and_bound_ptr->queue_external_solution_deterministic(
+          solution.get_host_assignment(), work_timestamp);
+        last_posted_objective = solution.get_objective();
+        CUOPT_DETERMINISM_LOG_INFO("FJ deterministic post: obj=%f work_ts=%f hash=0x%x",
+                                   solution.get_user_objective(),
+                                   work_timestamp,
+                                   solution.get_hash());
+      }
 
       if (limit_reached) { break; }
 
@@ -1443,7 +1470,10 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
     }
 
     CUOPT_LOG_DEBUG("FJ: recording work %fwu for %d iterations", work_to_record, iterations);
-    timer.record_work(work_to_record);
+    const double already_published_work =
+      std::max(0.0, context.gpu_heur_loop.current_work() - timer.work_units_at_start);
+    const double remaining_work_to_record = std::max(0.0, work_to_record - already_published_work);
+    timer.record_work(remaining_work_to_record);
   }
 
   CUOPT_LOG_DEBUG("FJ sol hash %x", solution.get_hash());

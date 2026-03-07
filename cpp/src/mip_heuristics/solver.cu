@@ -17,6 +17,7 @@
 #include <branch_and_bound/branch_and_bound.hpp>
 #include <dual_simplex/simplex_solver_settings.hpp>
 #include <dual_simplex/solve.hpp>
+#include <utilities/determinism_log.hpp>
 
 #include <raft/sparse/detail/cusparse_wrappers.h>
 #include <raft/core/cusparse_macros.hpp>
@@ -62,6 +63,7 @@ struct branch_and_bound_solution_helper_t {
 
   void solution_callback(std::vector<f_t>& solution, f_t objective)
   {
+    if (is_deterministic_mode(settings_.deterministic_mode)) { return; }
     dm->population.add_external_solution(solution, objective, solution_origin_t::BRANCH_AND_BOUND);
     dm->rins.new_best_incumbent_callback(solution);
   }
@@ -287,15 +289,19 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 
     context.work_unit_scheduler_.register_context(branch_and_bound->get_work_unit_context());
 
-    context.problem_ptr->set_root_relaxation_solution_callback =
-      std::bind(&dual_simplex::branch_and_bound_t<i_t, f_t>::set_root_relaxation_solution,
-                branch_and_bound.get(),
-                std::placeholders::_1,
-                std::placeholders::_2,
-                std::placeholders::_3,
-                std::placeholders::_4,
-                std::placeholders::_5,
-                std::placeholders::_6);
+    if (is_deterministic_mode(context.settings.determinism_mode)) {
+      context.problem_ptr->set_root_relaxation_solution_callback = nullptr;
+    } else {
+      context.problem_ptr->set_root_relaxation_solution_callback =
+        std::bind(&dual_simplex::branch_and_bound_t<i_t, f_t>::set_root_relaxation_solution,
+                  branch_and_bound.get(),
+                  std::placeholders::_1,
+                  std::placeholders::_2,
+                  std::placeholders::_3,
+                  std::placeholders::_4,
+                  std::placeholders::_5,
+                  std::placeholders::_6);
+    }
 
     if (timer_.check_time_limit()) {
       CUOPT_LOG_INFO("Time limit reached during B&B setup");
@@ -326,6 +332,23 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
         context.problem_ptr->get_user_obj_from_solver_obj(branch_and_bound_solution.lower_bound));
     }
     if (bb_status == dual_simplex::mip_status_t::INFEASIBLE) { sol.set_problem_fully_reduced(); }
+    if (is_deterministic_mode(context.settings.determinism_mode) &&
+        std::isfinite(branch_and_bound_solution.objective)) {
+      CUOPT_DETERMINISM_LOG_INFO(
+        "Deterministic solver B&B overwrite: bb_status=%d bb_obj=%.16e bb_lower=%.16e "
+        "bb_hash=0x%x dm_hash=0x%x nodes=%d simplex_iterations=%d",
+        (int)bb_status,
+        branch_and_bound_solution.objective,
+        branch_and_bound_solution.lower_bound,
+        detail::compute_hash(branch_and_bound_solution.x),
+        sol.get_hash(),
+        branch_and_bound_solution.nodes_explored,
+        branch_and_bound_solution.simplex_iterations);
+      solution_t<i_t, f_t> bb_sol(*context.problem_ptr);
+      bb_sol.copy_new_assignment(branch_and_bound_solution.x);
+      bb_sol.compute_feasibility();
+      sol = std::move(bb_sol);
+    }
     context.stats.num_nodes              = branch_and_bound_solution.nodes_explored;
     context.stats.num_simplex_iterations = branch_and_bound_solution.simplex_iterations;
   }

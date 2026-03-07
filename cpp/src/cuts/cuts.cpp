@@ -11,8 +11,90 @@
 #include <dual_simplex/tic_toc.hpp>
 
 #include <barrier/dense_matrix.hpp>
+#include <utilities/determinism_log.hpp>
+#include <utilities/hashing.hpp>
 
 namespace cuopt::linear_programming::dual_simplex {
+
+namespace {
+
+inline uint32_t hash_combine(uint32_t hash, uint32_t value)
+{
+  hash ^= value;
+  hash *= 16777619u;
+  return hash;
+}
+
+template <typename i_t, typename f_t>
+uint32_t compute_sparse_cut_hash(const sparse_vector_t<i_t, f_t>& cut, f_t rhs, cut_type_t cut_type)
+{
+  uint32_t hash = 2166136261u;
+  hash          = hash_combine(hash, cuopt::linear_programming::detail::compute_hash(cut.i));
+  hash          = hash_combine(hash, cuopt::linear_programming::detail::compute_hash(cut.x));
+  hash          = hash_combine(hash, cuopt::linear_programming::detail::compute_hash(rhs));
+  hash          = hash_combine(
+    hash, cuopt::linear_programming::detail::compute_hash(static_cast<int8_t>(cut_type)));
+  return hash;
+}
+
+template <typename i_t, typename f_t>
+uint32_t compute_stored_cut_hash(const csr_matrix_t<i_t, f_t>& cut_storage,
+                                 const std::vector<f_t>& rhs_storage,
+                                 const std::vector<cut_type_t>& cut_types,
+                                 i_t row)
+{
+  sparse_vector_t<i_t, f_t> cut(cut_storage, row);
+  return compute_sparse_cut_hash(cut, rhs_storage[row], cut_types[row]);
+}
+
+template <typename i_t>
+uint32_t compute_index_order_hash(const std::vector<i_t>& ordered_indices)
+{
+  uint32_t hash = 2166136261u;
+  for (auto idx : ordered_indices) {
+    hash = hash_combine(hash, cuopt::linear_programming::detail::compute_hash(idx));
+  }
+  return hash;
+}
+
+uint32_t compute_ordered_hash_list_hash(const std::vector<uint32_t>& ordered_hashes)
+{
+  uint32_t hash = 2166136261u;
+  for (auto cut_hash : ordered_hashes) {
+    hash = hash_combine(hash, cut_hash);
+  }
+  return hash;
+}
+
+template <typename i_t, typename f_t>
+void log_lp_state_summary(const simplex_solver_settings_t<i_t, f_t>& settings,
+                          const char* label,
+                          const lp_problem_t<i_t, f_t>& lp,
+                          const std::vector<i_t>& new_slacks,
+                          i_t cuts_delta)
+{
+  assert(new_slacks.size() == static_cast<size_t>(lp.num_rows));
+
+  CUOPT_DETERMINISM_LOG_PRINTF(
+    settings.log,
+    "%s: cuts_delta=%d rows=%d cols=%d nnz=%zu slacks=%zu slack_hash=0x%x rhs_hash=0x%x "
+    "lower_hash=0x%x upper_hash=0x%x Acol_hash=0x%x Arow_hash=0x%x Aval_hash=0x%x\n",
+    label,
+    cuts_delta,
+    lp.num_rows,
+    lp.num_cols,
+    lp.A.x.size(),
+    new_slacks.size(),
+    cuopt::linear_programming::detail::compute_hash(new_slacks),
+    cuopt::linear_programming::detail::compute_hash(lp.rhs),
+    cuopt::linear_programming::detail::compute_hash(lp.lower),
+    cuopt::linear_programming::detail::compute_hash(lp.upper),
+    cuopt::linear_programming::detail::compute_hash(lp.A.col_start),
+    cuopt::linear_programming::detail::compute_hash(lp.A.i),
+    cuopt::linear_programming::detail::compute_hash(lp.A.x));
+}
+
+}  // namespace
 
 template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type,
@@ -121,6 +203,40 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
   std::vector<i_t> sorted_indices;
   best_score_last_permutation(cut_distances_, sorted_indices);
 
+  if (!sorted_indices.empty()) {
+    std::vector<i_t> candidate_order;
+    candidate_order.reserve(sorted_indices.size());
+    std::vector<uint32_t> candidate_cut_hashes;
+    candidate_cut_hashes.reserve(sorted_indices.size());
+    for (auto it = sorted_indices.rbegin(); it != sorted_indices.rend(); ++it) {
+      const i_t cut_idx = *it;
+      candidate_order.push_back(cut_idx);
+      candidate_cut_hashes.push_back(
+        compute_stored_cut_hash(cut_storage_, rhs_storage_, cut_type_, cut_idx));
+    }
+
+    const uint32_t candidate_order_hash = compute_index_order_hash(candidate_order);
+    const uint32_t candidate_cut_hash   = compute_ordered_hash_list_hash(candidate_cut_hashes);
+    CUOPT_DETERMINISM_LOG_PRINTF(settings_.log,
+                                 "Deterministic cut candidate ranking: cuts=%zu order_hash=0x%x "
+                                 "cut_hash=0x%x top=",
+                                 candidate_order.size(),
+                                 candidate_order_hash,
+                                 candidate_cut_hash);
+    const size_t max_top_cuts = std::min((size_t)8, candidate_order.size());
+    for (size_t k = 0; k < max_top_cuts; ++k) {
+      const i_t cut_idx = candidate_order[k];
+      CUOPT_DETERMINISM_LOG_PRINTF(settings_.log,
+                                   "%s[%d type=%d dist=%.16e hash=0x%x]",
+                                   k == 0 ? "" : " ",
+                                   cut_idx,
+                                   static_cast<int>(cut_type_[cut_idx]),
+                                   cut_distances_[cut_idx],
+                                   candidate_cut_hashes[k]);
+    }
+    CUOPT_DETERMINISM_LOG_PRINTF(settings_.log, "\n");
+  }
+
   const i_t max_cuts          = 2000;
   const f_t min_orthogonality = settings_.cut_min_orthogonality;
   best_cuts_.reserve(std::min(max_cuts, cut_storage_.m));
@@ -150,6 +266,33 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
       best_cuts_.push_back(i);
       scored_cuts_++;
     }
+  }
+
+  if (!best_cuts_.empty()) {
+    std::vector<uint32_t> selected_cut_hashes;
+    selected_cut_hashes.reserve(best_cuts_.size());
+    for (auto cut_idx : best_cuts_) {
+      selected_cut_hashes.push_back(
+        compute_stored_cut_hash(cut_storage_, rhs_storage_, cut_type_, cut_idx));
+    }
+    const uint32_t selected_cut_hash = compute_ordered_hash_list_hash(selected_cut_hashes);
+    CUOPT_DETERMINISM_LOG_PRINTF(
+      settings_.log,
+      "Deterministic cut selection summary: selected=%zu order_hash=0x%x top=",
+      best_cuts_.size(),
+      selected_cut_hash);
+    const size_t max_selected_cuts = std::min((size_t)8, best_cuts_.size());
+    for (size_t k = 0; k < max_selected_cuts; ++k) {
+      const i_t cut_idx = best_cuts_[k];
+      CUOPT_DETERMINISM_LOG_PRINTF(settings_.log,
+                                   "%s[%d type=%d dist=%.16e hash=0x%x]",
+                                   k == 0 ? "" : " ",
+                                   cut_idx,
+                                   static_cast<int>(cut_type_[cut_idx]),
+                                   cut_distances_[cut_idx],
+                                   selected_cut_hashes[k]);
+    }
+    CUOPT_DETERMINISM_LOG_PRINTF(settings_.log, "\n");
   }
 }
 
@@ -913,6 +1056,22 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
                 return score[a] > score[b];
               });
               work_estimate += 10 * std::log2(10);
+
+              const uint32_t potential_row_hash = compute_index_order_hash(potential_rows);
+              CUOPT_DETERMINISM_LOG_PRINTF(
+                settings.log,
+                "Deterministic cut potential row ranking: pivot_var=%d rows=%zu "
+                "order_hash=0x%x top=",
+                max_off_bound_var,
+                potential_rows.size(),
+                potential_row_hash);
+              const size_t max_logged_rows = std::min((size_t)8, potential_rows.size());
+              for (size_t k = 0; k < max_logged_rows; ++k) {
+                const i_t row = potential_rows[k];
+                CUOPT_DETERMINISM_LOG_PRINTF(
+                  settings.log, "%s[%d score=%.16e]", k == 0 ? "" : " ", row, score[row]);
+              }
+              CUOPT_DETERMINISM_LOG_PRINTF(settings.log, "\n");
 
               const i_t pivot_row = potential_rows[0];
 
@@ -2321,6 +2480,8 @@ i_t add_cuts(const simplex_solver_settings_t<i_t, f_t>& settings,
   // by the current solution x* (i.e. C*x* > d), this function
   // adds the cuts into the LP and solves again.
 
+  log_lp_state_summary(settings, "Deterministic add_cuts state before", lp, new_slacks, cuts.m);
+
 #ifdef CHECK_BASIS
   {
     csc_matrix_t<i_t, f_t> Btest(lp.num_rows, lp.num_rows, 1);
@@ -2497,6 +2658,8 @@ i_t add_cuts(const simplex_solver_settings_t<i_t, f_t>& settings,
   solution.y.resize(lp.num_rows, 0.0);
   solution.z.resize(lp.num_cols, 0.0);
 
+  log_lp_state_summary(settings, "Deterministic add_cuts state after", lp, new_slacks, cuts.m);
+
   return 0;
 }
 
@@ -2517,6 +2680,8 @@ i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
                 std::vector<i_t>& nonbasic_list,
                 basis_update_mpf_t<i_t, f_t>& basis_update)
 {
+  log_lp_state_summary(settings, "Deterministic remove_cuts state before", lp, new_slacks, 0);
+
   std::vector<i_t> cuts_to_remove;
   cuts_to_remove.reserve(lp.num_rows - original_rows);
   std::vector<i_t> slacks_to_remove;
@@ -2650,6 +2815,9 @@ i_t remove_cuts(lp_problem_t<i_t, f_t>& lp,
     if (refactor_status == CONCURRENT_HALT_RETURN) { return CONCURRENT_HALT_RETURN; }
     if (refactor_status == TIME_LIMIT_RETURN) { return TIME_LIMIT_RETURN; }
   }
+
+  log_lp_state_summary(
+    settings, "Deterministic remove_cuts state after", lp, new_slacks, (i_t)cuts_to_remove.size());
 
   return 0;
 }

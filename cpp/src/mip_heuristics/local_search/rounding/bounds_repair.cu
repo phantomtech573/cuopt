@@ -499,6 +499,18 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
   if (timer.deterministic) {
     const double setup_work = estimate_bounds_repair_setup_work(problem);
     record_estimated_work(timer, &total_estimated_work, setup_work);
+    CUOPT_LOG_DEBUG(
+      "Repair entry: pb_hash=0x%x bounds_hash=0x%x violated_hash=0x%x n_violated=%d "
+      "best_violation=%.6f timer_rem=%.6f total_work=%.6f setup_work=%.6f",
+      problem.get_fingerprint(),
+      detail::compute_hash(make_span(problem.variable_bounds), handle_ptr->get_stream()),
+      detail::compute_hash(make_span(violated_constraints, 0, h_n_violated_cstr),
+                           handle_ptr->get_stream()),
+      h_n_violated_cstr,
+      best_violation,
+      timer.remaining_time(),
+      total_estimated_work,
+      setup_work);
   }
   i_t no_candidate_in_a_row = 0;
   // TODO: do this better
@@ -510,17 +522,46 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
                     h_n_violated_cstr,
                     best_violation,
                     curr_violation);
+    if (timer.deterministic) {
+      CUOPT_LOG_DEBUG(
+        "Repair iter entry: iter=%d pb_hash=0x%x bounds_hash=0x%x violated_hash=0x%x "
+        "n_violated=%d best_violation=%.6f curr_violation=%.6f timer_rem=%.6f total_work=%.6f",
+        repair_iterations,
+        problem.get_fingerprint(),
+        detail::compute_hash(make_span(problem.variable_bounds), handle_ptr->get_stream()),
+        detail::compute_hash(make_span(violated_constraints, 0, h_n_violated_cstr),
+                             handle_ptr->get_stream()),
+        h_n_violated_cstr,
+        best_violation,
+        curr_violation,
+        timer.remaining_time(),
+        total_estimated_work);
+    }
     if (timer.check_time_limit()) { break; }
     i_t curr_cstr = get_random_cstr();
     // best way would be to check a variable cycle, but this is easier and more performant
     bool is_cycle = detect_cycle(curr_cstr);
     if (is_cycle) { CUOPT_LOG_DEBUG("Repair: cycle detected at cstr %d", curr_cstr); }
     // in parallel compute the best shift and best respective damage
-    i_t n_candidates = compute_best_shift(problem, original_problem, curr_cstr);
+    i_t n_candidates  = compute_best_shift(problem, original_problem, curr_cstr);
+    double shift_work = 0.0;
     if (timer.deterministic) {
-      const double shift_work =
-        estimate_bounds_repair_shift_work(problem, curr_cstr, n_candidates, is_cycle);
+      shift_work = estimate_bounds_repair_shift_work(problem, curr_cstr, n_candidates, is_cycle);
       record_estimated_work(timer, &total_estimated_work, shift_work);
+      CUOPT_LOG_DEBUG(
+        "Repair iter shift: iter=%d curr_cstr=%d cycle=%d n_candidates=%d cand_var_hash=0x%x "
+        "cand_shift_hash=0x%x shift_work=%.6f timer_rem=%.6f total_work=%.6f",
+        repair_iterations,
+        curr_cstr,
+        (int)is_cycle,
+        n_candidates,
+        detail::compute_hash(make_span(candidates.variable_index, 0, n_candidates),
+                             handle_ptr->get_stream()),
+        detail::compute_hash(make_span(candidates.bound_shift, 0, n_candidates),
+                             handle_ptr->get_stream()),
+        shift_work,
+        timer.remaining_time(),
+        total_estimated_work);
     }
     // if no candidate is there continue with another constraint
     if (n_candidates == 0) {
@@ -536,9 +577,22 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
     CUOPT_LOG_TRACE("Repair: number of candidates %d", n_candidates);
     // among the ones that have a valid shift value, compute the damage
     compute_damages(problem, n_candidates);
+    double damage_work = 0.0;
     if (timer.deterministic) {
-      const double damage_work = estimate_bounds_repair_damage_work(problem, n_candidates);
+      damage_work = estimate_bounds_repair_damage_work(problem, n_candidates);
       record_estimated_work(timer, &total_estimated_work, damage_work);
+      CUOPT_LOG_DEBUG(
+        "Repair iter damage: iter=%d curr_cstr=%d cand_cdelta_hash=0x%x cand_damage_hash=0x%x "
+        "damage_work=%.6f timer_rem=%.6f total_work=%.6f",
+        repair_iterations,
+        curr_cstr,
+        detail::compute_hash(make_span(candidates.cstr_delta, 0, n_candidates),
+                             handle_ptr->get_stream()),
+        detail::compute_hash(make_span(candidates.damage, 0, n_candidates),
+                             handle_ptr->get_stream()),
+        damage_work,
+        timer.remaining_time(),
+        total_estimated_work);
     }
     // get the best damage
     i_t best_cstr_delta = candidates.cstr_delta.front_element(handle_ptr->get_stream());
@@ -546,18 +600,39 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
     CUOPT_LOG_TRACE(
       "Repair: best_cstr_delta value %d best_damage %f", best_cstr_delta, best_damage);
     i_t best_move_idx;
+    i_t n_of_eligible_candidates  = -1;
+    const double random_draw      = best_cstr_delta > 0 ? rand_double(0, 1, gen) : -1.0;
+    const bool choose_random_move = (best_cstr_delta > 0 && random_draw < p) || is_cycle;
     // if the best damage is positive and we are within the prop (paper uses 0.75)
-    if ((best_cstr_delta > 0 && rand_double(0, 1, gen) < p) || is_cycle) {
+    if (choose_random_move) {
       // pick a random move from the candidate list
       best_move_idx = get_random_idx(n_candidates);
     } else {
       // filter the moves with best_damage(it can be zero or not) and then pick a candidate among
       // them
-      i_t n_of_eligible_candidates =
+      n_of_eligible_candidates =
         find_cutoff_index(candidates, best_cstr_delta, best_damage, n_candidates);
       cuopt_assert(n_of_eligible_candidates > 0, "");
       CUOPT_LOG_TRACE("n_of_eligible_candidates %d", n_of_eligible_candidates);
       best_move_idx = get_random_idx(n_of_eligible_candidates);
+    }
+    if (timer.deterministic) {
+      CUOPT_LOG_DEBUG(
+        "Repair iter choice: iter=%d curr_cstr=%d best_cstr_delta=%d best_damage=%.6f "
+        "choose_random=%d random_draw=%.6f eligible=%d best_move_idx=%d move_var=%d "
+        "move_shift=%.6f move_cdelta=%d move_damage=%.6f",
+        repair_iterations,
+        curr_cstr,
+        best_cstr_delta,
+        best_damage,
+        (int)choose_random_move,
+        random_draw,
+        n_of_eligible_candidates,
+        best_move_idx,
+        candidates.variable_index.element(best_move_idx, handle_ptr->get_stream()),
+        candidates.bound_shift.element(best_move_idx, handle_ptr->get_stream()),
+        candidates.cstr_delta.element(best_move_idx, handle_ptr->get_stream()),
+        candidates.damage.element(best_move_idx, handle_ptr->get_stream()));
     }
     CUOPT_LOG_TRACE("Repair: selected best_move_idx %d var id %d shift %f cstr_delta %d damage %f",
                     best_move_idx,
@@ -570,11 +645,26 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
     // TODO we might optimize this to only calculate the changed constraints
     curr_violation                = get_ii_violation(problem);
     const bool improved_violation = curr_violation < best_violation;
+    double refresh_work           = 0.0;
     if (timer.deterministic) {
-      const double refresh_work =
-        bounds_repair_move_base_work +
-        estimate_bounds_repair_violation_refresh_work(problem, improved_violation);
+      refresh_work = bounds_repair_move_base_work +
+                     estimate_bounds_repair_violation_refresh_work(problem, improved_violation);
       record_estimated_work(timer, &total_estimated_work, refresh_work);
+      CUOPT_LOG_DEBUG(
+        "Repair iter post: iter=%d pb_hash=0x%x bounds_hash=0x%x violated_hash=0x%x "
+        "n_violated=%d curr_violation=%.6f improved=%d refresh_work=%.6f total_work=%.6f "
+        "timer_rem=%.6f",
+        repair_iterations,
+        problem.get_fingerprint(),
+        detail::compute_hash(make_span(problem.variable_bounds), handle_ptr->get_stream()),
+        detail::compute_hash(make_span(violated_constraints, 0, h_n_violated_cstr),
+                             handle_ptr->get_stream()),
+        h_n_violated_cstr,
+        curr_violation,
+        (int)improved_violation,
+        refresh_work,
+        total_estimated_work,
+        timer.remaining_time());
       CUOPT_LOG_DEBUG("Repair iter work: cstr=%d candidates=%d cycle=%d improved=%d total=%.6f",
                       curr_cstr,
                       n_candidates,

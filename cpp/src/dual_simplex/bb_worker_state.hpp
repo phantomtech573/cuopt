@@ -187,7 +187,7 @@ struct bb_worker_state_t {
     nodes_processed_this_horizon = 0;
     work_units_this_horizon      = 0.0;
     // Also sync work_context to match clock for consistent tracking
-    work_context.global_work_units_elapsed = horizon_start;
+    work_context.set_current_work(horizon_start, false);
     // Note: next_creation_seq is NOT reset - it's cumulative for unique identity
 
     // Initialize worker-local upper bound from global (for BSP determinism)

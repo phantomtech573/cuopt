@@ -14,6 +14,7 @@
 #include <mip_heuristics/solver.cuh>
 #include <mip_heuristics/utils.cuh>
 #include <utilities/copy_helpers.hpp>
+#include <utilities/determinism_log.hpp>
 #include <utilities/device_utils.cuh>
 #include <utilities/seed_generator.cuh>
 
@@ -63,6 +64,18 @@ __global__ void assign_same_variables_kernel(typename solution_t<i_t, f_t>::view
 template <typename i_t, typename f_t>
 class recombiner_t {
  public:
+  static const char* recombiner_name(recombiner_enum_t recombiner)
+  {
+    switch (recombiner) {
+      case recombiner_enum_t::BOUND_PROP: return "BOUND_PROP";
+      case recombiner_enum_t::FP: return "FP";
+      case recombiner_enum_t::LINE_SEGMENT: return "LINE_SEGMENT";
+      case recombiner_enum_t::SUB_MIP: return "SUB_MIP";
+      case recombiner_enum_t::SIZE: return "SIZE";
+    }
+    return "UNKNOWN";
+  }
+
   recombiner_t(mip_solver_context_t<i_t, f_t>& context_,
                i_t n_integer_vars,
                const raft::handle_t* handle_ptr)
@@ -214,25 +227,57 @@ class recombiner_t {
                                        const problem_t<i_t, f_t>& problem)
   {
     std::unordered_set<recombiner_enum_t> enabled_recombiners;
+    const bool disable_fp_and_submip_for_expensive_fix = problem.expensive_to_fix_vars;
+    const i_t n_continuous_vars = problem.n_variables - problem.n_integer_vars;
+    const bool disable_submip_for_continuous_limit =
+      n_continuous_vars > (i_t)sub_mip_recombiner_config_t::max_continuous_vars;
+    const bool disable_submip_for_determinism =
+      context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC ||
+      context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS;
     for (auto recombiner : recombiner_types) {
       enabled_recombiners.insert(recombiner);
     }
-    if (problem.expensive_to_fix_vars) {
+    if (disable_fp_and_submip_for_expensive_fix) {
       enabled_recombiners.erase(recombiner_enum_t::FP);
       enabled_recombiners.erase(recombiner_enum_t::SUB_MIP);
     }
     // check the size of the continous vars
-    if (problem.n_variables - problem.n_integer_vars >
-        (i_t)sub_mip_recombiner_config_t::max_continuous_vars) {
+    if (disable_submip_for_continuous_limit) {
       enabled_recombiners.erase(recombiner_enum_t::SUB_MIP);
     }
     // submip not supported in deterministic mode yet
-    if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC ||
-        context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS) {
-      enabled_recombiners.erase(recombiner_enum_t::SUB_MIP);
-    }
+    if (disable_submip_for_determinism) { enabled_recombiners.erase(recombiner_enum_t::SUB_MIP); }
     recombiner_t::enabled_recombiners =
       std::vector<recombiner_enum_t>(enabled_recombiners.begin(), enabled_recombiners.end());
+    cuopt_assert(!recombiner_t::enabled_recombiners.empty(), "No recombiners enabled after init");
+    const char* enabled_0 = recombiner_t::enabled_recombiners.size() > 0
+                              ? recombiner_name(recombiner_t::enabled_recombiners[0])
+                              : "NONE";
+    const char* enabled_1 = recombiner_t::enabled_recombiners.size() > 1
+                              ? recombiner_name(recombiner_t::enabled_recombiners[1])
+                              : "NONE";
+    const char* enabled_2 = recombiner_t::enabled_recombiners.size() > 2
+                              ? recombiner_name(recombiner_t::enabled_recombiners[2])
+                              : "NONE";
+    const char* enabled_3 = recombiner_t::enabled_recombiners.size() > 3
+                              ? recombiner_name(recombiner_t::enabled_recombiners[3])
+                              : "NONE";
+    CUOPT_DETERMINISM_LOG_INFO(
+      "Deterministic recombiner init: expensive_to_fix=%d n_continuous=%d "
+      "max_continuous=%zu disable_fp_submip_expensive=%d "
+      "disable_submip_continuous=%d disable_submip_deterministic=%d size=%zu "
+      "order=[%s,%s,%s,%s]",
+      (int)problem.expensive_to_fix_vars,
+      (int)n_continuous_vars,
+      sub_mip_recombiner_config_t::max_continuous_vars,
+      (int)disable_fp_and_submip_for_expensive_fix,
+      (int)disable_submip_for_continuous_limit,
+      (int)disable_submip_for_determinism,
+      recombiner_t::enabled_recombiners.size(),
+      enabled_0,
+      enabled_1,
+      enabled_2,
+      enabled_3);
   }
 
   mip_solver_context_t<i_t, f_t>& context;
