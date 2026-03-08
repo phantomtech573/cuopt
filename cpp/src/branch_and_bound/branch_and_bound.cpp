@@ -695,9 +695,9 @@ void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& 
     settings_.heuristic_preemption_callback();
   }
 
-  f_t gap              = upper_bound_ - lower_bound;
   f_t obj              = compute_user_objective(original_lp_, upper_bound_.load());
   f_t user_bound       = compute_user_objective(original_lp_, lower_bound);
+  f_t gap              = std::abs(obj - user_bound);
   f_t gap_rel          = user_relative_gap(original_lp_, upper_bound_.load(), lower_bound);
   bool is_maximization = original_lp_.obj_scale < 0.0;
 
@@ -709,6 +709,13 @@ void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& 
                        obj,
                        is_maximization ? "Upper" : "Lower",
                        user_bound);
+  settings_.log.printf(
+    "MIP_GAP_METRICS abs_gap_user=%e rel_gap=%e obj_user=%.16e bound_user=%.16e obj_scale=%e\n",
+    gap,
+    gap_rel,
+    obj,
+    user_bound,
+    original_lp_.obj_scale);
 
   if (gap <= settings_.absolute_mip_gap_tol || gap_rel <= settings_.relative_mip_gap_tol) {
     solver_status_ = mip_status_t::OPTIMAL;
@@ -1155,7 +1162,10 @@ std::pair<node_status_t, rounding_direction_t> branch_and_bound_t<i_t, f_t>::upd
   Policy& policy)
 {
   constexpr f_t inf                      = std::numeric_limits<f_t>::infinity();
-  const f_t abs_fathom_tol               = settings_.absolute_mip_gap_tol / 10;
+  const f_t obj_scale_mag                = std::abs(original_lp_.obj_scale);
+  const f_t abs_fathom_tol               = obj_scale_mag > f_t(0)
+                                             ? settings_.absolute_mip_gap_tol / (obj_scale_mag * f_t(10))
+                                             : settings_.absolute_mip_gap_tol / f_t(10);
   lp_problem_t<i_t, f_t>& leaf_problem   = worker->leaf_problem;
   lp_solution_t<i_t, f_t>& leaf_solution = worker->leaf_solution;
   const f_t upper_bound                  = policy.upper_bound();
@@ -1606,7 +1616,8 @@ void branch_and_bound_t<i_t, f_t>::run_scheduler()
 #endif
 
   f_t lower_bound     = get_lower_bound();
-  f_t abs_gap         = upper_bound_ - lower_bound;
+  f_t abs_gap         = std::abs(compute_user_objective(original_lp_, upper_bound_.load()) -
+                         compute_user_objective(original_lp_, lower_bound));
   f_t rel_gap         = user_relative_gap(original_lp_, upper_bound_.load(), lower_bound);
   i_t last_node_depth = 0;
   i_t last_int_infeas = 0;
@@ -1616,7 +1627,8 @@ void branch_and_bound_t<i_t, f_t>::run_scheduler()
          (active_workers_per_strategy_[0] > 0 || node_queue_.best_first_queue_size() > 0)) {
     bool launched_any_task = false;
     lower_bound            = get_lower_bound();
-    abs_gap                = upper_bound_ - lower_bound;
+    abs_gap                = std::abs(compute_user_objective(original_lp_, upper_bound_.load()) -
+                       compute_user_objective(original_lp_, lower_bound));
     rel_gap                = user_relative_gap(original_lp_, upper_bound_.load(), lower_bound);
 
     repair_heuristic_solutions();
@@ -1731,14 +1743,16 @@ void branch_and_bound_t<i_t, f_t>::single_threaded_solve()
   branch_and_bound_worker_t<i_t, f_t> worker(0, original_lp_, Arow_, var_types_, settings_);
 
   f_t lower_bound = get_lower_bound();
-  f_t abs_gap     = upper_bound_ - lower_bound;
+  f_t abs_gap     = std::abs(compute_user_objective(original_lp_, upper_bound_.load()) -
+                         compute_user_objective(original_lp_, lower_bound));
   f_t rel_gap     = user_relative_gap(original_lp_, upper_bound_.load(), lower_bound);
 
   while (solver_status_ == mip_status_t::UNSET && abs_gap > settings_.absolute_mip_gap_tol &&
          rel_gap > settings_.relative_mip_gap_tol && node_queue_.best_first_queue_size() > 0) {
     bool launched_any_task = false;
     lower_bound            = get_lower_bound();
-    abs_gap                = upper_bound_ - lower_bound;
+    abs_gap                = std::abs(compute_user_objective(original_lp_, upper_bound_.load()) -
+                       compute_user_objective(original_lp_, lower_bound));
     rel_gap                = user_relative_gap(original_lp_, upper_bound_.load(), lower_bound);
 
     repair_heuristic_solutions();
@@ -2317,7 +2331,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       report(' ', obj, root_objective_, 0, num_fractional);
 
       f_t rel_gap = user_relative_gap(original_lp_, upper_bound_.load(), root_objective_);
-      f_t abs_gap = upper_bound_.load() - root_objective_;
+      f_t abs_gap = std::abs(compute_user_objective(original_lp_, upper_bound_.load()) -
+                             compute_user_objective(original_lp_, root_objective_));
       if (rel_gap < settings_.relative_mip_gap_tol || abs_gap < settings_.absolute_mip_gap_tol) {
         set_solution_at_root(solution, cut_info);
         set_final_solution(solution, root_objective_);

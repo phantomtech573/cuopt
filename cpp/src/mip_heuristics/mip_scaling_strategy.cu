@@ -22,6 +22,7 @@
 #include <thrust/iterator/permutation_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/zip_iterator.h>
+#include <thrust/sort.h>
 #include <thrust/transform.h>
 #include <thrust/transform_reduce.h>
 #include <thrust/tuple.h>
@@ -38,7 +39,7 @@ namespace cuopt::linear_programming::detail {
 
 constexpr int row_scaling_max_iterations             = 8;
 constexpr double row_scaling_min_initial_log2_spread = 12.0;
-constexpr int row_scaling_factor_exponent            = 8;
+constexpr int row_scaling_factor_exponent            = 5;
 constexpr int row_scaling_big_m_soft_factor_exponent = 4;
 constexpr double row_scaling_min_factor =
   1.0 / static_cast<double>(std::uint64_t{1} << row_scaling_factor_exponent);
@@ -53,7 +54,7 @@ constexpr double integer_multiplier_rounding_tolerance   = 1.0e-6;
 constexpr double min_abs_objective_coefficient_threshold = 1.0e-2;
 constexpr double max_obj_scaling_coefficient             = 1.0e3;
 
-constexpr int cumulative_row_scaling_exponent = 10;
+constexpr int cumulative_row_scaling_exponent = 8;
 constexpr double cumulative_row_scaling_min =
   1.0 / static_cast<double>(std::uint64_t{1} << cumulative_row_scaling_exponent);
 constexpr double cumulative_row_scaling_max =
@@ -286,41 +287,68 @@ void compute_big_m_skip_rows(
 template <typename i_t, typename f_t>
 void scale_objective(cuopt::linear_programming::optimization_problem_t<i_t, f_t>& op_problem)
 {
-  auto& objective_coefficients = op_problem.get_objective_coefficients();
-  const f_t min_abs_objective_coefficient =
-    thrust::transform_reduce(op_problem.get_handle_ptr()->get_thrust_policy(),
-                             objective_coefficients.begin(),
-                             objective_coefficients.end(),
-                             nonzero_abs_or_inf_transform_t<f_t>{},
-                             std::numeric_limits<f_t>::infinity(),
-                             min_op_t<f_t>{});
+  auto& obj_coefficients = op_problem.get_objective_coefficients();
+  const i_t n_cols       = op_problem.get_n_variables();
+  if (n_cols == 0) { return; }
 
-  if (!std::isfinite(min_abs_objective_coefficient) || min_abs_objective_coefficient <= f_t(0) ||
-      min_abs_objective_coefficient >= static_cast<f_t>(min_abs_objective_coefficient_threshold)) {
+  const auto* handle_ptr = op_problem.get_handle_ptr();
+
+  f_t min_abs_obj = thrust::transform_reduce(handle_ptr->get_thrust_policy(),
+                                             obj_coefficients.begin(),
+                                             obj_coefficients.end(),
+                                             nonzero_abs_or_inf_transform_t<f_t>{},
+                                             std::numeric_limits<f_t>::infinity(),
+                                             min_op_t<f_t>{});
+
+  f_t max_abs_obj = thrust::transform_reduce(handle_ptr->get_thrust_policy(),
+                                             obj_coefficients.begin(),
+                                             obj_coefficients.end(),
+                                             abs_value_transform_t<f_t>{},
+                                             f_t(0),
+                                             max_op_t<f_t>{});
+
+  if (!std::isfinite(static_cast<double>(min_abs_obj)) || min_abs_obj <= f_t(0) ||
+      max_abs_obj <= f_t(0)) {
+    CUOPT_LOG_INFO("MIP_OBJ_SCALING skipped: no finite nonzero objective coefficients");
     return;
   }
 
-  f_t obj_scaling_coefficient =
-    static_cast<f_t>(min_abs_objective_coefficient_threshold) / min_abs_objective_coefficient;
-  if (!std::isfinite(obj_scaling_coefficient) || obj_scaling_coefficient <= f_t(1)) { return; }
-  if (obj_scaling_coefficient > static_cast<f_t>(max_obj_scaling_coefficient)) {
-    obj_scaling_coefficient = static_cast<f_t>(max_obj_scaling_coefficient);
+  if (static_cast<double>(min_abs_obj) >= min_abs_objective_coefficient_threshold) {
+    CUOPT_LOG_INFO("MIP_OBJ_SCALING skipped: min_abs_coeff=%g already above threshold=%g",
+                   static_cast<double>(min_abs_obj),
+                   min_abs_objective_coefficient_threshold);
+    return;
   }
 
-  thrust::transform(op_problem.get_handle_ptr()->get_thrust_policy(),
-                    objective_coefficients.begin(),
-                    objective_coefficients.end(),
-                    objective_coefficients.begin(),
-                    [obj_scaling_coefficient] __device__(f_t objective_coefficient) -> f_t {
-                      return objective_coefficient * obj_scaling_coefficient;
-                    });
-  op_problem.set_objective_scaling_factor(op_problem.get_objective_scaling_factor() /
-                                          obj_scaling_coefficient);
-  op_problem.set_objective_offset(op_problem.get_objective_offset() * obj_scaling_coefficient);
+  double raw_scale = min_abs_objective_coefficient_threshold / static_cast<double>(min_abs_obj);
+  double scale     = std::min(raw_scale, max_obj_scaling_coefficient);
 
-  CUOPT_LOG_INFO("MIP objective scaling applied: min_abs_coeff=%g scale=%g",
-                 static_cast<double>(min_abs_objective_coefficient),
-                 static_cast<double>(obj_scaling_coefficient));
+  double post_max = static_cast<double>(max_abs_obj) * scale;
+  if (post_max > 1.0e6) {
+    CUOPT_LOG_INFO("MIP_OBJ_SCALING skipped: would push max_coeff from %g to %g (limit 1e6)",
+                   static_cast<double>(max_abs_obj),
+                   post_max);
+    return;
+  }
+
+  f_t scale_f = static_cast<f_t>(scale);
+  thrust::transform(handle_ptr->get_thrust_policy(),
+                    obj_coefficients.begin(),
+                    obj_coefficients.end(),
+                    obj_coefficients.begin(),
+                    [scale_f] __device__(f_t c) -> f_t { return c * scale_f; });
+
+  f_t old_sf  = op_problem.get_objective_scaling_factor();
+  f_t old_off = op_problem.get_objective_offset();
+  op_problem.set_objective_scaling_factor(old_sf / scale_f);
+  op_problem.set_objective_offset(old_off * scale_f);
+
+  CUOPT_LOG_INFO(
+    "MIP_OBJ_SCALING applied: min_abs_coeff=%g max_abs_coeff=%g scale=%g new_scaling_factor=%g",
+    static_cast<double>(min_abs_obj),
+    static_cast<double>(max_abs_obj),
+    scale,
+    static_cast<double>(old_sf / scale_f));
 }
 
 template <typename i_t, typename f_t>
@@ -451,6 +479,7 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
   thrust::fill(
     handle_ptr_->get_thrust_policy(), cumulative_scaling.begin(), cumulative_scaling.end(), f_t(1));
   rmm::device_uvector<i_t> coefficient_row_index(static_cast<size_t>(nnz), stream_view_);
+  rmm::device_uvector<double> ref_log2_values(static_cast<size_t>(n_rows), stream_view_);
 
   thrust::upper_bound(handle_ptr_->get_thrust_policy(),
                       matrix_offsets.begin(),
@@ -560,31 +589,41 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
                         return rhs_norm;
                       });
 
-    using target_stats_t   = thrust::tuple<double, double>;
-    auto target_log2_stats = thrust::transform_reduce(
-      handle_ptr_->get_thrust_policy(),
-      thrust::make_zip_iterator(
-        thrust::make_tuple(row_inf_norm.begin(), row_rhs_magnitude.begin())),
-      thrust::make_zip_iterator(thrust::make_tuple(row_inf_norm.end(), row_rhs_magnitude.end())),
-      [] __device__(auto row_info) -> target_stats_t {
-        const f_t row_norm       = thrust::get<0>(row_info);
-        const f_t rhs_norm       = thrust::get<1>(row_info);
-        const f_t reference_norm = row_norm > rhs_norm ? row_norm : rhs_norm;
-        if (reference_norm <= f_t(0)) { return {0.0, 0.0}; }
-        const double reference_log2 = log2(static_cast<double>(reference_norm));
-        return {reference_log2, 1.0};
-      },
-      target_stats_t{0.0, 0.0},
-      [] __device__(target_stats_t a, target_stats_t b) -> target_stats_t {
-        return {thrust::get<0>(a) + thrust::get<0>(b), thrust::get<1>(a) + thrust::get<1>(b)};
-      });
-    const i_t target_row_count = static_cast<i_t>(thrust::get<1>(target_log2_stats));
-    if (target_row_count == 0) { break; }
-
-    const double target_log2_sum = thrust::get<0>(target_log2_stats);
-    f_t target_norm =
-      static_cast<f_t>(exp2(target_log2_sum / static_cast<double>(target_row_count)));
-    cuopt_assert(isfinite(target_norm), "target_norm must be finite");
+    // Fix A+C: median-based target norm excluding big-M rows (robust to outliers)
+    constexpr double neg_inf_sentinel = -1.0e300;
+    thrust::transform(handle_ptr_->get_thrust_policy(),
+                      thrust::make_zip_iterator(thrust::make_tuple(
+                        row_inf_norm.begin(), row_rhs_magnitude.begin(), row_skip_scaling.begin())),
+                      thrust::make_zip_iterator(thrust::make_tuple(
+                        row_inf_norm.end(), row_rhs_magnitude.end(), row_skip_scaling.end())),
+                      ref_log2_values.begin(),
+                      [neg_inf_sentinel] __device__(auto row_info) -> double {
+                        const f_t row_norm = thrust::get<0>(row_info);
+                        const f_t rhs_norm = thrust::get<1>(row_info);
+                        const i_t is_big_m = thrust::get<2>(row_info);
+                        if (is_big_m) { return neg_inf_sentinel - 1.0; }
+                        const f_t reference_norm = row_norm > rhs_norm ? row_norm : rhs_norm;
+                        if (reference_norm <= f_t(0)) { return neg_inf_sentinel - 1.0; }
+                        return log2(static_cast<double>(reference_norm));
+                      });
+    thrust::sort(handle_ptr_->get_thrust_policy(), ref_log2_values.begin(), ref_log2_values.end());
+    auto valid_begin_iter = thrust::lower_bound(handle_ptr_->get_thrust_policy(),
+                                                ref_log2_values.begin(),
+                                                ref_log2_values.end(),
+                                                neg_inf_sentinel);
+    i_t n_invalid         = static_cast<i_t>(valid_begin_iter - ref_log2_values.begin());
+    i_t valid_count       = n_rows - n_invalid;
+    if (valid_count == 0) { break; }
+    i_t median_idx = n_invalid + valid_count / 2;
+    double h_median_log2;
+    RAFT_CUDA_TRY(cudaMemcpyAsync(&h_median_log2,
+                                  ref_log2_values.data() + median_idx,
+                                  sizeof(double),
+                                  cudaMemcpyDeviceToHost,
+                                  stream_view_));
+    handle_ptr_->sync_stream();
+    f_t target_norm = static_cast<f_t>(exp2(h_median_log2));
+    cuopt_assert(std::isfinite(static_cast<double>(target_norm)), "target_norm must be finite");
     cuopt_assert(target_norm > f_t(0), "target_norm must be positive");
 
     thrust::transform(
@@ -613,6 +652,11 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
         f_t max_scaling = is_big_m ? static_cast<f_t>(row_scaling_big_m_soft_max_factor)
                                    : static_cast<f_t>(row_scaling_max_factor);
 
+        // Fix B: prevent scaling UP rows that are already numerically large
+        if (!is_big_m && row_norm >= static_cast<f_t>(big_m_abs_threshold)) {
+          if (max_scaling > f_t(1)) { max_scaling = f_t(1); }
+        }
+
         const f_t cum_lower = static_cast<f_t>(cumulative_row_scaling_min) / cum_scale;
         const f_t cum_upper = static_cast<f_t>(cumulative_row_scaling_max) / cum_scale;
         if (cum_lower > min_scaling) { min_scaling = cum_lower; }
@@ -623,22 +667,40 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
         if (row_scaling < min_scaling) { row_scaling = min_scaling; }
         if (row_scaling > max_scaling) { row_scaling = max_scaling; }
 
-        // Preserve integrality for coefficients that were integer on integer-variable columns.
+        // Fix E: prefer power-of-two scaling for integer rows (exact in IEEE 754)
         if (row_coeff_gcd > std::int64_t{0}) {
           const f_t gcd_value = static_cast<f_t>(row_coeff_gcd);
           if (isfinite(gcd_value) && gcd_value > f_t(0)) {
-            std::int64_t min_multiplier = static_cast<std::int64_t>(ceil(static_cast<double>(
-              min_scaling * gcd_value - static_cast<f_t>(integer_multiplier_rounding_tolerance))));
-            std::int64_t max_multiplier = static_cast<std::int64_t>(floor(static_cast<double>(
-              max_scaling * gcd_value + static_cast<f_t>(integer_multiplier_rounding_tolerance))));
-            if (min_multiplier < std::int64_t{1}) { min_multiplier = std::int64_t{1}; }
-            if (max_multiplier < min_multiplier) { max_multiplier = min_multiplier; }
-
-            std::int64_t projected_multiplier =
-              static_cast<std::int64_t>(round(row_scaling * gcd_value));
-            if (projected_multiplier < min_multiplier) { projected_multiplier = min_multiplier; }
-            if (projected_multiplier > max_multiplier) { projected_multiplier = max_multiplier; }
-            row_scaling = static_cast<f_t>(projected_multiplier) / gcd_value;
+            const double log2_scaling = log2(static_cast<double>(row_scaling));
+            int k_candidates[3]       = {static_cast<int>(round(log2_scaling)),
+                                         static_cast<int>(floor(log2_scaling)),
+                                         static_cast<int>(ceil(log2_scaling))};
+            bool found_pow2           = false;
+            for (int ci = 0; ci < 3 && !found_pow2; ++ci) {
+              int k    = k_candidates[ci];
+              f_t pow2 = static_cast<f_t>(exp2(static_cast<double>(k)));
+              if (pow2 < min_scaling || pow2 > max_scaling) { continue; }
+              bool preserves =
+                (k >= 0) || (-k < 63 && (row_coeff_gcd % (std::int64_t{1} << (-k))) == 0);
+              if (preserves) {
+                row_scaling = pow2;
+                found_pow2  = true;
+              }
+            }
+            if (!found_pow2) {
+              std::int64_t min_mult = static_cast<std::int64_t>(
+                ceil(static_cast<double>(min_scaling * gcd_value -
+                                         static_cast<f_t>(integer_multiplier_rounding_tolerance))));
+              std::int64_t max_mult = static_cast<std::int64_t>(floor(
+                static_cast<double>(max_scaling * gcd_value +
+                                    static_cast<f_t>(integer_multiplier_rounding_tolerance))));
+              if (min_mult < std::int64_t{1}) { min_mult = std::int64_t{1}; }
+              if (max_mult < min_mult) { max_mult = min_mult; }
+              std::int64_t proj_mult = static_cast<std::int64_t>(round(row_scaling * gcd_value));
+              if (proj_mult < min_mult) { proj_mult = min_mult; }
+              if (proj_mult > max_mult) { proj_mult = max_mult; }
+              row_scaling = static_cast<f_t>(proj_mult) / gcd_value;
+            }
           }
         }
         return row_scaling;
@@ -649,6 +711,14 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
                        iteration_scaling.begin(),
                        iteration_scaling.end(),
                        [] __device__(f_t row_scale) -> bool { return row_scale != f_t(1); });
+    CUOPT_LOG_INFO(
+      "MIP_SCALING_METRICS iteration=%d log2_spread=%g target_norm=%g scaled_rows=%d "
+      "valid_rows=%d",
+      iteration,
+      row_log2_spread,
+      static_cast<double>(target_norm),
+      scaled_rows,
+      valid_count);
     if (scaled_rows == 0) { break; }
 
     thrust::transform(
@@ -687,6 +757,11 @@ void mip_scaling_strategy_t<i_t, f_t>::scale_problem()
                         thrust::multiplies<f_t>{});
     }
   }
+
+  CUOPT_LOG_INFO("MIP_SCALING_SUMMARY rows=%d bigm_rows=%d final_spread=%g",
+                 n_rows,
+                 big_m_rows,
+                 previous_row_log2_spread);
 
   const f_t post_max_coeff         = thrust::transform_reduce(handle_ptr_->get_thrust_policy(),
                                                       matrix_values.begin(),
