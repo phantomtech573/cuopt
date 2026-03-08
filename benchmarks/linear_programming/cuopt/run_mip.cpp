@@ -211,7 +211,7 @@ int run_single_file(std::string file_path,
     settings.determinism_mode = CUOPT_MODE_OPPORTUNISTIC;
   }
   CUOPT_LOG_INFO(
-    "1run_mip settings: heuristics_only=%d deterministic=%d determinism_mode=%d "
+    "run_mip settings: heuristics_only=%d deterministic=%d determinism_mode=%d "
     "time_limit=%.6f work_limit=%.6f",
     (int)heuristics_only,
     (int)deterministic,
