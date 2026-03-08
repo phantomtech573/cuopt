@@ -192,7 +192,6 @@ void diversity_manager_t<i_t, f_t>::add_user_given_solutions(
                      is_feasible,
                      sol.get_user_objective(),
                      sol.get_total_excess());
-      population.run_solution_callbacks(sol, internals::mip_solution_origin_t::USER_INITIAL);
       initial_sol_vector.emplace_back(std::move(sol));
     } else {
       CUOPT_LOG_ERROR(
@@ -237,8 +236,10 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
   const bool remap_cache_ids = true;
   if (!global_timer.check_time_limit()) { trivial_presolve(*problem_ptr, remap_cache_ids); }
   if (!problem_ptr->empty && !check_bounds_sanity(*problem_ptr)) { return false; }
-  if (!presolve_timer.check_time_limit() && !context.settings.heuristics_only &&
-      !problem_ptr->empty) {
+  const bool run_clique_table = !presolve_timer.check_time_limit() &&
+                                !context.settings.heuristics_only && !problem_ptr->empty &&
+                                !is_deterministic_mode(context.settings.determinism_mode);
+  if (run_clique_table) {
     f_t time_limit_for_clique_table = std::min(3., presolve_timer.remaining_time() / 5);
     timer_t clique_timer(time_limit_for_clique_table);
     dual_simplex::user_problem_t<i_t, f_t> host_problem(problem_ptr->handle_ptr);
@@ -298,13 +299,11 @@ void diversity_manager_t<i_t, f_t>::generate_quick_feasible_solution()
   // do very short LP run to get somewhere close to the optimal point
   ls.generate_fast_solution(solution, sol_timer);
   if (solution.get_feasible()) {
-    population.run_solution_callbacks(solution, internals::mip_solution_origin_t::QUICK_FEASIBLE);
     initial_sol_vector.emplace_back(std::move(solution));
     problem_ptr->handle_ptr->sync_stream();
     solution_t<i_t, f_t> searched_sol(initial_sol_vector.back());
     ls_config_t<i_t, f_t> ls_config;
     run_local_search(searched_sol, population.weights, sol_timer, ls_config);
-    population.run_solution_callbacks(searched_sol, internals::mip_solution_origin_t::LOCAL_SEARCH);
     initial_sol_vector.emplace_back(std::move(searched_sol));
     auto& feas_sol = initial_sol_vector.back().get_feasible()
                        ? initial_sol_vector.back()
@@ -338,6 +337,10 @@ void diversity_manager_t<i_t, f_t>::run_fj_alone(solution_t<i_t, f_t>& solution)
   ls.fj.settings.feasibility_run        = false;
   ls.fj.settings.time_limit             = timer.remaining_time();
   ls.fj.solve(solution);
+  if (solution.get_feasible()) {
+    population.add_solution(std::move(solution),
+                            internals::mip_solution_origin_t::FEASIBILITY_JUMP);
+  }
   CUOPT_LOG_INFO("FJ alone finished!");
 }
 
@@ -362,6 +365,9 @@ void diversity_manager_t<i_t, f_t>::run_fp_alone()
     (int)sol.get_feasible(),
     sol.get_user_objective(),
     sol.get_total_excess());
+  if (sol.get_feasible()) {
+    population.add_solution(std::move(sol), internals::mip_solution_origin_t::LOCAL_SEARCH);
+  }
   auto& best_sol = population.best_feasible();
   best_sol.handle_ptr->sync_stream();
   CUOPT_DETERMINISM_LOG_INFO(

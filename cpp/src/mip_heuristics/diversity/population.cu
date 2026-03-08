@@ -30,6 +30,60 @@ constexpr double infeasibility_balance_ratio = 1.1;
 constexpr double halving_skip_ratio          = 0.75;
 
 template <typename i_t, typename f_t>
+void assert_solution_matches_population_problem(const char* location,
+                                                const char* role,
+                                                const problem_t<i_t, f_t>* population_problem,
+                                                const solution_t<i_t, f_t>& sol)
+{
+  cuopt_assert(population_problem != nullptr, "Population problem must not be null");
+  cuopt_assert(sol.problem_ptr != nullptr, "Solution problem must not be null");
+  const size_t assignment_size = sol.assignment.size();
+  const size_t solution_vars   = (size_t)sol.problem_ptr->n_variables;
+  const size_t population_vars = (size_t)population_problem->n_variables;
+  if (assignment_size != solution_vars || assignment_size != population_vars ||
+      sol.problem_ptr != population_problem) {
+    CUOPT_LOG_ERROR(
+      "%s: %s shape mismatch assignment=%zu solution_vars=%zu population_vars=%zu sol_hash=0x%x "
+      "solution_problem=0x%x population_problem=0x%x",
+      location,
+      role,
+      assignment_size,
+      solution_vars,
+      population_vars,
+      sol.get_hash(),
+      sol.problem_ptr->get_fingerprint(),
+      population_problem->get_fingerprint());
+  }
+  cuopt_assert(assignment_size == solution_vars, "Solution assignment must match its problem size");
+  cuopt_assert(assignment_size == population_vars,
+               "Solution assignment must match the population problem size");
+  cuopt_assert(sol.problem_ptr == population_problem,
+               "Solution problem must match the population problem");
+}
+
+template <typename i_t, typename f_t>
+void assert_solutions_compatible_for_similarity(const char* location,
+                                                const problem_t<i_t, f_t>* population_problem,
+                                                const solution_t<i_t, f_t>& lhs,
+                                                const char* lhs_role,
+                                                const solution_t<i_t, f_t>& rhs,
+                                                const char* rhs_role)
+{
+  assert_solution_matches_population_problem(location, lhs_role, population_problem, lhs);
+  assert_solution_matches_population_problem(location, rhs_role, population_problem, rhs);
+  if (lhs.assignment.size() != rhs.assignment.size()) {
+    CUOPT_LOG_ERROR("%s: pair mismatch lhs_size=%zu rhs_size=%zu lhs_hash=0x%x rhs_hash=0x%x",
+                    location,
+                    lhs.assignment.size(),
+                    rhs.assignment.size(),
+                    lhs.get_hash(),
+                    rhs.get_hash());
+  }
+  cuopt_assert(lhs.assignment.size() == rhs.assignment.size(),
+               "Similarity check requires equal assignment sizes");
+}
+
+template <typename i_t, typename f_t>
 population_t<i_t, f_t>::population_t(std::string const& name_,
                                      mip_solver_context_t<i_t, f_t>& context_,
                                      diversity_manager_t<i_t, f_t>& dm_,
@@ -49,8 +103,8 @@ population_t<i_t, f_t>::population_t(std::string const& name_,
     population_hash_map(*problem_ptr),
     timer(context.gpu_heur_loop, 0)
 {
-  best_feasible_objective          = std::numeric_limits<f_t>::max();
-  best_callback_feasible_objective = std::numeric_limits<f_t>::max();
+  best_feasible_objective = std::numeric_limits<f_t>::max();
+  context.solution_publication.reset_published_best();
 }
 
 template <typename i_t>
@@ -264,124 +318,6 @@ bool population_t<i_t, f_t>::is_better_than_best_feasible(solution_t<i_t, f_t>& 
 }
 
 template <typename i_t, typename f_t>
-void population_t<i_t, f_t>::invoke_get_solution_callback(
-  solution_t<i_t, f_t>& sol, internals::get_solution_callback_t* callback)
-{
-  f_t user_objective = sol.get_user_objective();
-  f_t user_bound     = context.stats.get_solution_bound();
-  solution_t<i_t, f_t> temp_sol(sol);
-  problem_ptr->post_process_assignment(temp_sol.assignment);
-  if (context.settings.mip_scaling) {
-    rmm::device_uvector<f_t> dummy(0, temp_sol.handle_ptr->get_stream());
-    context.scaling.unscale_solutions(temp_sol.assignment, dummy);
-  }
-  if (problem_ptr->has_papilo_presolve_data()) {
-    problem_ptr->papilo_uncrush_assignment(temp_sol.assignment);
-  }
-
-  std::vector<f_t> user_objective_vec(1);
-  std::vector<f_t> user_bound_vec(1);
-  std::vector<f_t> user_assignment_vec(temp_sol.assignment.size());
-  user_objective_vec[0] = user_objective;
-  user_bound_vec[0]     = user_bound;
-  raft::copy(user_assignment_vec.data(),
-             temp_sol.assignment.data(),
-             temp_sol.assignment.size(),
-             temp_sol.handle_ptr->get_stream());
-  temp_sol.handle_ptr->sync_stream();
-  callback->get_solution(user_assignment_vec.data(),
-                         user_objective_vec.data(),
-                         user_bound_vec.data(),
-                         callback->get_user_data());
-}
-
-template <typename i_t, typename f_t>
-void population_t<i_t, f_t>::invoke_get_solution_callback_ext(
-  solution_t<i_t, f_t>& sol,
-  internals::get_solution_callback_ext_t* callback,
-  const internals::mip_solution_callback_info_t& callback_info)
-{
-  f_t user_objective = sol.get_user_objective();
-  f_t user_bound     = context.stats.get_solution_bound();
-  solution_t<i_t, f_t> temp_sol(sol);
-  problem_ptr->post_process_assignment(temp_sol.assignment);
-  if (context.settings.mip_scaling) {
-    rmm::device_uvector<f_t> dummy(0, temp_sol.handle_ptr->get_stream());
-    context.scaling.unscale_solutions(temp_sol.assignment, dummy);
-  }
-  if (problem_ptr->has_papilo_presolve_data()) {
-    problem_ptr->papilo_uncrush_assignment(temp_sol.assignment);
-  }
-
-  std::vector<f_t> user_objective_vec(1);
-  std::vector<f_t> user_bound_vec(1);
-  std::vector<f_t> user_assignment_vec(temp_sol.assignment.size());
-  user_objective_vec[0] = user_objective;
-  user_bound_vec[0]     = user_bound;
-  raft::copy(user_assignment_vec.data(),
-             temp_sol.assignment.data(),
-             temp_sol.assignment.size(),
-             temp_sol.handle_ptr->get_stream());
-  temp_sol.handle_ptr->sync_stream();
-  callback->get_solution(user_assignment_vec.data(),
-                         user_objective_vec.data(),
-                         user_bound_vec.data(),
-                         &callback_info,
-                         callback->get_user_data());
-}
-
-template <typename i_t, typename f_t>
-void population_t<i_t, f_t>::invoke_get_solution_callbacks(
-  solution_t<i_t, f_t>& sol,
-  internals::mip_solution_origin_t callback_origin,
-  double work_timestamp)
-{
-  internals::mip_solution_callback_info_t callback_info{};
-  auto user_callbacks = context.settings.get_mip_callbacks();
-  if (work_timestamp < 0.0 && is_deterministic_mode(context.settings.determinism_mode)) {
-    work_timestamp = context.gpu_heur_loop.current_work();
-  }
-  callback_info.origin         = callback_origin;
-  callback_info.work_timestamp = work_timestamp;
-  CUOPT_LOG_DEBUG("Publishing incumbent: obj=%g wut=%.6f origin=%s callbacks=%zu",
-                  sol.get_user_objective(),
-                  work_timestamp,
-                  internals::mip_solution_origin_to_string(callback_origin),
-                  user_callbacks.size());
-  for (auto callback : user_callbacks) {
-    if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION) {
-      auto get_sol_callback = static_cast<internals::get_solution_callback_t*>(callback);
-      invoke_get_solution_callback(sol, get_sol_callback);
-    } else if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION_EXT) {
-      auto get_sol_callback_ext = static_cast<internals::get_solution_callback_ext_t*>(callback);
-      invoke_get_solution_callback_ext(sol, get_sol_callback_ext, callback_info);
-    }
-  }
-}
-
-template <typename i_t, typename f_t>
-bool population_t<i_t, f_t>::try_publish_new_best_feasible_to_get_callbacks(
-  solution_t<i_t, f_t>& sol,
-  internals::mip_solution_origin_t callback_origin,
-  double work_timestamp)
-{
-  std::lock_guard<std::mutex> lock(solution_callback_mutex);
-  if (!sol.get_feasible()) { return false; }
-  cuopt_assert(std::isfinite(sol.get_objective()), "Feasible incumbent objective must be finite");
-  if (!(sol.get_objective() < best_callback_feasible_objective)) { return false; }
-
-  if (context.settings.benchmark_info_ptr != nullptr) {
-    context.settings.benchmark_info_ptr->last_improvement_of_best_feasible = timer.elapsed_time();
-  }
-  CUOPT_LOG_DEBUG("Population: Found new best solution %g", sol.get_user_objective());
-  invoke_get_solution_callbacks(sol, callback_origin, work_timestamp);
-
-  // Save the best objective here, because unscaling can make the callback-side solution infeasible.
-  best_callback_feasible_objective = sol.get_objective();
-  return true;
-}
-
-template <typename i_t, typename f_t>
 void population_t<i_t, f_t>::run_solution_callbacks(
   solution_t<i_t, f_t>& sol, internals::mip_solution_origin_t callback_origin)
 {
@@ -413,8 +349,8 @@ void population_t<i_t, f_t>::run_solution_callbacks(
       if (problem_ptr->branch_and_bound_callback != nullptr) {
         problem_ptr->branch_and_bound_callback(sol.get_host_assignment());
       }
-      const bool published =
-        try_publish_new_best_feasible_to_get_callbacks(sol, callback_origin, -1.0);
+      const bool published = context.solution_publication.publish_new_best_feasible(
+        sol, callback_origin, -1.0, timer.elapsed_time());
       cuopt_assert(published, "New best feasible solution should publish to GET callbacks");
     }
   }
@@ -522,6 +458,8 @@ std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(
   // and we need those operations to complete before reading device data
   // for hash computation, quality calculation, and similarity comparisons.
   sol.handle_ptr->sync_stream();
+  assert_solution_matches_population_problem(
+    "population.add_solution(candidate)", "candidate", problem_ptr, sol);
   population_hash_map.insert(sol);
   double sol_cost                     = sol.get_quality(weights);
   bool best_updated                   = false;
@@ -816,6 +754,8 @@ template <typename i_t, typename f_t>
 bool population_t<i_t, f_t>::check_sols_similar(solution_t<i_t, f_t>& sol1,
                                                 solution_t<i_t, f_t>& sol2) const
 {
+  assert_solutions_compatible_for_similarity(
+    "population.check_sols_similar", problem_ptr, sol1, "lhs", sol2, "rhs");
   return sol1.calculate_similarity_radius(sol2) > var_threshold;
 }
 
@@ -825,6 +765,15 @@ size_t population_t<i_t, f_t>::best_similar_index(solution_t<i_t, f_t>& sol)
   raft::common::nvtx::range fun_scope("best_similar_index");
   if (indices.size() == 1) return max_solutions;
   for (size_t i = 1; i < indices.size(); i++) {
+    const size_t resident_idx = indices[i].first;
+    cuopt_assert(resident_idx < solutions.size(), "Population resident index out of bounds");
+    cuopt_assert(solutions[resident_idx].first, "Population resident must be occupied");
+    assert_solution_matches_population_problem(
+      "population.best_similar_index(candidate)", "candidate", problem_ptr, sol);
+    assert_solution_matches_population_problem("population.best_similar_index(resident)",
+                                               "resident",
+                                               problem_ptr,
+                                               solutions[resident_idx].second);
     if (check_sols_similar(sol, solutions[indices[i].first].second)) { return i; }
   }
 

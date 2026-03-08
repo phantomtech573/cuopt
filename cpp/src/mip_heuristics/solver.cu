@@ -92,8 +92,8 @@ struct branch_and_bound_solution_helper_t {
     incumbent.compute_feasibility();
     cuopt_assert(incumbent.get_feasible(),
                  "Deterministic B&B callback must provide a feasible incumbent");
-    dm->population.try_publish_new_best_feasible_to_get_callbacks(
-      incumbent, callback_info.origin, work_timestamp);
+    dm->context.solution_publication.publish_new_best_feasible(
+      incumbent, callback_info.origin, work_timestamp, dm->timer.elapsed_time());
   }
 
   void set_simplex_solution(std::vector<f_t>& solution,
@@ -128,20 +128,25 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     CUOPT_LOG_INFO("Problem fully reduced in presolve");
     solution_t<i_t, f_t> sol(*context.problem_ptr);
     sol.set_problem_fully_reduced();
-    dm.population.invoke_get_solution_callbacks(sol);
+    context.solution_publication.invoke_get_solution_callbacks(
+      sol, internals::mip_solution_origin_t::UNKNOWN, -1.0);
     context.problem_ptr->post_process_solution(sol);
     return sol;
   }
-  dm.timer                   = work_limit_timer_t(context.gpu_heur_loop, timer_.get_time_limit());
-  const bool run_presolve    = context.settings.presolver != presolver_t::None;
-  f_t time_limit             = is_deterministic_mode(context.settings.determinism_mode)
-                                 ? std::numeric_limits<f_t>::infinity()
-                                 : timer_.remaining_time();
+  const bool deterministic_run = is_deterministic_mode(context.settings.determinism_mode);
+  const f_t gpu_heur_work_limit =
+    deterministic_run ? context.settings.work_limit : timer_.get_time_limit();
+  if (deterministic_run)
+    cuopt_assert(gpu_heur_work_limit >= 0.0,
+                 "Deterministic GPU heuristic work limit must be non-negative");
+  dm.timer                = work_limit_timer_t(context.gpu_heur_loop, gpu_heur_work_limit);
+  const bool run_presolve = context.settings.presolver != presolver_t::None;
+  f_t time_limit =
+    deterministic_run ? std::numeric_limits<f_t>::infinity() : timer_.remaining_time();
   double presolve_time_limit = std::min(0.1 * time_limit, 60.0);
-  presolve_time_limit        = is_deterministic_mode(context.settings.determinism_mode)
-                                 ? std::numeric_limits<f_t>::infinity()
-                                 : presolve_time_limit;
-  bool presolve_success      = run_presolve ? dm.run_presolve(presolve_time_limit, timer_) : true;
+  presolve_time_limit =
+    deterministic_run ? std::numeric_limits<f_t>::infinity() : presolve_time_limit;
+  bool presolve_success = run_presolve ? dm.run_presolve(presolve_time_limit, timer_) : true;
   if (!presolve_success) {
     CUOPT_LOG_INFO("Problem proven infeasible in presolve");
     solution_t<i_t, f_t> sol(*context.problem_ptr);
@@ -153,7 +158,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     CUOPT_LOG_INFO("Problem full reduced in presolve");
     solution_t<i_t, f_t> sol(*context.problem_ptr);
     sol.set_problem_fully_reduced();
-    dm.population.invoke_get_solution_callbacks(sol);
+    context.solution_publication.invoke_get_solution_callbacks(
+      sol, internals::mip_solution_origin_t::UNKNOWN, -1.0);
     context.problem_ptr->post_process_solution(sol);
     return sol;
   }
@@ -186,7 +192,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       sol.set_problem_fully_reduced();
     }
     if (opt_sol.get_termination_status() == pdlp_termination_status_t::Optimal) {
-      dm.population.invoke_get_solution_callbacks(sol);
+      context.solution_publication.invoke_get_solution_callbacks(
+        sol, internals::mip_solution_origin_t::UNKNOWN, -1.0);
     }
     context.problem_ptr->post_process_solution(sol);
     return sol;

@@ -83,8 +83,8 @@ class population_t {
       a.first = false;
     indices[0].second = std::numeric_limits<f_t>::max();
     indices.erase(indices.begin() + 1, indices.end());
-    best_feasible_objective          = std::numeric_limits<f_t>::max();
-    best_callback_feasible_objective = std::numeric_limits<f_t>::max();
+    best_feasible_objective = std::numeric_limits<f_t>::max();
+    context.solution_publication.reset_published_best();
   }
 
   void clear_except_best_feasible()
@@ -94,8 +94,8 @@ class population_t {
     }
     solutions[indices[0].first].first = true;
     indices.erase(indices.begin() + 1, indices.end());
-    best_feasible_objective          = solutions[indices[0].first].second.get_objective();
-    best_callback_feasible_objective = best_feasible_objective;
+    best_feasible_objective = solutions[indices[0].first].second.get_objective();
+    context.solution_publication.reset_published_best(best_feasible_objective);
   }
 
   // -------------------
@@ -171,22 +171,6 @@ class population_t {
 
   void diversity_step(i_t max_iterations_without_improvement);
 
-  bool try_publish_new_best_feasible_to_get_callbacks(
-    solution_t<i_t, f_t>& sol,
-    internals::mip_solution_origin_t callback_origin = internals::mip_solution_origin_t::UNKNOWN,
-    double work_timestamp                            = -1.0);
-
-  void invoke_get_solution_callbacks(
-    solution_t<i_t, f_t>& sol,
-    internals::mip_solution_origin_t callback_origin = internals::mip_solution_origin_t::UNKNOWN,
-    double work_timestamp                            = -1.0);
-  void invoke_get_solution_callback(solution_t<i_t, f_t>& sol,
-                                    internals::get_solution_callback_t* callback);
-  void invoke_get_solution_callback_ext(
-    solution_t<i_t, f_t>& sol,
-    internals::get_solution_callback_ext_t* callback,
-    const internals::mip_solution_callback_info_t& callback_info);
-
   // does some consistency tests
   bool test_invariant();
 
@@ -228,11 +212,9 @@ class population_t {
   i_t update_iter = 0;
   std::recursive_mutex write_mutex;
   std::mutex solution_mutex;
-  std::mutex solution_callback_mutex;
   std::atomic<bool> early_exit_primal_generation = false;
   std::atomic<bool> solutions_in_external_queue_ = false;
   f_t best_feasible_objective                    = std::numeric_limits<f_t>::max();
-  f_t best_callback_feasible_objective           = std::numeric_limits<f_t>::max();
   assignment_hash_map_t<i_t, f_t> population_hash_map;
   cuopt::work_limit_timer_t timer;
 };

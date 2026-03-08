@@ -1061,17 +1061,14 @@ std::map<std::string, float> fj_t<i_t, f_t>::get_feature_vector(i_t climber_idx)
 template <typename i_t, typename f_t>
 i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
 {
-  auto& data = *climbers[climber_idx];
-  auto v     = data.view();  // == climber_views[climber_idx]
-  const bool deterministic_bnb_integration =
-    is_deterministic_mode(context.settings.determinism_mode) &&
-    context.branch_and_bound_ptr != nullptr;
+  auto& data                       = *climbers[climber_idx];
+  auto v                           = data.view();  // == climber_views[climber_idx]
   const double work_units_at_start = context.gpu_heur_loop.current_work();
-  const bool publish_progress      = deterministic_bnb_integration &&
+  const bool publish_progress      = is_deterministic_mode(context.settings.determinism_mode) &&
+                                context.branch_and_bound_ptr != nullptr &&
                                 std::isfinite(settings.work_limit) && settings.work_limit > 0.0 &&
                                 settings.iteration_limit > 0 &&
                                 settings.iteration_limit != std::numeric_limits<i_t>::max();
-  f_t last_published_objective = std::numeric_limits<f_t>::infinity();
 
   auto climber_stream = data.stream.view();
   if (climber_idx == 0) climber_stream = handle_ptr->get_stream();
@@ -1167,21 +1164,6 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
       // FIRST_FEASIBLE mode, we can remove the following too.
       bool is_feasible = solution.compute_feasibility();
       solution.handle_ptr->sync_stream();
-
-      if (deterministic_bnb_integration && is_feasible &&
-          solution.get_objective() < last_published_objective) {
-        cuopt_assert(context.diversity_manager_ptr != nullptr,
-                     "Deterministic FJ publication requires diversity manager context");
-        auto* population_ptr = context.diversity_manager_ptr->get_population_pointer();
-        cuopt_assert(population_ptr != nullptr,
-                     "Deterministic FJ publication requires a population");
-        population_ptr->add_solution(solution_t<i_t, f_t>(solution),
-                                     internals::mip_solution_origin_t::FEASIBILITY_JUMP);
-        last_published_objective = solution.get_objective();
-        CUOPT_DETERMINISM_LOG_INFO("FJ deterministic publish via population: obj=%f hash=0x%x",
-                                   solution.get_user_objective(),
-                                   solution.get_hash());
-      }
 
       if (limit_reached) { break; }
 
