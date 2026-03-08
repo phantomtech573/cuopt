@@ -45,7 +45,6 @@ class timer_t {
              file,
              line,
              caller);
-      // assert(false && "unexpected timer");
       //__builtin_trap();
     }
     return elapsed;
