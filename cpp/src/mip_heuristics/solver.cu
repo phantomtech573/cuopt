@@ -86,14 +86,16 @@ struct branch_and_bound_solution_helper_t {
     cuopt_assert(dm->context.problem_ptr != nullptr, "Problem pointer must be valid");
     cuopt_assert(solution.size() == (size_t)dm->context.problem_ptr->n_variables,
                  "Deterministic B&B callback solution size mismatch");
-
-    solution_t<i_t, f_t> incumbent(*dm->context.problem_ptr);
-    incumbent.copy_new_assignment(solution);
-    incumbent.compute_feasibility();
-    cuopt_assert(incumbent.get_feasible(),
-                 "Deterministic B&B callback must provide a feasible incumbent");
-    dm->context.solution_publication.publish_new_best_feasible(
-      incumbent, callback_info.origin, work_timestamp, dm->timer.elapsed_time());
+    cuopt_assert(std::isfinite(objective), "Deterministic B&B callback objective must be finite");
+    const auto payload =
+      make_solution_callback_payload_from_host_solution<i_t, f_t>(dm->context.problem_ptr,
+                                                                  dm->context.settings,
+                                                                  dm->context.gpu_heur_loop,
+                                                                  solution,
+                                                                  objective,
+                                                                  callback_info.origin,
+                                                                  work_timestamp);
+    dm->context.solution_publication.publish_new_best_feasible(payload, dm->timer.elapsed_time());
   }
 
   void set_simplex_solution(std::vector<f_t>& solution,
@@ -128,8 +130,15 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     CUOPT_LOG_INFO("Problem fully reduced in presolve");
     solution_t<i_t, f_t> sol(*context.problem_ptr);
     sol.set_problem_fully_reduced();
-    context.solution_publication.invoke_get_solution_callbacks(
-      sol, internals::mip_solution_origin_t::UNKNOWN, -1.0);
+    const auto payload = make_solution_callback_payload_from_solution<i_t, f_t>(
+      context.problem_ptr,
+      context.settings,
+      context.scaling,
+      context.gpu_heur_loop,
+      sol,
+      internals::mip_solution_origin_t::UNKNOWN,
+      -1.0);
+    context.solution_publication.invoke_get_solution_callbacks(payload);
     context.problem_ptr->post_process_solution(sol);
     return sol;
   }
@@ -158,8 +167,15 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     CUOPT_LOG_INFO("Problem full reduced in presolve");
     solution_t<i_t, f_t> sol(*context.problem_ptr);
     sol.set_problem_fully_reduced();
-    context.solution_publication.invoke_get_solution_callbacks(
-      sol, internals::mip_solution_origin_t::UNKNOWN, -1.0);
+    const auto payload = make_solution_callback_payload_from_solution<i_t, f_t>(
+      context.problem_ptr,
+      context.settings,
+      context.scaling,
+      context.gpu_heur_loop,
+      sol,
+      internals::mip_solution_origin_t::UNKNOWN,
+      -1.0);
+    context.solution_publication.invoke_get_solution_callbacks(payload);
     context.problem_ptr->post_process_solution(sol);
     return sol;
   }
@@ -192,8 +208,15 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       sol.set_problem_fully_reduced();
     }
     if (opt_sol.get_termination_status() == pdlp_termination_status_t::Optimal) {
-      context.solution_publication.invoke_get_solution_callbacks(
-        sol, internals::mip_solution_origin_t::UNKNOWN, -1.0);
+      const auto payload = make_solution_callback_payload_from_solution<i_t, f_t>(
+        context.problem_ptr,
+        context.settings,
+        context.scaling,
+        context.gpu_heur_loop,
+        sol,
+        internals::mip_solution_origin_t::UNKNOWN,
+        -1.0);
+      context.solution_publication.invoke_get_solution_callbacks(payload);
     }
     context.problem_ptr->post_process_solution(sol);
     return sol;
@@ -342,10 +365,12 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     // std::async and std::future allow us to get the return value of bb::solve()
     // without having to manually manage the thread
     // std::future.get() performs a join() operation to wait until the return status is available
-    branch_and_bound_status_future = std::async(std::launch::async,
-                                                &dual_simplex::branch_and_bound_t<i_t, f_t>::solve,
-                                                branch_and_bound.get(),
-                                                std::ref(branch_and_bound_solution));
+    int bb_device_id = context.handle_ptr->get_device();
+    branch_and_bound_status_future =
+      std::async(std::launch::async, [&branch_and_bound, &branch_and_bound_solution, bb_device_id] {
+        RAFT_CUDA_TRY(cudaSetDevice(bb_device_id));
+        return branch_and_bound->solve(branch_and_bound_solution);
+      });
   }
 
   // Start the primal heuristics

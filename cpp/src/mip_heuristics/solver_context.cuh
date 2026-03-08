@@ -44,20 +44,75 @@ template <typename i_t, typename f_t>
 class diversity_manager_t;
 
 template <typename i_t, typename f_t>
+struct solution_callback_payload_t {
+  std::vector<f_t> assignment{};
+  f_t user_objective{};
+  f_t solver_objective{};
+  internals::mip_solution_callback_info_t callback_info{};
+};
+
+template <typename i_t, typename f_t>
+solution_callback_payload_t<i_t, f_t> make_solution_callback_payload_from_solution(
+  problem_t<i_t, f_t>* problem_ptr,
+  const mip_solver_settings_t<i_t, f_t>& settings,
+  pdlp_initial_scaling_strategy_t<i_t, f_t>& scaling,
+  work_limit_context_t& gpu_heur_loop,
+  solution_t<i_t, f_t>& sol,
+  internals::mip_solution_origin_t callback_origin,
+  double work_timestamp)
+{
+  cuopt_assert(problem_ptr != nullptr, "Callback payload problem pointer must not be null");
+  if (work_timestamp < 0.0 && is_deterministic_mode(settings.determinism_mode)) {
+    work_timestamp = gpu_heur_loop.current_work();
+  }
+  solution_callback_payload_t<i_t, f_t> payload{};
+  payload.user_objective               = sol.get_user_objective();
+  payload.solver_objective             = sol.get_objective();
+  payload.callback_info.origin         = callback_origin;
+  payload.callback_info.work_timestamp = work_timestamp;
+  solution_t<i_t, f_t> temp_sol(sol);
+  problem_ptr->post_process_assignment(temp_sol.assignment);
+  if (settings.mip_scaling) {
+    rmm::device_uvector<f_t> dummy(0, temp_sol.handle_ptr->get_stream());
+    scaling.unscale_solutions(temp_sol.assignment, dummy);
+  }
+  if (problem_ptr->has_papilo_presolve_data()) {
+    problem_ptr->papilo_uncrush_assignment(temp_sol.assignment);
+  }
+  payload.assignment = temp_sol.get_host_assignment();
+  return payload;
+}
+
+template <typename i_t, typename f_t>
+solution_callback_payload_t<i_t, f_t> make_solution_callback_payload_from_host_solution(
+  problem_t<i_t, f_t>* problem_ptr,
+  const mip_solver_settings_t<i_t, f_t>& settings,
+  work_limit_context_t& gpu_heur_loop,
+  const std::vector<f_t>& assignment,
+  f_t solver_objective,
+  internals::mip_solution_origin_t callback_origin,
+  double work_timestamp)
+{
+  cuopt_assert(problem_ptr != nullptr, "Callback payload problem pointer must not be null");
+  if (work_timestamp < 0.0 && is_deterministic_mode(settings.determinism_mode)) {
+    work_timestamp = gpu_heur_loop.current_work();
+  }
+  solution_callback_payload_t<i_t, f_t> payload{};
+  payload.assignment           = assignment;
+  payload.user_objective       = problem_ptr->get_user_obj_from_solver_obj(solver_objective);
+  payload.solver_objective     = solver_objective;
+  payload.callback_info.origin = callback_origin;
+  payload.callback_info.work_timestamp = work_timestamp;
+  return payload;
+}
+
+template <typename i_t, typename f_t>
 class solution_publication_t {
  public:
-  solution_publication_t(problem_t<i_t, f_t>* problem_ptr_,
-                         const mip_solver_settings_t<i_t, f_t>& settings_,
-                         pdlp_initial_scaling_strategy_t<i_t, f_t>& scaling_,
-                         solver_stats_t<i_t, f_t>& stats_,
-                         work_limit_context_t& gpu_heur_loop_)
-    : problem_ptr(problem_ptr_),
-      settings(settings_),
-      scaling(scaling_),
-      stats(stats_),
-      gpu_heur_loop(gpu_heur_loop_)
+  solution_publication_t(const mip_solver_settings_t<i_t, f_t>& settings_,
+                         solver_stats_t<i_t, f_t>& stats_)
+    : settings(settings_), stats(stats_)
   {
-    cuopt_assert(problem_ptr != nullptr, "Publication problem pointer must not be null");
   }
 
   void reset_published_best(f_t objective = std::numeric_limits<f_t>::max())
@@ -65,57 +120,31 @@ class solution_publication_t {
     best_callback_feasible_objective_ = objective;
   }
 
-  void invoke_get_solution_callbacks(solution_t<i_t, f_t>& sol,
-                                     internals::mip_solution_origin_t callback_origin,
-                                     double work_timestamp)
+  void invoke_get_solution_callbacks(const solution_callback_payload_t<i_t, f_t>& payload)
   {
-    internals::mip_solution_callback_info_t callback_info{};
     auto user_callbacks = settings.get_mip_callbacks();
-    if (work_timestamp < 0.0 && is_deterministic_mode(settings.determinism_mode)) {
-      work_timestamp = gpu_heur_loop.current_work();
-    }
-    callback_info.origin         = callback_origin;
-    callback_info.work_timestamp = work_timestamp;
     CUOPT_LOG_DEBUG("Publishing incumbent: obj=%g wut=%.6f origin=%s callbacks=%zu",
-                    sol.get_user_objective(),
-                    work_timestamp,
-                    internals::mip_solution_origin_to_string(callback_origin),
+                    payload.user_objective,
+                    payload.callback_info.work_timestamp,
+                    internals::mip_solution_origin_to_string(payload.callback_info.origin),
                     user_callbacks.size());
-
-    f_t user_objective = sol.get_user_objective();
-    f_t user_bound     = stats.get_solution_bound();
-    solution_t<i_t, f_t> temp_sol(sol);
-    problem_ptr->post_process_assignment(temp_sol.assignment);
-    if (settings.mip_scaling) {
-      rmm::device_uvector<f_t> dummy(0, temp_sol.handle_ptr->get_stream());
-      scaling.unscale_solutions(temp_sol.assignment, dummy);
-    }
-    if (problem_ptr->has_papilo_presolve_data()) {
-      problem_ptr->papilo_uncrush_assignment(temp_sol.assignment);
-    }
 
     std::vector<f_t> user_objective_vec(1);
     std::vector<f_t> user_bound_vec(1);
-    std::vector<f_t> user_assignment_vec(temp_sol.assignment.size());
-    user_objective_vec[0] = user_objective;
-    user_bound_vec[0]     = user_bound;
-    raft::copy(user_assignment_vec.data(),
-               temp_sol.assignment.data(),
-               temp_sol.assignment.size(),
-               temp_sol.handle_ptr->get_stream());
-    temp_sol.handle_ptr->sync_stream();
+    user_objective_vec[0] = payload.user_objective;
+    user_bound_vec[0]     = stats.get_solution_bound();
 
     for (auto callback : user_callbacks) {
       if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION_EXT) {
         auto get_sol_callback_ext = static_cast<internals::get_solution_callback_ext_t*>(callback);
-        get_sol_callback_ext->get_solution(user_assignment_vec.data(),
+        get_sol_callback_ext->get_solution(const_cast<f_t*>(payload.assignment.data()),
                                            user_objective_vec.data(),
                                            user_bound_vec.data(),
-                                           &callback_info,
+                                           &payload.callback_info,
                                            get_sol_callback_ext->get_user_data());
       } else if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION) {
         auto get_sol_callback = static_cast<internals::get_solution_callback_t*>(callback);
-        get_sol_callback->get_solution(user_assignment_vec.data(),
+        get_sol_callback->get_solution(const_cast<f_t*>(payload.assignment.data()),
                                        user_objective_vec.data(),
                                        user_bound_vec.data(),
                                        get_sol_callback->get_user_data());
@@ -123,30 +152,25 @@ class solution_publication_t {
     }
   }
 
-  bool publish_new_best_feasible(solution_t<i_t, f_t>& sol,
-                                 internals::mip_solution_origin_t callback_origin,
-                                 double work_timestamp,
+  bool publish_new_best_feasible(const solution_callback_payload_t<i_t, f_t>& payload,
                                  double elapsed_time = -1.0)
   {
     std::lock_guard<std::mutex> lock(solution_callback_mutex_);
-    if (!sol.get_feasible()) { return false; }
-    cuopt_assert(std::isfinite(sol.get_objective()), "Feasible incumbent objective must be finite");
-    if (!(sol.get_objective() < best_callback_feasible_objective_)) { return false; }
+    cuopt_assert(std::isfinite(payload.solver_objective),
+                 "Feasible incumbent objective must be finite");
+    if (!(payload.solver_objective < best_callback_feasible_objective_)) { return false; }
 
     if (settings.benchmark_info_ptr != nullptr && elapsed_time >= 0.0) {
       settings.benchmark_info_ptr->last_improvement_of_best_feasible = elapsed_time;
     }
-    invoke_get_solution_callbacks(sol, callback_origin, work_timestamp);
-    best_callback_feasible_objective_ = sol.get_objective();
+    invoke_get_solution_callbacks(payload);
+    best_callback_feasible_objective_ = payload.solver_objective;
     return true;
   }
 
  private:
-  problem_t<i_t, f_t>* problem_ptr;
   const mip_solver_settings_t<i_t, f_t>& settings;
-  pdlp_initial_scaling_strategy_t<i_t, f_t>& scaling;
   solver_stats_t<i_t, f_t>& stats;
-  work_limit_context_t& gpu_heur_loop;
   std::mutex solution_callback_mutex_;
   f_t best_callback_feasible_objective_{std::numeric_limits<f_t>::max()};
 };
@@ -163,7 +187,7 @@ struct mip_solver_context_t {
       problem_ptr(problem_ptr_),
       settings(settings_),
       scaling(scaling),
-      solution_publication(problem_ptr_, settings, scaling, stats, gpu_heur_loop)
+      solution_publication(settings, stats)
   {
     cuopt_assert(problem_ptr != nullptr, "problem_ptr is nullptr");
     stats.set_solution_bound(problem_ptr->maximize ? std::numeric_limits<f_t>::infinity()
