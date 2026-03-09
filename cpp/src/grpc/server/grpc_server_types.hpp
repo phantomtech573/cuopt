@@ -11,9 +11,6 @@
 #include "cuopt_remote.pb.h"
 #include "cuopt_remote_service.grpc.pb.h"
 
-#include <google/protobuf/io/coded_stream.h>
-#include <google/protobuf/io/zero_copy_stream_impl_lite.h>
-#include <google/protobuf/util/delimited_message_util.h>
 #include <cuopt/linear_programming/cpu_optimization_problem_solution.hpp>
 #include <cuopt/linear_programming/optimization_problem_interface.hpp>
 #include <cuopt/linear_programming/solve.hpp>
@@ -64,29 +61,6 @@ using namespace cuopt::linear_programming;
 // Note: NOT using "using namespace cuopt::remote" to avoid JobStatus enum conflict
 
 // =============================================================================
-// Utility functions
-// =============================================================================
-
-inline uint64_t compute_data_hash(const uint8_t* data, size_t size)
-{
-  constexpr uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
-  constexpr uint64_t FNV_PRIME        = 1099511628211ULL;
-  uint64_t hash                       = FNV_OFFSET_BASIS;
-  for (size_t i = 0; i < size; ++i) {
-    hash ^= static_cast<uint64_t>(data[i]);
-    hash *= FNV_PRIME;
-  }
-  return hash;
-}
-
-inline std::string hash_to_hex(uint64_t hash)
-{
-  std::ostringstream oss;
-  oss << std::hex << std::setfill('0') << std::setw(16) << hash;
-  return oss.str();
-}
-
-// =============================================================================
 // Shared Memory Structures (must match between main process and workers)
 // =============================================================================
 
@@ -115,11 +89,18 @@ struct JobQueueEntry {
   std::atomic<bool> cancelled;    // Job has been cancelled (worker should skip)
   std::atomic<int> worker_index;  // Index of worker that claimed this job (-1 if none)
   std::atomic<bool> data_sent;    // Server has sent data to worker's pipe
+  std::atomic<bool> is_chunked;   // True when data is in pending_chunked_data (streamed to pipe)
+};
+
+enum ResultStatus : uint32_t {
+  RESULT_SUCCESS   = 0,
+  RESULT_ERROR     = 1,
+  RESULT_CANCELLED = 2,
 };
 
 struct ResultQueueEntry {
   char job_id[64];
-  uint32_t status;     // 0 = success, 1 = error, 2 = cancelled
+  ResultStatus status;
   uint64_t data_size;  // Size of result data (uint64 for large results)
   char error_message[1024];
   std::atomic<bool> ready;        // Result is ready
@@ -176,10 +157,10 @@ struct ServerConfig {
   int num_workers     = 1;
   bool verbose        = true;
   bool log_to_console = false;
-  // gRPC max message size in MiB. 0 => unlimited (gRPC uses -1 internally).
-  // --max-message-bytes overrides --max-message-mb when set (minimum 4096).
-  int max_message_mb        = 256;
-  int64_t max_message_b     = -1;  // -1 means use max_message_mb instead
+  // Effective gRPC max send/recv message size in bytes.
+  // Set via --max-message-mb (MiB) or --max-message-bytes (exact, min 4096).
+  // Clamped at startup to [kServerMinMessageBytes, kServerMaxMessageBytes].
+  int64_t max_message_bytes = 256LL * 1024 * 1024;  // 256 MiB
   bool enable_transfer_hash = false;
   bool enable_tls           = false;
   bool require_client       = false;
@@ -229,6 +210,12 @@ struct ChunkedUploadState {
   std::chrono::steady_clock::time_point last_activity;
 };
 
+// Holds header + chunks for a chunked upload, ready to stream to the worker pipe.
+struct PendingChunkedUpload {
+  cuopt::remote::ChunkedProblemHeader header;
+  std::vector<cuopt::remote::ArrayChunk> chunks;
+};
+
 // =============================================================================
 // Global state
 // =============================================================================
@@ -253,6 +240,7 @@ inline std::vector<WorkerPipes> worker_pipes;
 
 inline std::mutex pending_data_mutex;
 inline std::map<std::string, std::vector<uint8_t>> pending_job_data;
+inline std::map<std::string, PendingChunkedUpload> pending_chunked_data;
 
 inline std::mutex chunked_uploads_mutex;
 inline std::map<std::string, ChunkedUploadState> chunked_uploads;
@@ -269,6 +257,13 @@ inline const std::string LOG_DIR = "/tmp/cuopt_logs";
 constexpr int64_t kMiB = 1024LL * 1024;
 constexpr int64_t kGiB = 1024LL * 1024 * 1024;
 
+// Floor: 4 KiB is enough for basic gRPC control messages. Values below this
+// would risk rejecting even metadata-only RPCs like CheckStatus.
+constexpr int64_t kServerMinMessageBytes = 4LL * 1024;  // 4 KiB
+// Protobuf's hard serialization limit is 2 GiB (int32 sizes internally).
+// Reserve 1 MiB headroom for gRPC framing and internal bookkeeping.
+constexpr int64_t kServerMaxMessageBytes = 2LL * 1024 * 1024 * 1024 - 1LL * 1024 * 1024;  // ~2 GiB
+
 // =============================================================================
 // Inline utility functions
 // =============================================================================
@@ -278,11 +273,7 @@ inline std::string get_log_file_path(const std::string& job_id)
   return LOG_DIR + "/job_" + job_id + ".log";
 }
 
-inline int64_t server_max_message_bytes()
-{
-  if (config.max_message_b >= 0) { return config.max_message_b; }
-  return (config.max_message_mb <= 0) ? -1 : (static_cast<int64_t>(config.max_message_mb) * kMiB);
-}
+inline int64_t server_max_message_bytes() { return config.max_message_bytes; }
 
 inline std::string read_file_to_string(const std::string& path)
 {
@@ -321,20 +312,19 @@ void incumbent_retrieval_thread();
 void session_reaper_thread();
 
 bool write_to_pipe(int fd, const void* data, size_t size);
-bool read_from_pipe(int fd, void* data, size_t size, int timeout_ms = 120000);
+bool read_from_pipe(int fd, void* data, size_t size, int timeout_ms);
 bool send_job_data_pipe(int worker_idx, const std::vector<uint8_t>& data);
 bool recv_job_data_pipe(int fd, uint64_t expected_size, std::vector<uint8_t>& data);
-bool send_result_pipe(int fd, const std::vector<uint8_t>& data);
 bool send_incumbent_pipe(int fd, const std::vector<uint8_t>& data);
 bool recv_incumbent_pipe(int fd, std::vector<uint8_t>& data);
-bool recv_result_pipe(int worker_idx, uint64_t expected_size, std::vector<uint8_t>& data);
 
 void worker_process(int worker_id);
 pid_t spawn_single_worker(int worker_id);
 void mark_worker_jobs_failed(pid_t dead_worker_pid);
 
-std::pair<bool, std::string> submit_job_async(const std::vector<uint8_t>& request_data,
-                                              bool is_mip);
+std::pair<bool, std::string> submit_job_async(std::vector<uint8_t>&& request_data, bool is_mip);
+std::pair<bool, std::string> submit_chunked_job_async(PendingChunkedUpload&& chunked_data,
+                                                      bool is_mip);
 JobStatus check_job_status(const std::string& job_id, std::string& message);
 bool get_job_is_mip(const std::string& job_id);
 int cancel_job(const std::string& job_id, JobStatus& job_status_out, std::string& message);

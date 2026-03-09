@@ -142,11 +142,6 @@ std::unique_ptr<mip_solution_interface_t<i_t, f_t>> solve_mip_remote(
     }
   }
 
-  // Incumbent callbacks require polling mode (use_wait=false) because callbacks are invoked
-  // on the main thread during the polling loop. This is required for Python callbacks which
-  // need the GIL that only the main thread holds.
-  if (has_incumbents) { config.use_wait = false; }
-
   // Set up incumbent callback forwarding
   if (has_incumbents) {
     CUOPT_LOG_INFO("solve_mip_remote - setting up inline incumbent callback forwarding");

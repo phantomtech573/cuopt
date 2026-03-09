@@ -61,14 +61,4 @@ inline void grpc_test_inject_mock_stub_typed(grpc_client_t& client, std::shared_
   grpc_test_inject_mock_stub(client, std::static_pointer_cast<void>(stub));
 }
 
-/**
- * @brief Test-accessible wrapper for grpc_client_t::compute_chunk_size
- */
-inline int64_t grpc_test_compute_chunk_size(int64_t server_max,
-                                            int64_t config_max,
-                                            int64_t preferred)
-{
-  return grpc_client_t::compute_chunk_size(server_max, config_max, preferred);
-}
-
 }  // namespace cuopt::linear_programming

@@ -20,10 +20,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <future>
 #include <iomanip>
 #include <iostream>
-#include <limits>
-#include <mutex>
 #include <sstream>
 #include <thread>
 
@@ -33,46 +32,11 @@ namespace cuopt::linear_programming {
 // Constants
 // =============================================================================
 
-constexpr int64_t kMinChunkSize = 4 * 1024;  // 4 KiB minimum chunk
+constexpr int64_t kMinMessageBytes = 4LL * 1024 * 1024;  // 4 MiB floor for max_message_bytes
 
-// =============================================================================
-// Data Integrity - Simple Hash for Transfer Verification
-// =============================================================================
-
-/**
- * @brief Compute FNV-1a 64-bit hash for data integrity verification.
- *
- * This is a fast, non-cryptographic hash suitable for detecting data corruption
- * during streaming transfers. The hash is logged by both client and server to
- * allow verification that transferred data matches.
- *
- * @param data Pointer to data buffer
- * @param size Size of data in bytes
- * @return 64-bit hash value (logged as hex string)
- */
-inline uint64_t compute_data_hash(const uint8_t* data, size_t size)
-{
-  // FNV-1a 64-bit hash constants
-  constexpr uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
-  constexpr uint64_t FNV_PRIME        = 1099511628211ULL;
-
-  uint64_t hash = FNV_OFFSET_BASIS;
-  for (size_t i = 0; i < size; ++i) {
-    hash ^= static_cast<uint64_t>(data[i]);
-    hash *= FNV_PRIME;
-  }
-  return hash;
-}
-
-/**
- * @brief Format hash as hex string for logging.
- */
-inline std::string hash_to_hex(uint64_t hash)
-{
-  std::ostringstream oss;
-  oss << std::hex << std::setfill('0') << std::setw(16) << hash;
-  return oss.str();
-}
+// Protobuf's hard serialization limit is 2 GiB (int32 sizes internally).
+// Reserve 1 MiB headroom for gRPC framing and internal bookkeeping.
+constexpr int64_t kMaxMessageBytes = 2LL * 1024 * 1024 * 1024 - 1LL * 1024 * 1024;
 
 // =============================================================================
 // Debug Logging Helper
@@ -112,9 +76,6 @@ struct grpc_client_t::impl_t {
   // Use StubInterface to support both real stubs and mock stubs for testing
   std::shared_ptr<cuopt::remote::CuOptRemoteService::StubInterface> stub;
   bool mock_mode = false;  // Set to true when using injected mock stub
-
-  std::mutex log_ctx_mutex;
-  grpc::ClientContext* log_context = nullptr;
 };
 
 // =============================================================================
@@ -134,6 +95,8 @@ void grpc_test_mark_as_connected(grpc_client_t& client) { client.impl_->mock_mod
 grpc_client_t::grpc_client_t(const grpc_client_config_t& config)
   : impl_(std::make_unique<impl_t>()), config_(config)
 {
+  config_.max_message_bytes =
+    std::clamp(config_.max_message_bytes, kMinMessageBytes, kMaxMessageBytes);
   if (config_.chunked_array_threshold_bytes >= 0) {
     chunked_array_threshold_bytes_ = config_.chunked_array_threshold_bytes;
   } else {
@@ -143,7 +106,9 @@ grpc_client_t::grpc_client_t(const grpc_client_config_t& config)
 
 grpc_client_t::grpc_client_t(const std::string& server_address) : impl_(std::make_unique<impl_t>())
 {
-  config_.server_address         = server_address;
+  config_.server_address = server_address;
+  config_.max_message_bytes =
+    std::clamp(config_.max_message_bytes, kMinMessageBytes, kMaxMessageBytes);
   chunked_array_threshold_bytes_ = config_.max_message_bytes * 3 / 4;
 }
 
@@ -171,12 +136,12 @@ bool grpc_client_t::connect()
   }
 
   grpc::ChannelArguments channel_args;
-  const int channel_limit = (config_.max_message_bytes <= 0)
-                              ? -1
-                              : static_cast<int>(std::min<int64_t>(
-                                  config_.max_message_bytes, std::numeric_limits<int>::max()));
+  const int channel_limit = static_cast<int>(config_.max_message_bytes);
   channel_args.SetMaxReceiveMessageSize(channel_limit);
   channel_args.SetMaxSendMessageSize(channel_limit);
+  channel_args.SetInt(GRPC_ARG_KEEPALIVE_TIME_MS, config_.keepalive_time_ms);
+  channel_args.SetInt(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, config_.keepalive_timeout_ms);
+  channel_args.SetInt(GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, 1);
 
   impl_->channel = grpc::CreateCustomChannel(config_.server_address, creds, channel_args);
   impl_->stub    = cuopt::remote::CuOptRemoteService::NewStub(impl_->channel);
@@ -227,39 +192,45 @@ void grpc_client_t::start_log_streaming(const std::string& job_id)
 
   stop_logs_.store(false);
   log_thread_ = std::make_unique<std::thread>([this, job_id]() {
-    grpc::ClientContext context;
-    {
-      std::lock_guard<std::mutex> lk(impl_->log_ctx_mutex);
-      impl_->log_context = &context;
-    }
-
-    auto request = build_stream_logs_request(job_id, 0);
-    auto reader  = impl_->stub->StreamLogs(&context, request);
-
-    cuopt::remote::LogMessage log_msg;
-    while (reader->Read(&log_msg)) {
-      if (stop_logs_.load()) break;
-      if (config_.log_callback) { config_.log_callback(log_msg.line()); }
-      if (log_msg.job_complete()) { break; }
-    }
-    reader->Finish();
-
-    {
-      std::lock_guard<std::mutex> lk(impl_->log_ctx_mutex);
-      impl_->log_context = nullptr;
-    }
+    stream_logs(job_id, 0, [this](const std::string& line, bool /*job_complete*/) {
+      if (stop_logs_.load()) return false;
+      if (config_.log_callback) { config_.log_callback(line); }
+      return true;
+    });
   });
 }
 
 void grpc_client_t::stop_log_streaming()
 {
+  constexpr auto kLogJoinTimeout = std::chrono::seconds(5);
+
   stop_logs_.store(true);
-  {
-    std::lock_guard<std::mutex> lk(impl_->log_ctx_mutex);
-    if (impl_->log_context) { impl_->log_context->TryCancel(); }
+  if (log_thread_ && log_thread_->joinable()) {
+    auto future = std::async(std::launch::async, [this]() { log_thread_->join(); });
+    if (future.wait_for(kLogJoinTimeout) == std::future_status::timeout) {
+      GRPC_CLIENT_DEBUG_LOG(config_,
+                            "[grpc_client] WARNING: log streaming thread did not exit within "
+                              << kLogJoinTimeout.count() << "s; detaching");
+      log_thread_->detach();
+    }
   }
-  if (log_thread_ && log_thread_->joinable()) { log_thread_->join(); }
   log_thread_.reset();
+}
+
+// =============================================================================
+// Proto → Client Enum Conversion
+// =============================================================================
+
+job_status_t map_proto_job_status(cuopt::remote::JobStatus proto_status)
+{
+  switch (proto_status) {
+    case cuopt::remote::QUEUED: return job_status_t::QUEUED;
+    case cuopt::remote::PROCESSING: return job_status_t::PROCESSING;
+    case cuopt::remote::COMPLETED: return job_status_t::COMPLETED;
+    case cuopt::remote::FAILED: return job_status_t::FAILED;
+    case cuopt::remote::CANCELLED: return job_status_t::CANCELLED;
+    default: return job_status_t::NOT_FOUND;
+  }
 }
 
 // =============================================================================
@@ -289,14 +260,7 @@ job_status_result_t grpc_client_t::check_status(const std::string& job_id)
     server_max_message_bytes_ = response.max_message_bytes();
   }
 
-  switch (response.job_status()) {
-    case cuopt::remote::QUEUED: result.status = job_status_t::QUEUED; break;
-    case cuopt::remote::PROCESSING: result.status = job_status_t::PROCESSING; break;
-    case cuopt::remote::COMPLETED: result.status = job_status_t::COMPLETED; break;
-    case cuopt::remote::FAILED: result.status = job_status_t::FAILED; break;
-    case cuopt::remote::CANCELLED: result.status = job_status_t::CANCELLED; break;
-    default: result.status = job_status_t::NOT_FOUND; break;
-  }
+  result.status = map_proto_job_status(response.job_status());
 
   return result;
 }
@@ -321,14 +285,7 @@ job_status_result_t grpc_client_t::wait_for_completion(const std::string& job_id
   result.message           = response.message();
   result.result_size_bytes = response.result_size_bytes();
 
-  switch (response.job_status()) {
-    case cuopt::remote::QUEUED: result.status = job_status_t::QUEUED; break;
-    case cuopt::remote::PROCESSING: result.status = job_status_t::PROCESSING; break;
-    case cuopt::remote::COMPLETED: result.status = job_status_t::COMPLETED; break;
-    case cuopt::remote::FAILED: result.status = job_status_t::FAILED; break;
-    case cuopt::remote::CANCELLED: result.status = job_status_t::CANCELLED; break;
-    default: result.status = job_status_t::NOT_FOUND; break;
-  }
+  result.status = map_proto_job_status(response.job_status());
 
   return result;
 }
@@ -350,14 +307,7 @@ cancel_result_t grpc_client_t::cancel_job(const std::string& job_id)
   result.success = (response.status() == cuopt::remote::SUCCESS);
   result.message = response.message();
 
-  switch (response.job_status()) {
-    case cuopt::remote::QUEUED: result.job_status = job_status_t::QUEUED; break;
-    case cuopt::remote::PROCESSING: result.job_status = job_status_t::PROCESSING; break;
-    case cuopt::remote::COMPLETED: result.job_status = job_status_t::COMPLETED; break;
-    case cuopt::remote::FAILED: result.job_status = job_status_t::FAILED; break;
-    case cuopt::remote::CANCELLED: result.job_status = job_status_t::CANCELLED; break;
-    default: result.job_status = job_status_t::NOT_FOUND; break;
-  }
+  result.job_status = map_proto_job_status(response.job_status());
 
   return result;
 }
@@ -453,22 +403,6 @@ bool grpc_client_t::stream_logs(
   return status.ok() || status.error_code() == grpc::StatusCode::CANCELLED;
 }
 
-// =============================================================================
-// Submit and Chunk Size Helpers
-// =============================================================================
-
-int64_t grpc_client_t::compute_chunk_size(int64_t server_max, int64_t config_max, int64_t preferred)
-{
-  int64_t effective_max = config_max;
-  if (server_max > 0 && (effective_max <= 0 || server_max < effective_max)) {
-    effective_max = server_max;
-  }
-  int64_t chunk_size = preferred;
-  if (effective_max > 0 && chunk_size > effective_max / 2) { chunk_size = effective_max / 2; }
-  if (chunk_size < kMinChunkSize) { chunk_size = kMinChunkSize; }
-  return chunk_size;
-}
-
 bool grpc_client_t::submit_unary(const cuopt::remote::SubmitJobRequest& request,
                                  std::string& job_id_out)
 {
@@ -498,7 +432,298 @@ bool grpc_client_t::submit_unary(const cuopt::remote::SubmitJobRequest& request,
 }
 
 // =============================================================================
-// Chunked Array Upload
+// Async Submit and Get Result
+// =============================================================================
+
+template <typename i_t, typename f_t>
+submit_result_t grpc_client_t::submit_lp(const cpu_optimization_problem_t<i_t, f_t>& problem,
+                                         const pdlp_solver_settings_t<i_t, f_t>& settings)
+{
+  submit_result_t result;
+
+  GRPC_CLIENT_DEBUG_LOG(config_, "[grpc_client] submit_lp: starting submission");
+
+  if (!is_connected()) {
+    result.error_message = "Not connected to server";
+    GRPC_CLIENT_DEBUG_LOG(config_, "[grpc_client] submit_lp: not connected to server");
+    return result;
+  }
+
+  // Check if chunked array upload should be used
+  bool use_chunked = false;
+  if (chunked_array_threshold_bytes_ >= 0) {
+    size_t est  = estimate_problem_proto_size(problem);
+    use_chunked = (static_cast<int64_t>(est) > chunked_array_threshold_bytes_);
+    GRPC_CLIENT_DEBUG_LOG(config_,
+                          "[grpc_client] submit_lp: estimated_size="
+                            << est << " threshold=" << chunked_array_threshold_bytes_
+                            << " use_chunked=" << use_chunked);
+  }
+
+  if (use_chunked) {
+    cuopt::remote::ChunkedProblemHeader header;
+    populate_chunked_header_lp(problem, settings, &header);
+    if (!upload_chunked_arrays(problem, header, result.job_id)) {
+      result.error_message = last_error_;
+      return result;
+    }
+  } else {
+    auto submit_request = build_lp_submit_request(problem, settings);
+    if (!submit_unary(submit_request, result.job_id)) {
+      result.error_message = last_error_;
+      return result;
+    }
+  }
+
+  GRPC_CLIENT_DEBUG_LOG(config_,
+                        "[grpc_client] submit_lp: job submitted, job_id=" << result.job_id);
+  result.success = true;
+  return result;
+}
+
+template <typename i_t, typename f_t>
+submit_result_t grpc_client_t::submit_mip(const cpu_optimization_problem_t<i_t, f_t>& problem,
+                                          const mip_solver_settings_t<i_t, f_t>& settings,
+                                          bool enable_incumbents)
+{
+  submit_result_t result;
+
+  GRPC_CLIENT_DEBUG_LOG(config_,
+                        "[grpc_client] submit_mip: starting submission"
+                          << (enable_incumbents ? " (incumbents enabled)" : ""));
+
+  if (!is_connected()) {
+    result.error_message = "Not connected to server";
+    return result;
+  }
+
+  bool use_chunked = false;
+  if (chunked_array_threshold_bytes_ >= 0) {
+    size_t est  = estimate_problem_proto_size(problem);
+    use_chunked = (static_cast<int64_t>(est) > chunked_array_threshold_bytes_);
+    GRPC_CLIENT_DEBUG_LOG(config_,
+                          "[grpc_client] submit_mip: estimated_size="
+                            << est << " threshold=" << chunked_array_threshold_bytes_
+                            << " use_chunked=" << use_chunked);
+  }
+
+  if (use_chunked) {
+    cuopt::remote::ChunkedProblemHeader header;
+    populate_chunked_header_mip(problem, settings, enable_incumbents, &header);
+    if (!upload_chunked_arrays(problem, header, result.job_id)) {
+      result.error_message = last_error_;
+      return result;
+    }
+  } else {
+    auto submit_request = build_mip_submit_request(problem, settings, enable_incumbents);
+    if (!submit_unary(submit_request, result.job_id)) {
+      result.error_message = last_error_;
+      return result;
+    }
+  }
+
+  GRPC_CLIENT_DEBUG_LOG(
+    config_, "[grpc_client] submit_mip: job submitted successfully, job_id=" << result.job_id);
+  result.success = true;
+  return result;
+}
+
+template <typename i_t, typename f_t>
+remote_lp_result_t<i_t, f_t> grpc_client_t::get_lp_result(const std::string& job_id)
+{
+  remote_lp_result_t<i_t, f_t> result;
+
+  if (!is_connected()) {
+    result.error_message = "Not connected to server";
+    return result;
+  }
+
+  downloaded_result_t dl;
+  if (!get_result_or_download(job_id, dl)) {
+    result.error_message = last_error_;
+    return result;
+  }
+
+  if (dl.was_chunked) {
+    result.solution = std::make_unique<cpu_lp_solution_t<i_t, f_t>>(
+      chunked_result_to_lp_solution<i_t, f_t>(*dl.chunked_header, dl.chunked_arrays));
+  } else {
+    result.solution = std::make_unique<cpu_lp_solution_t<i_t, f_t>>(
+      map_proto_to_lp_solution<i_t, f_t>(dl.response->lp_solution()));
+  }
+  result.success = true;
+  return result;
+}
+
+template <typename i_t, typename f_t>
+remote_mip_result_t<i_t, f_t> grpc_client_t::get_mip_result(const std::string& job_id)
+{
+  remote_mip_result_t<i_t, f_t> result;
+
+  if (!is_connected()) {
+    result.error_message = "Not connected to server";
+    return result;
+  }
+
+  downloaded_result_t dl;
+  if (!get_result_or_download(job_id, dl)) {
+    result.error_message = last_error_;
+    return result;
+  }
+
+  if (dl.was_chunked) {
+    result.solution = std::make_unique<cpu_mip_solution_t<i_t, f_t>>(
+      chunked_result_to_mip_solution<i_t, f_t>(*dl.chunked_header, dl.chunked_arrays));
+  } else {
+    result.solution = std::make_unique<cpu_mip_solution_t<i_t, f_t>>(
+      map_proto_to_mip_solution<i_t, f_t>(dl.response->mip_solution()));
+  }
+  result.success = true;
+  return result;
+}
+
+// =============================================================================
+// Polling helper
+// =============================================================================
+
+grpc_client_t::poll_result_t grpc_client_t::poll_for_completion(const std::string& job_id)
+{
+  poll_result_t poll_result;
+
+  int poll_count = 0;
+  int poll_ms    = std::max(config_.poll_interval_ms, 1);
+  int max_polls  = (config_.timeout_seconds * 1000) / poll_ms;
+
+  int64_t incumbent_next_index = 0;
+  auto last_incumbent_poll     = std::chrono::steady_clock::now();
+  bool cancel_requested        = false;
+
+  while (poll_count < max_polls) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
+
+    if (cancel_requested) {
+      cancel_job(job_id);
+      poll_result.cancelled_by_callback = true;
+      poll_result.error_message         = "Cancelled by incumbent callback";
+      return poll_result;
+    }
+
+    if (config_.incumbent_callback) {
+      auto now = std::chrono::steady_clock::now();
+      auto ms_since_last =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - last_incumbent_poll).count();
+      if (ms_since_last >= config_.incumbent_poll_interval_ms) {
+        auto inc_result = get_incumbents(job_id, incumbent_next_index, 0);
+        if (inc_result.success) {
+          for (const auto& inc : inc_result.incumbents) {
+            bool should_continue =
+              config_.incumbent_callback(inc.index, inc.objective, inc.assignment);
+            if (!should_continue) {
+              cancel_requested = true;
+              break;
+            }
+          }
+          incumbent_next_index = inc_result.next_index;
+        }
+        last_incumbent_poll = now;
+      }
+    }
+
+    auto status_result = check_status(job_id);
+    if (!status_result.success) {
+      poll_result.error_message = status_result.error_message;
+      return poll_result;
+    }
+
+    switch (status_result.status) {
+      case job_status_t::COMPLETED: poll_result.completed = true; break;
+      case job_status_t::FAILED:
+        poll_result.error_message = "Job failed: " + status_result.message;
+        return poll_result;
+      case job_status_t::CANCELLED:
+        poll_result.error_message = "Job was cancelled";
+        return poll_result;
+      default: break;
+    }
+
+    if (poll_result.completed) break;
+    poll_count++;
+  }
+
+  // Drain any incumbents that arrived between the last poll and job completion.
+  if (config_.incumbent_callback && poll_result.completed) {
+    auto inc_result = get_incumbents(job_id, incumbent_next_index, 0);
+    if (inc_result.success) {
+      for (const auto& inc : inc_result.incumbents) {
+        config_.incumbent_callback(inc.index, inc.objective, inc.assignment);
+      }
+    }
+  }
+
+  if (!poll_result.completed && poll_result.error_message.empty()) {
+    poll_result.error_message = "Timeout waiting for job completion";
+  }
+
+  return poll_result;
+}
+
+// =============================================================================
+// End-to-end solve helpers
+// =============================================================================
+
+template <typename i_t, typename f_t>
+remote_lp_result_t<i_t, f_t> grpc_client_t::solve_lp(
+  const cpu_optimization_problem_t<i_t, f_t>& problem,
+  const pdlp_solver_settings_t<i_t, f_t>& settings)
+{
+  auto solve_t0 = std::chrono::steady_clock::now();
+
+  auto sub = submit_lp(problem, settings);
+  if (!sub.success) { return {.error_message = sub.error_message}; }
+
+  start_log_streaming(sub.job_id);
+  auto poll = poll_for_completion(sub.job_id);
+  stop_log_streaming();
+
+  if (!poll.completed) { return {.error_message = poll.error_message}; }
+
+  auto result = get_lp_result<i_t, f_t>(sub.job_id);
+  if (result.success) { delete_job(sub.job_id); }
+
+  GRPC_CLIENT_THROUGHPUT_LOG(config_, "end_to_end_lp", 0, solve_t0);
+
+  return result;
+}
+
+template <typename i_t, typename f_t>
+remote_mip_result_t<i_t, f_t> grpc_client_t::solve_mip(
+  const cpu_optimization_problem_t<i_t, f_t>& problem,
+  const mip_solver_settings_t<i_t, f_t>& settings,
+  bool enable_incumbents)
+{
+  auto solve_t0 = std::chrono::steady_clock::now();
+
+  bool track_incumbents = enable_incumbents || (config_.incumbent_callback != nullptr);
+
+  auto sub = submit_mip(problem, settings, track_incumbents);
+  if (!sub.success) { return {.error_message = sub.error_message}; }
+
+  start_log_streaming(sub.job_id);
+  auto poll = poll_for_completion(sub.job_id);
+  stop_log_streaming();
+
+  if (!poll.completed) { return {.error_message = poll.error_message}; }
+
+  auto result = get_mip_result<i_t, f_t>(sub.job_id);
+  if (result.success) { delete_job(sub.job_id); }
+
+  GRPC_CLIENT_THROUGHPUT_LOG(config_, "end_to_end_mip", 0, solve_t0);
+
+  return result;
+}
+
+// =============================================================================
+// Chunked Transfer utils (upload and download)
 // =============================================================================
 
 template <typename i_t, typename f_t>
@@ -535,9 +760,9 @@ bool grpc_client_t::upload_chunked_arrays(const cpu_optimization_problem_t<i_t, 
   // --- 2. Build chunk requests directly from problem arrays ---
   int64_t chunk_data_budget = config_.chunk_size_bytes;
   if (chunk_data_budget <= 0) { chunk_data_budget = 1LL * 1024 * 1024; }
-
-  const int64_t proto_overhead = 64;
-  if (chunk_data_budget > proto_overhead) { chunk_data_budget -= proto_overhead; }
+  if (server_max_message_bytes_ > 0 && chunk_data_budget > server_max_message_bytes_ * 9 / 10) {
+    chunk_data_budget = server_max_message_bytes_ * 9 / 10;
+  }
 
   auto chunk_requests = build_array_chunk_requests(problem, upload_id, chunk_data_budget);
 
@@ -704,8 +929,9 @@ bool grpc_client_t::download_chunked_result(const std::string& job_id,
   // --- 2. Fetch each array via GetResultChunk RPCs ---
   int64_t chunk_data_budget = config_.chunk_size_bytes;
   if (chunk_data_budget <= 0) { chunk_data_budget = 1LL * 1024 * 1024; }
-  const int64_t proto_overhead = 64;
-  if (chunk_data_budget > proto_overhead) { chunk_data_budget -= proto_overhead; }
+  if (server_max_message_bytes_ > 0 && chunk_data_budget > server_max_message_bytes_ * 9 / 10) {
+    chunk_data_budget = server_max_message_bytes_ * 9 / 10;
+  }
 
   int total_chunks             = 0;
   int64_t total_bytes_received = 0;
@@ -782,476 +1008,6 @@ bool grpc_client_t::download_chunked_result(const std::string& job_id,
                           << total_chunks << " chunks, " << total_bytes_received << " bytes");
 
   return true;
-}
-
-// =============================================================================
-// Submit and Get Result Templates (Async Operations)
-// =============================================================================
-
-template <typename i_t, typename f_t>
-submit_result_t grpc_client_t::submit_lp(const cpu_optimization_problem_t<i_t, f_t>& problem,
-                                         const pdlp_solver_settings_t<i_t, f_t>& settings)
-{
-  submit_result_t result;
-
-  GRPC_CLIENT_DEBUG_LOG(config_, "[grpc_client] submit_lp: starting submission");
-
-  if (!is_connected()) {
-    result.error_message = "Not connected to server";
-    GRPC_CLIENT_DEBUG_LOG(config_, "[grpc_client] submit_lp: not connected to server");
-    return result;
-  }
-
-  // Check if chunked array upload should be used
-  bool use_chunked = false;
-  if (chunked_array_threshold_bytes_ >= 0) {
-    size_t est  = estimate_problem_proto_size(problem);
-    use_chunked = (static_cast<int64_t>(est) > chunked_array_threshold_bytes_);
-    GRPC_CLIENT_DEBUG_LOG(config_,
-                          "[grpc_client] submit_lp: estimated_size="
-                            << est << " threshold=" << chunked_array_threshold_bytes_
-                            << " use_chunked=" << use_chunked);
-  }
-
-  if (use_chunked) {
-    cuopt::remote::ChunkedProblemHeader header;
-    populate_chunked_header_lp(problem, settings, &header);
-    if (!upload_chunked_arrays(problem, header, result.job_id)) {
-      result.error_message = last_error_;
-      return result;
-    }
-  } else {
-    auto submit_request = build_lp_submit_request(problem, settings);
-    if (!submit_unary(submit_request, result.job_id)) {
-      result.error_message = last_error_;
-      return result;
-    }
-  }
-
-  GRPC_CLIENT_DEBUG_LOG(config_,
-                        "[grpc_client] submit_lp: job submitted, job_id=" << result.job_id);
-  result.success = true;
-  return result;
-}
-
-template <typename i_t, typename f_t>
-submit_result_t grpc_client_t::submit_mip(const cpu_optimization_problem_t<i_t, f_t>& problem,
-                                          const mip_solver_settings_t<i_t, f_t>& settings,
-                                          bool enable_incumbents)
-{
-  submit_result_t result;
-
-  GRPC_CLIENT_DEBUG_LOG(config_,
-                        "[grpc_client] submit_mip: starting submission"
-                          << (enable_incumbents ? " (incumbents enabled)" : ""));
-
-  if (!is_connected()) {
-    result.error_message = "Not connected to server";
-    return result;
-  }
-
-  bool use_chunked = false;
-  if (chunked_array_threshold_bytes_ >= 0) {
-    size_t est  = estimate_problem_proto_size(problem);
-    use_chunked = (static_cast<int64_t>(est) > chunked_array_threshold_bytes_);
-    GRPC_CLIENT_DEBUG_LOG(config_,
-                          "[grpc_client] submit_mip: estimated_size="
-                            << est << " threshold=" << chunked_array_threshold_bytes_
-                            << " use_chunked=" << use_chunked);
-  }
-
-  if (use_chunked) {
-    cuopt::remote::ChunkedProblemHeader header;
-    populate_chunked_header_mip(problem, settings, enable_incumbents, &header);
-    if (!upload_chunked_arrays(problem, header, result.job_id)) {
-      result.error_message = last_error_;
-      return result;
-    }
-  } else {
-    auto submit_request = build_mip_submit_request(problem, settings, enable_incumbents);
-    if (!submit_unary(submit_request, result.job_id)) {
-      result.error_message = last_error_;
-      return result;
-    }
-  }
-
-  GRPC_CLIENT_DEBUG_LOG(
-    config_, "[grpc_client] submit_mip: job submitted successfully, job_id=" << result.job_id);
-  result.success = true;
-  return result;
-}
-
-template <typename i_t, typename f_t>
-remote_lp_result_t<i_t, f_t> grpc_client_t::get_lp_result(const std::string& job_id)
-{
-  remote_lp_result_t<i_t, f_t> result;
-
-  if (!is_connected()) {
-    result.error_message = "Not connected to server";
-    return result;
-  }
-
-  downloaded_result_t dl;
-  if (!get_result_or_download(job_id, dl)) {
-    result.error_message = last_error_;
-    return result;
-  }
-
-  if (dl.was_chunked) {
-    result.solution = std::make_unique<cpu_lp_solution_t<i_t, f_t>>(
-      chunked_result_to_lp_solution<i_t, f_t>(*dl.chunked_header, dl.chunked_arrays));
-  } else {
-    result.solution = std::make_unique<cpu_lp_solution_t<i_t, f_t>>(
-      map_proto_to_lp_solution<i_t, f_t>(dl.response->lp_solution()));
-  }
-  result.success = true;
-  return result;
-}
-
-template <typename i_t, typename f_t>
-remote_mip_result_t<i_t, f_t> grpc_client_t::get_mip_result(const std::string& job_id)
-{
-  remote_mip_result_t<i_t, f_t> result;
-
-  if (!is_connected()) {
-    result.error_message = "Not connected to server";
-    return result;
-  }
-
-  downloaded_result_t dl;
-  if (!get_result_or_download(job_id, dl)) {
-    result.error_message = last_error_;
-    return result;
-  }
-
-  if (dl.was_chunked) {
-    result.solution = std::make_unique<cpu_mip_solution_t<i_t, f_t>>(
-      chunked_result_to_mip_solution<i_t, f_t>(*dl.chunked_header, dl.chunked_arrays));
-  } else {
-    result.solution = std::make_unique<cpu_mip_solution_t<i_t, f_t>>(
-      map_proto_to_mip_solution<i_t, f_t>(dl.response->mip_solution()));
-  }
-  result.success = true;
-  return result;
-}
-
-// =============================================================================
-// Blocking Solve Operations
-// =============================================================================
-
-// LP solve implementation
-template <typename i_t, typename f_t>
-remote_lp_result_t<i_t, f_t> grpc_client_t::solve_lp(
-  const cpu_optimization_problem_t<i_t, f_t>& problem,
-  const pdlp_solver_settings_t<i_t, f_t>& settings)
-{
-  remote_lp_result_t<i_t, f_t> result;
-  auto solve_t0 = std::chrono::steady_clock::now();
-
-  if (!is_connected()) {
-    result.error_message = "Not connected to server";
-    return result;
-  }
-
-  // 1. Submit job (chunked arrays or serialized protobuf based on size)
-  std::string job_id;
-  bool use_chunked = false;
-  size_t est       = 0;
-  if (chunked_array_threshold_bytes_ >= 0) {
-    est         = estimate_problem_proto_size(problem);
-    use_chunked = (static_cast<int64_t>(est) > chunked_array_threshold_bytes_);
-  }
-
-  if (use_chunked) {
-    cuopt::remote::ChunkedProblemHeader header;
-    populate_chunked_header_lp(problem, settings, &header);
-    if (!upload_chunked_arrays(problem, header, job_id)) {
-      result.error_message = last_error_;
-      return result;
-    }
-  } else {
-    auto submit_request = build_lp_submit_request(problem, settings);
-    if (!submit_unary(submit_request, job_id)) {
-      result.error_message = last_error_;
-      return result;
-    }
-  }
-
-  start_log_streaming(job_id);
-
-  bool completed = false;
-  std::string completion_error;
-
-  if (config_.use_wait) {
-    CUOPT_LOG_INFO("[grpc_client] Using WaitForCompletion RPC for job %s", job_id.c_str());
-    auto wait_result = wait_for_completion(job_id);
-    if (!wait_result.success) {
-      stop_log_streaming();
-      result.error_message = wait_result.error_message;
-      return result;
-    }
-    switch (wait_result.status) {
-      case job_status_t::COMPLETED: completed = true; break;
-      case job_status_t::FAILED: completion_error = "Job failed: " + wait_result.message; break;
-      case job_status_t::CANCELLED: completion_error = "Job was cancelled"; break;
-      default:
-        completion_error =
-          "Unexpected job status: " + std::string(job_status_to_string(wait_result.status));
-        break;
-    }
-  } else {
-    CUOPT_LOG_INFO("[grpc_client] Using polling (CheckStatus) for job %s", job_id.c_str());
-    int poll_count = 0;
-    int poll_ms    = std::max(config_.poll_interval_ms, 1);
-    int max_polls  = (config_.timeout_seconds * 1000) / poll_ms;
-
-    while (!completed && poll_count < max_polls) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
-
-      grpc::ClientContext status_context;
-      auto status_request = build_status_request(job_id);
-      cuopt::remote::StatusResponse status_response;
-      auto status_status =
-        impl_->stub->CheckStatus(&status_context, status_request, &status_response);
-
-      if (!status_status.ok()) {
-        stop_log_streaming();
-        result.error_message = "CheckStatus failed: " + status_status.error_message();
-        return result;
-      }
-
-      if (status_response.max_message_bytes() > 0) {
-        server_max_message_bytes_ = status_response.max_message_bytes();
-      }
-
-      switch (status_response.job_status()) {
-        case cuopt::remote::COMPLETED: completed = true; break;
-        case cuopt::remote::FAILED:
-          completion_error = "Job failed: " + status_response.message();
-          break;
-        case cuopt::remote::CANCELLED: completion_error = "Job was cancelled"; break;
-        default: break;
-      }
-
-      if (!completion_error.empty()) break;
-      poll_count++;
-    }
-
-    if (!completed && completion_error.empty()) {
-      completion_error = "Timeout waiting for job completion";
-    }
-  }
-
-  stop_log_streaming();
-
-  if (!completed) {
-    result.error_message = completion_error;
-    return result;
-  }
-
-  downloaded_result_t dl;
-  if (!get_result_or_download(job_id, dl)) {
-    result.error_message = last_error_;
-    return result;
-  }
-
-  if (dl.was_chunked) {
-    result.solution = std::make_unique<cpu_lp_solution_t<i_t, f_t>>(
-      chunked_result_to_lp_solution<i_t, f_t>(*dl.chunked_header, dl.chunked_arrays));
-  } else {
-    result.solution = std::make_unique<cpu_lp_solution_t<i_t, f_t>>(
-      map_proto_to_lp_solution<i_t, f_t>(dl.response->lp_solution()));
-  }
-  result.success = true;
-
-  GRPC_CLIENT_THROUGHPUT_LOG(config_, "end_to_end_lp", static_cast<int64_t>(est), solve_t0);
-
-  return result;
-}
-
-// MIP solve implementation
-template <typename i_t, typename f_t>
-remote_mip_result_t<i_t, f_t> grpc_client_t::solve_mip(
-  const cpu_optimization_problem_t<i_t, f_t>& problem,
-  const mip_solver_settings_t<i_t, f_t>& settings,
-  bool enable_incumbents)
-{
-  remote_mip_result_t<i_t, f_t> result;
-  auto solve_t0 = std::chrono::steady_clock::now();
-
-  if (!is_connected()) {
-    result.error_message = "Not connected to server";
-    return result;
-  }
-
-  // Enable incumbents if callback is set
-  bool track_incumbents = enable_incumbents || (config_.incumbent_callback != nullptr);
-
-  // 1. Submit job (chunked arrays or serialized protobuf based on size)
-  std::string job_id;
-  bool use_chunked = false;
-  size_t est       = 0;
-  if (chunked_array_threshold_bytes_ >= 0) {
-    est         = estimate_problem_proto_size(problem);
-    use_chunked = (static_cast<int64_t>(est) > chunked_array_threshold_bytes_);
-  }
-
-  if (use_chunked) {
-    cuopt::remote::ChunkedProblemHeader header;
-    populate_chunked_header_mip(problem, settings, track_incumbents, &header);
-    if (!upload_chunked_arrays(problem, header, job_id)) {
-      result.error_message = last_error_;
-      return result;
-    }
-  } else {
-    auto submit_request = build_mip_submit_request(problem, settings, track_incumbents);
-    if (!submit_unary(submit_request, job_id)) {
-      result.error_message = last_error_;
-      return result;
-    }
-  }
-
-  start_log_streaming(job_id);
-
-  bool cancel_requested = false;
-  bool completed        = false;
-  std::string completion_error;
-
-  if (config_.use_wait) {
-    // Use blocking WaitForCompletion RPC
-    // Note: Incumbent callbacks are not supported in wait mode; use polling mode instead
-    CUOPT_LOG_INFO("[grpc_client] Using WaitForCompletion RPC for job %s", job_id.c_str());
-    auto wait_result = wait_for_completion(job_id);
-    if (!wait_result.success) {
-      stop_log_streaming();
-      result.error_message = wait_result.error_message;
-      return result;
-    }
-
-    switch (wait_result.status) {
-      case job_status_t::COMPLETED: completed = true; break;
-      case job_status_t::FAILED: completion_error = "Job failed: " + wait_result.message; break;
-      case job_status_t::CANCELLED: completion_error = "Job was cancelled"; break;
-      default:
-        completion_error =
-          "Unexpected job status: " + std::string(job_status_to_string(wait_result.status));
-        break;
-    }
-  } else {
-    // Poll for completion
-    CUOPT_LOG_INFO("[grpc_client] Using polling (CheckStatus) for job %s", job_id.c_str());
-    int poll_count = 0;
-    int poll_ms    = std::max(config_.poll_interval_ms, 1);
-    int max_polls  = (config_.timeout_seconds * 1000) / poll_ms;
-
-    // Track next incumbent index for polling
-    int64_t incumbent_next_index = 0;
-    auto last_incumbent_poll     = std::chrono::steady_clock::now();
-
-    while (!completed && poll_count < max_polls) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
-
-      // Check if incumbent callback requested cancellation
-      if (cancel_requested) {
-        cancel_job(job_id);
-        stop_log_streaming();
-        result.error_message = "Cancelled by incumbent callback";
-        return result;
-      }
-
-      // Poll for incumbents and invoke callbacks on main thread
-      if (config_.incumbent_callback) {
-        auto now = std::chrono::steady_clock::now();
-        auto ms_since_last =
-          std::chrono::duration_cast<std::chrono::milliseconds>(now - last_incumbent_poll).count();
-        if (ms_since_last >= config_.incumbent_poll_interval_ms) {
-          auto inc_result = get_incumbents(job_id, incumbent_next_index, 0);
-          if (inc_result.success) {
-            for (const auto& inc : inc_result.incumbents) {
-              bool should_continue =
-                config_.incumbent_callback(inc.index, inc.objective, inc.assignment);
-              if (!should_continue) {
-                cancel_requested = true;
-                break;
-              }
-            }
-            incumbent_next_index = inc_result.next_index;
-          }
-          last_incumbent_poll = now;
-        }
-      }
-
-      grpc::ClientContext status_context;
-      auto status_request = build_status_request(job_id);
-      cuopt::remote::StatusResponse status_response;
-      auto status_status =
-        impl_->stub->CheckStatus(&status_context, status_request, &status_response);
-
-      if (!status_status.ok()) {
-        stop_log_streaming();
-        result.error_message = "CheckStatus failed: " + status_status.error_message();
-        return result;
-      }
-
-      // Track server-reported limits
-      if (status_response.max_message_bytes() > 0) {
-        server_max_message_bytes_ = status_response.max_message_bytes();
-      }
-
-      switch (status_response.job_status()) {
-        case cuopt::remote::COMPLETED: completed = true; break;
-        case cuopt::remote::FAILED:
-          completion_error = "Job failed: " + status_response.message();
-          break;
-        case cuopt::remote::CANCELLED: completion_error = "Job was cancelled"; break;
-        default: break;  // QUEUED or PROCESSING, continue polling
-      }
-
-      if (!completion_error.empty()) break;
-      poll_count++;
-    }
-
-    // Final incumbent poll to catch any remaining incumbents before completion
-    if (config_.incumbent_callback && completed) {
-      auto inc_result = get_incumbents(job_id, incumbent_next_index, 0);
-      if (inc_result.success) {
-        for (const auto& inc : inc_result.incumbents) {
-          config_.incumbent_callback(inc.index, inc.objective, inc.assignment);
-        }
-      }
-    }
-
-    if (!completed && completion_error.empty()) {
-      completion_error = "Timeout waiting for job completion";
-    }
-  }
-
-  stop_log_streaming();
-
-  if (!completed) {
-    result.error_message = completion_error;
-    return result;
-  }
-
-  // 6. Get result (uses chunked download if needed)
-  downloaded_result_t dl;
-  if (!get_result_or_download(job_id, dl)) {
-    result.error_message = last_error_;
-    return result;
-  }
-
-  if (dl.was_chunked) {
-    result.solution = std::make_unique<cpu_mip_solution_t<i_t, f_t>>(
-      chunked_result_to_mip_solution<i_t, f_t>(*dl.chunked_header, dl.chunked_arrays));
-  } else {
-    result.solution = std::make_unique<cpu_mip_solution_t<i_t, f_t>>(
-      map_proto_to_mip_solution<i_t, f_t>(dl.response->mip_solution()));
-  }
-  result.success = true;
-
-  GRPC_CLIENT_THROUGHPUT_LOG(config_, "end_to_end_mip", static_cast<int64_t>(est), solve_t0);
-
-  return result;
 }
 
 // Explicit template instantiations

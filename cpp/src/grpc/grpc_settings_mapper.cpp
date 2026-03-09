@@ -104,7 +104,6 @@ void map_pdlp_settings_to_proto(const pdlp_solver_settings_t<i_t, f_t>& settings
   pb_settings->set_crossover(settings.crossover);
   pb_settings->set_num_gpus(settings.num_gpus);
 
-  // Advanced options
   pb_settings->set_per_constraint_residual(settings.per_constraint_residual);
   pb_settings->set_cudss_deterministic(settings.cudss_deterministic);
   pb_settings->set_folding(settings.folding);
@@ -156,7 +155,6 @@ void map_proto_to_pdlp_settings(const cuopt::remote::PDLPSolverSettings& pb_sett
   settings.crossover            = pb_settings.crossover();
   settings.num_gpus             = pb_settings.num_gpus();
 
-  // Advanced options
   settings.per_constraint_residual    = pb_settings.per_constraint_residual();
   settings.cudss_deterministic        = pb_settings.cudss_deterministic();
   settings.folding                    = pb_settings.folding();

@@ -106,7 +106,6 @@ message PDLPSolverSettings {
   bool crossover = 27;
   int32 num_gpus = 28;
 
-  // Advanced options
   bool per_constraint_residual = 30;
   bool cudss_deterministic = 31;
   int32 folding = 32;

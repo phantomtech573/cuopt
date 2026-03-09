@@ -81,21 +81,51 @@ void result_retrieval_thread()
         int worker_idx = job_queue[i].worker_index;
 
         if (worker_idx >= 0) {
-          std::vector<uint8_t> job_data;
-          {
-            std::lock_guard<std::mutex> lock(pending_data_mutex);
-            auto it = pending_job_data.find(job_id);
-            if (it != pending_job_data.end()) {
-              job_data = std::move(it->second);
-              pending_job_data.erase(it);
-            }
-          }
+          bool is_chunked = job_queue[i].is_chunked.load();
+          bool send_ok    = false;
+          bool has_data   = false;
 
-          if (!job_data.empty()) {
-            auto pipe_t0 = std::chrono::steady_clock::now();
-            if (send_job_data_pipe(worker_idx, job_data)) {
-              job_queue[i].data_sent = true;
-              if (config.verbose) {
+          if (is_chunked) {
+            PendingChunkedUpload chunked;
+            {
+              std::lock_guard<std::mutex> lock(pending_data_mutex);
+              auto it = pending_chunked_data.find(job_id);
+              if (it != pending_chunked_data.end()) {
+                chunked  = std::move(it->second);
+                has_data = true;
+                pending_chunked_data.erase(it);
+              }
+            }
+            if (has_data) {
+              int to_fd    = worker_pipes[worker_idx].to_worker_fd;
+              auto pipe_t0 = std::chrono::steady_clock::now();
+              send_ok      = write_chunked_request_to_pipe(to_fd, chunked.header, chunked.chunks);
+              if (send_ok && config.verbose) {
+                auto pipe_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                 std::chrono::steady_clock::now() - pipe_t0)
+                                 .count();
+                std::cout << "[THROUGHPUT] phase=pipe_chunked_send chunks=" << chunked.chunks.size()
+                          << " elapsed_ms=" << std::fixed << std::setprecision(1)
+                          << (pipe_us / 1000.0) << "\n";
+                std::cout << "[Server] Streamed " << chunked.chunks.size() << " chunks to worker "
+                          << worker_idx << " for job " << job_id << "\n";
+              }
+            }
+          } else {
+            std::vector<uint8_t> job_data;
+            {
+              std::lock_guard<std::mutex> lock(pending_data_mutex);
+              auto it = pending_job_data.find(job_id);
+              if (it != pending_job_data.end()) {
+                job_data = std::move(it->second);
+                has_data = true;
+                pending_job_data.erase(it);
+              }
+            }
+            if (has_data) {
+              auto pipe_t0 = std::chrono::steady_clock::now();
+              send_ok      = send_job_data_pipe(worker_idx, job_data);
+              if (send_ok && config.verbose) {
                 auto pipe_us = std::chrono::duration_cast<std::chrono::microseconds>(
                                  std::chrono::steady_clock::now() - pipe_t0)
                                  .count();
@@ -109,6 +139,12 @@ void result_retrieval_thread()
                 std::cout << "[Server] Sent " << job_data.size() << " bytes to worker "
                           << worker_idx << " for job " << job_id << "\n";
               }
+            }
+          }
+
+          if (has_data) {
+            if (send_ok) {
+              job_queue[i].data_sent = true;
             } else {
               std::cerr << "[Server] Failed to send job data to worker " << worker_idx << "\n";
               job_queue[i].cancelled = true;
@@ -122,10 +158,10 @@ void result_retrieval_thread()
     for (size_t i = 0; i < MAX_RESULTS; ++i) {
       if (result_queue[i].ready && !result_queue[i].retrieved) {
         std::string job_id(result_queue[i].job_id);
-        uint32_t result_status = result_queue[i].status;
-        bool success           = (result_status == 0);
-        bool cancelled         = (result_status == 2);
-        int worker_idx         = result_queue[i].worker_index;
+        ResultStatus result_status = result_queue[i].status;
+        bool success               = (result_status == RESULT_SUCCESS);
+        bool cancelled             = (result_status == RESULT_CANCELLED);
+        int worker_idx             = result_queue[i].worker_index;
         if (config.verbose) {
           std::cout << "[Server] Detected ready result_slot=" << i << " for job " << job_id
                     << " status=" << result_status << " data_size=" << result_queue[i].data_size
@@ -133,17 +169,21 @@ void result_retrieval_thread()
           std::cout.flush();
         }
 
-        std::vector<uint8_t> result_data;
         std::string error_message;
+
+        cuopt::remote::ChunkedResultHeader hdr;
+        std::map<int32_t, std::vector<uint8_t>> arrays;
 
         if (success && result_queue[i].data_size > 0) {
           if (config.verbose) {
-            std::cout << "[Server] Reading " << result_queue[i].data_size
-                      << " bytes from worker pipe for job " << job_id << "\n";
+            std::cout << "[Server] Reading streamed result from worker pipe for job " << job_id
+                      << "\n";
             std::cout.flush();
           }
+          int from_fd       = worker_pipes[worker_idx].from_worker_fd;
           auto pipe_recv_t0 = std::chrono::steady_clock::now();
-          if (!recv_result_pipe(worker_idx, result_queue[i].data_size, result_data)) {
+          bool read_ok      = read_result_from_pipe(from_fd, hdr, arrays);
+          if (!read_ok) {
             error_message = "Failed to read result data from pipe";
             success       = false;
           }
@@ -151,10 +191,14 @@ void result_retrieval_thread()
             auto pipe_us = std::chrono::duration_cast<std::chrono::microseconds>(
                              std::chrono::steady_clock::now() - pipe_recv_t0)
                              .count();
+            int64_t total_bytes = 0;
+            for (const auto& [fid, data] : arrays) {
+              total_bytes += data.size();
+            }
             double pipe_sec = pipe_us / 1e6;
-            double pipe_mb  = static_cast<double>(result_data.size()) / (1024.0 * 1024.0);
+            double pipe_mb  = static_cast<double>(total_bytes) / (1024.0 * 1024.0);
             double pipe_mbs = (pipe_sec > 0.0) ? (pipe_mb / pipe_sec) : 0.0;
-            std::cout << "[THROUGHPUT] phase=pipe_result_recv bytes=" << result_data.size()
+            std::cout << "[THROUGHPUT] phase=pipe_result_recv bytes=" << total_bytes
                       << " elapsed_ms=" << std::fixed << std::setprecision(1) << (pipe_us / 1000.0)
                       << " throughput_mb_s=" << std::setprecision(1) << pipe_mbs << "\n";
             std::cout.flush();
@@ -168,18 +212,14 @@ void result_retrieval_thread()
           auto it = job_tracker.find(job_id);
           if (it != job_tracker.end()) {
             if (success) {
-              it->second.status = JobStatus::COMPLETED;
-              cuopt::remote::ChunkedResultHeader hdr;
-              std::map<int32_t, std::vector<uint8_t>> arrays;
-              if (!deserialize_result_pipe_blob(
-                    result_data.data(), result_data.size(), hdr, arrays)) {
-                it->second.status        = JobStatus::FAILED;
-                it->second.error_message = "Failed to deserialize result pipe blob";
-              } else {
-                it->second.result_header     = std::move(hdr);
-                it->second.result_arrays     = std::move(arrays);
-                it->second.result_size_bytes = static_cast<int64_t>(result_data.size());
+              it->second.status   = JobStatus::COMPLETED;
+              int64_t total_bytes = 0;
+              for (const auto& [fid, data] : arrays) {
+                total_bytes += data.size();
               }
+              it->second.result_header     = std::move(hdr);
+              it->second.result_arrays     = std::move(arrays);
+              it->second.result_size_bytes = total_bytes;
 
               if (config.verbose) {
                 std::cout << "[Server] Marked job COMPLETED in job_tracker: " << job_id
@@ -214,17 +254,12 @@ void result_retrieval_thread()
             auto waiter = wit->second;
             {
               std::lock_guard<std::mutex> waiter_lock(waiter->mutex);
-              waiter->result_data   = std::move(result_data);
               waiter->error_message = error_message;
               waiter->success       = success;
               waiter->ready         = true;
             }
             waiter->cv.notify_all();
             waiting_threads.erase(wit);
-          } else if (config.verbose) {
-            std::cout << "[Server] WARNING: result for unknown job_id (not in job_tracker): "
-                      << job_id << "\n";
-            std::cout.flush();
           }
         }
 

@@ -8,9 +8,7 @@
 #include <cuopt_remote.pb.h>
 #include <cuopt_remote_service.pb.h>
 
-#include <cstdint>
 #include <string>
-#include <vector>
 
 namespace cuopt::linear_programming {
 
@@ -106,41 +104,5 @@ inline cuopt::remote::DeleteRequest build_delete_request(const std::string& job_
   request.set_job_id(job_id);
   return request;
 }
-
-/**
- * @brief Build a gRPC StreamLogsRequest.
- *
- * Simple helper to create a log streaming request.
- *
- * @param job_id The job ID to stream logs for
- * @param from_byte Optional starting byte offset
- * @return StreamLogsRequest protobuf message
- */
-inline cuopt::remote::StreamLogsRequest build_stream_logs_request(const std::string& job_id,
-                                                                  int64_t from_byte = 0)
-{
-  cuopt::remote::StreamLogsRequest request;
-  request.set_job_id(job_id);
-  request.set_from_byte(from_byte);
-  return request;
-}
-
-/**
- * @brief Build SendArrayChunkRequest messages for chunked upload of problem arrays.
- *
- * Iterates the problem's host arrays directly and slices each array into
- * chunk-sized SendArrayChunkRequest protobuf messages. The caller simply
- * iterates the returned vector and sends each message via SendArrayChunk RPC.
- *
- * @param problem The problem whose arrays to chunk
- * @param upload_id The upload session ID from StartChunkedUpload
- * @param chunk_size_bytes Maximum raw data bytes per chunk message
- * @return Vector of ready-to-send SendArrayChunkRequest protobuf messages
- */
-template <typename i_t, typename f_t>
-std::vector<cuopt::remote::SendArrayChunkRequest> build_array_chunk_requests(
-  const cpu_optimization_problem_t<i_t, f_t>& problem,
-  const std::string& upload_id,
-  int64_t chunk_size_bytes);
 
 }  // namespace cuopt::linear_programming

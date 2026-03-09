@@ -52,9 +52,8 @@ void grpc_test_mark_as_connected(class grpc_client_t& client);
  */
 struct grpc_client_config_t {
   std::string server_address = "localhost:8765";
-  int poll_interval_ms       = 1000;   // How often to poll for status (when use_wait=false)
+  int poll_interval_ms       = 1000;   // How often to poll for job status
   int timeout_seconds        = 3600;   // Max time to wait for job completion (1 hour)
-  bool use_wait              = false;  // Use WaitForCompletion RPC instead of polling CheckStatus
   bool stream_logs           = false;  // Whether to stream logs from server
   std::function<void(const std::string&)> log_callback = nullptr;  // Called for each log line
 
@@ -62,7 +61,7 @@ struct grpc_client_config_t {
   // new best-feasible (incumbent) solution.  Parameters: index, objective value,
   // solution vector.  Return true to continue solving, or false to request
   // early termination (e.g. the objective is good enough for the caller's
-  // purposes).  Only supported in polling mode (use_wait=false).
+  // purposes).
   std::function<bool(int64_t index, double objective, const std::vector<double>& solution)>
     incumbent_callback           = nullptr;
   int incumbent_poll_interval_ms = 1000;  // How often to poll for new incumbents
@@ -74,10 +73,15 @@ struct grpc_client_config_t {
   std::string tls_client_key;   // PEM-encoded client private key (for mTLS)
 
   // gRPC max message size (used for unary SubmitJob and result download decisions).
+  // Clamped at construction to [4 MiB, 2 GiB - 1 MiB] (protobuf serialization limit).
   int64_t max_message_bytes = 256LL * 1024 * 1024;  // 256 MiB
 
   // Chunk size for chunked array upload and chunked result download.
   int64_t chunk_size_bytes = 16LL * 1024 * 1024;  // 16 MiB
+
+  // gRPC keepalive — periodic HTTP/2 PINGs to detect dead connections.
+  int keepalive_time_ms    = 30000;  // send PING every 30s of inactivity
+  int keepalive_timeout_ms = 10000;  // wait 10s for PONG before declaring dead
 
   // --- Test / debug options (not intended for production use) -----------------
 
@@ -216,7 +220,6 @@ class grpc_client_t {
   // Allow test helpers to access internal implementation for mock injection
   friend void grpc_test_inject_mock_stub(grpc_client_t&, std::shared_ptr<void>);
   friend void grpc_test_mark_as_connected(grpc_client_t&);
-  friend int64_t grpc_test_compute_chunk_size(int64_t, int64_t, int64_t);
 
  public:
   /**
@@ -406,6 +409,14 @@ class grpc_client_t {
   void start_log_streaming(const std::string& job_id);
   void stop_log_streaming();
 
+  // Shared polling loop used by solve_lp and solve_mip.
+  struct poll_result_t {
+    bool completed             = false;
+    bool cancelled_by_callback = false;
+    std::string error_message;
+  };
+  poll_result_t poll_for_completion(const std::string& job_id);
+
   std::unique_ptr<std::thread> log_thread_;
   std::atomic<bool> stop_logs_{false};
 
@@ -441,11 +452,6 @@ class grpc_client_t {
    *        N × GetResultChunk + FinishChunkedDownload).
    */
   bool download_chunked_result(const std::string& job_id, downloaded_result_t& result_out);
-
-  /**
-   * @brief Compute optimal chunk size based on known limits.
-   */
-  static int64_t compute_chunk_size(int64_t server_max, int64_t config_max, int64_t preferred);
 
   // =========================================================================
   // Chunked Array Upload (for large problems)

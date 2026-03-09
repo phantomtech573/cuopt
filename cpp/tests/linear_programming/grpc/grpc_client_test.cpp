@@ -334,13 +334,12 @@ class MockCuOptStub : public cuopt::remote::CuOptRemoteService::StubInterface {
  */
 class GrpcClientTest : public ::testing::Test {
  protected:
-  std::shared_ptr<MockCuOptStub> mock_stub_;
+  std::shared_ptr<NiceMock<MockCuOptStub>> mock_stub_;
   std::unique_ptr<grpc_client_t> client_;
 
   void SetUp() override
   {
-    // Create a mock stub
-    mock_stub_ = std::make_shared<MockCuOptStub>();
+    mock_stub_ = std::make_shared<NiceMock<MockCuOptStub>>();
 
     // Create a client and inject the mock stub
     grpc_client_config_t config;
@@ -1094,10 +1093,9 @@ TEST_F(GrpcClientTest, SolveLP_SuccessWithPolling)
   cfg.server_address   = "mock://test";
   cfg.poll_interval_ms = 10;
   cfg.timeout_seconds  = 5;
-  cfg.use_wait         = false;
 
   auto client = std::make_unique<grpc_client_t>(cfg);
-  auto mock   = std::make_shared<MockCuOptStub>();
+  auto mock   = std::make_shared<NiceMock<MockCuOptStub>>();
   grpc_test_inject_mock_stub_typed(*client, mock);
 
   EXPECT_CALL(*mock, SubmitJob(_, _, _))
@@ -1142,12 +1140,12 @@ TEST_F(GrpcClientTest, SolveLP_SuccessWithPolling)
 TEST_F(GrpcClientTest, SolveLP_SuccessWithWait)
 {
   grpc_client_config_t cfg;
-  cfg.server_address  = "mock://test";
-  cfg.timeout_seconds = 5;
-  cfg.use_wait        = true;
+  cfg.server_address   = "mock://test";
+  cfg.poll_interval_ms = 10;
+  cfg.timeout_seconds  = 5;
 
   auto client = std::make_unique<grpc_client_t>(cfg);
-  auto mock   = std::make_shared<MockCuOptStub>();
+  auto mock   = std::make_shared<NiceMock<MockCuOptStub>>();
   grpc_test_inject_mock_stub_typed(*client, mock);
 
   EXPECT_CALL(*mock, SubmitJob(_, _, _))
@@ -1155,16 +1153,6 @@ TEST_F(GrpcClientTest, SolveLP_SuccessWithWait)
                  const cuopt::remote::SubmitJobRequest&,
                  cuopt::remote::SubmitJobResponse* resp) {
       resp->set_job_id("wait-lp-001");
-      return grpc::Status::OK;
-    });
-
-  EXPECT_CALL(*mock, WaitForCompletion(_, _, _))
-    .WillOnce([](grpc::ClientContext*,
-                 const cuopt::remote::WaitRequest& req,
-                 cuopt::remote::WaitResponse* resp) {
-      EXPECT_EQ(req.job_id(), "wait-lp-001");
-      resp->set_job_status(cuopt::remote::COMPLETED);
-      resp->set_result_size_bytes(64);
       return grpc::Status::OK;
     });
 
@@ -1206,10 +1194,9 @@ TEST_F(GrpcClientTest, SolveLP_JobFails)
   cfg.server_address   = "mock://test";
   cfg.poll_interval_ms = 10;
   cfg.timeout_seconds  = 5;
-  cfg.use_wait         = false;
 
   auto client = std::make_unique<grpc_client_t>(cfg);
-  auto mock   = std::make_shared<MockCuOptStub>();
+  auto mock   = std::make_shared<NiceMock<MockCuOptStub>>();
   grpc_test_inject_mock_stub_typed(*client, mock);
 
   EXPECT_CALL(*mock, SubmitJob(_, _, _))
@@ -1247,7 +1234,7 @@ TEST_F(GrpcClientTest, SolveLP_SubmitFails)
   cfg.timeout_seconds = 5;
 
   auto client = std::make_unique<grpc_client_t>(cfg);
-  auto mock   = std::make_shared<MockCuOptStub>();
+  auto mock   = std::make_shared<NiceMock<MockCuOptStub>>();
   grpc_test_inject_mock_stub_typed(*client, mock);
 
   EXPECT_CALL(*mock, SubmitJob(_, _, _))
@@ -1290,10 +1277,9 @@ TEST_F(GrpcClientTest, SolveMIP_Success)
   cfg.server_address   = "mock://test";
   cfg.poll_interval_ms = 10;
   cfg.timeout_seconds  = 5;
-  cfg.use_wait         = false;
 
   auto client = std::make_unique<grpc_client_t>(cfg);
-  auto mock   = std::make_shared<MockCuOptStub>();
+  auto mock   = std::make_shared<NiceMock<MockCuOptStub>>();
   grpc_test_inject_mock_stub_typed(*client, mock);
 
   EXPECT_CALL(*mock, SubmitJob(_, _, _))
@@ -1336,41 +1322,6 @@ TEST_F(GrpcClientTest, SolveMIP_Success)
   EXPECT_TRUE(result.success) << "Error: " << result.error_message;
   EXPECT_NE(result.solution, nullptr);
   if (result.solution) { EXPECT_DOUBLE_EQ(result.solution->get_objective_value(), 1.0); }
-}
-
-// =============================================================================
-// compute_chunk_size Tests
-// =============================================================================
-
-TEST(GrpcClientStaticTest, ComputeChunkSize_BothLimitsKnown)
-{
-  // server_max=100000, config_max=200000, preferred=50000 => 50000 (fits both)
-  auto size = grpc_test_compute_chunk_size(100000, 200000, 50000);
-  EXPECT_LE(size, 100000);
-  EXPECT_GE(size, 4096);
-}
-
-TEST(GrpcClientStaticTest, ComputeChunkSize_PreferredExceedsServer)
-{
-  // server_max=20000, config_max=200000, preferred=100000 => clamped to server_max/2
-  auto size = grpc_test_compute_chunk_size(20000, 200000, 100000);
-  EXPECT_LE(size, 20000);
-  EXPECT_GE(size, 4096);
-}
-
-TEST(GrpcClientStaticTest, ComputeChunkSize_ServerUnknown)
-{
-  // server_max=0 (unknown), config_max=200000, preferred=50000 => uses config/preferred
-  auto size = grpc_test_compute_chunk_size(0, 200000, 50000);
-  EXPECT_LE(size, 200000);
-  EXPECT_GE(size, 4096);
-}
-
-TEST(GrpcClientStaticTest, ComputeChunkSize_BothUnlimited)
-{
-  // server_max=0, config_max=0 => should still return a valid positive chunk size
-  auto size = grpc_test_compute_chunk_size(0, 0, 1024 * 1024);
-  EXPECT_GE(size, 4096);
 }
 
 // =============================================================================
@@ -1616,7 +1567,7 @@ TEST_F(GrpcClientTest, SubmitLP_ChunkedUploadForLargePayload)
   cfg.chunk_size_bytes              = 4 * 1024;
 
   auto client = std::make_unique<grpc_client_t>(cfg);
-  auto mock   = std::make_shared<MockCuOptStub>();
+  auto mock   = std::make_shared<NiceMock<MockCuOptStub>>();
   grpc_test_inject_mock_stub_typed(*client, mock);
 
   EXPECT_CALL(*mock, StartChunkedUpload(_, _, _))

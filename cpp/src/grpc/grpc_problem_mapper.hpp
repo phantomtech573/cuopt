@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <string>
 #include <vector>
 
 namespace cuopt::remote {
@@ -108,5 +109,23 @@ template <typename i_t, typename f_t>
 void map_chunked_arrays_to_problem(const cuopt::remote::ChunkedProblemHeader& header,
                                    const std::map<int32_t, std::vector<uint8_t>>& arrays,
                                    cpu_optimization_problem_t<i_t, f_t>& cpu_problem);
+
+/**
+ * @brief Build SendArrayChunkRequest messages for chunked upload of problem arrays.
+ *
+ * Iterates the problem's host arrays directly and slices each array into
+ * chunk-sized SendArrayChunkRequest protobuf messages. The caller simply
+ * iterates the returned vector and sends each message via SendArrayChunk RPC.
+ *
+ * @param problem The problem whose arrays to chunk
+ * @param upload_id The upload session ID from StartChunkedUpload
+ * @param chunk_size_bytes Maximum raw data bytes per chunk message
+ * @return Vector of ready-to-send SendArrayChunkRequest protobuf messages
+ */
+template <typename i_t, typename f_t>
+std::vector<cuopt::remote::SendArrayChunkRequest> build_array_chunk_requests(
+  const cpu_optimization_problem_t<i_t, f_t>& problem,
+  const std::string& upload_id,
+  int64_t chunk_size_bytes);
 
 }  // namespace cuopt::linear_programming

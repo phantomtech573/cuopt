@@ -11,12 +11,13 @@
 
 class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::Service {
  public:
+  // Unary submit: the entire problem fits in a single gRPC message.
+  // Serializes the request and delegates slot reservation + tracking to
+  // submit_job_async (shared with the chunked path's submit_chunked_job_async).
   Status SubmitJob(ServerContext* context,
                    const cuopt::remote::SubmitJobRequest* request,
                    cuopt::remote::SubmitJobResponse* response) override
   {
-    std::string job_id = generate_job_id();
-
     bool is_lp = request->has_lp_request();
     if (!is_lp && !request->has_mip_request()) {
       return Status(StatusCode::INVALID_ARGUMENT, "No problem data provided");
@@ -38,38 +39,8 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       std::cout.flush();
     }
 
-    int job_idx = -1;
-    for (size_t i = 0; i < MAX_JOBS; ++i) {
-      if (job_queue[i].ready.load()) { continue; }
-      bool expected_claimed = false;
-      if (job_queue[i].claimed.compare_exchange_strong(expected_claimed, true)) {
-        job_idx = static_cast<int>(i);
-        break;
-      }
-    }
-
-    if (job_idx < 0) { return Status(StatusCode::RESOURCE_EXHAUSTED, "Job queue full"); }
-
-    copy_cstr(job_queue[job_idx].job_id, job_id);
-    job_queue[job_idx].problem_type = is_lp ? 0 : 1;
-    job_queue[job_idx].data_size    = job_data.size();
-    job_queue[job_idx].cancelled.store(false);
-    job_queue[job_idx].worker_index.store(-1);
-    job_queue[job_idx].data_sent.store(false);
-
-    {
-      std::lock_guard<std::mutex> lock(pending_data_mutex);
-      pending_job_data[job_id] = std::move(job_data);
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(tracker_mutex);
-      job_tracker[job_id] =
-        JobInfo{job_id, JobStatus::QUEUED, std::chrono::steady_clock::now(), {}, !is_lp, "", false};
-    }
-
-    job_queue[job_idx].ready.store(true, std::memory_order_release);
-    job_queue[job_idx].claimed.store(false, std::memory_order_release);
+    auto [ok, job_id] = submit_job_async(std::move(job_data), !is_lp);
+    if (!ok) { return Status(StatusCode::RESOURCE_EXHAUSTED, job_id); }
 
     response->set_job_id(job_id);
     response->set_message("Job submitted successfully");
@@ -122,6 +93,9 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     return Status::OK;
   }
 
+  // Receive one chunk of array data for a chunked upload session.
+  // Chunks are accumulated in memory until FinishChunkedUpload, which hands
+  // them to the dispatch thread for pipe serialization to the worker.
   Status SendArrayChunk(ServerContext* context,
                         const cuopt::remote::SendArrayChunkRequest* request,
                         cuopt::remote::SendArrayChunkResponse* response) override
@@ -156,6 +130,8 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       return Status(StatusCode::INVALID_ARGUMENT, "total_elements must be non-negative");
     }
 
+    // On the first chunk for a field, record its total size and element width.
+    // Subsequent chunks for the same field reuse these values.
     auto& meta = state.field_meta[field_id];
     if (meta.total_elements == 0 && total_elems > 0) {
       int64_t elem_size = array_field_element_size(ac.field_id());
@@ -169,6 +145,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       meta.element_size   = elem_size;
     }
 
+    // Validate that the chunk's byte range falls within the declared array bounds.
     int64_t elem_size = meta.element_size > 0 ? meta.element_size : 1;
 
     if (elem_size > 1 && (raw.size() % static_cast<size_t>(elem_size)) != 0) {
@@ -186,6 +163,8 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       return Status(StatusCode::INVALID_ARGUMENT, "ArrayChunk out of bounds");
     }
 
+    // Accumulate: the raw ArrayChunk protobuf is stored as-is and will be
+    // assembled into contiguous arrays during pipe serialization.
     meta.received_bytes += static_cast<int64_t>(raw.size());
     state.total_bytes += static_cast<int64_t>(raw.size());
     state.chunks.push_back(ac);
@@ -196,6 +175,9 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     return Status::OK;
   }
 
+  // Finalize a chunked upload: move the accumulated header + chunks into a
+  // PendingChunkedUpload and enqueue it as a job. The dispatch thread will
+  // call write_chunked_request_to_pipe() to send it to a worker.
   Status FinishChunkedUpload(ServerContext* context,
                              const cuopt::remote::FinishChunkedUploadRequest* request,
                              cuopt::remote::SubmitJobResponse* response) override
@@ -204,6 +186,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
 
     const std::string& upload_id = request->upload_id();
 
+    // Take ownership of the upload session and remove it from the active map.
     ChunkedUploadState state;
     {
       std::lock_guard<std::mutex> lock(chunked_uploads_mutex);
@@ -222,48 +205,21 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       std::cout.flush();
     }
 
-    auto worker_data = serialize_chunked_request_pipe_blob(state.header, state.chunks);
-    state.chunks.clear();
+    // Package the header and chunks for the dispatch thread. Field metadata
+    // was only needed for validation during SendArrayChunk and can be dropped.
+    PendingChunkedUpload pending;
+    pending.header = std::move(state.header);
+    pending.chunks = std::move(state.chunks);
     state.field_meta.clear();
 
     if (config.verbose) {
-      std::cout << "[gRPC] FinishChunkedUpload: CHUNKED path, " << state.total_chunks
-                << " chunks forwarded, pipe payload=" << worker_data.size()
-                << " bytes, upload_id=" << upload_id << "\n";
+      std::cout << "[gRPC] FinishChunkedUpload: CHUNKED path, " << state.total_chunks << " chunks, "
+                << state.total_bytes << " bytes, upload_id=" << upload_id << "\n";
       std::cout.flush();
     }
 
-    std::string job_id = generate_job_id();
-    int job_idx        = -1;
-    for (size_t i = 0; i < MAX_JOBS; ++i) {
-      if (job_queue[i].ready.load()) { continue; }
-      bool expected_claimed = false;
-      if (job_queue[i].claimed.compare_exchange_strong(expected_claimed, true)) {
-        job_idx = static_cast<int>(i);
-        break;
-      }
-    }
-    if (job_idx < 0) { return Status(StatusCode::RESOURCE_EXHAUSTED, "Job queue full"); }
-
-    copy_cstr(job_queue[job_idx].job_id, job_id);
-    job_queue[job_idx].problem_type = state.is_mip ? 1 : 0;
-    job_queue[job_idx].data_size    = static_cast<uint64_t>(worker_data.size());
-    job_queue[job_idx].cancelled.store(false);
-    job_queue[job_idx].worker_index.store(-1);
-    job_queue[job_idx].data_sent.store(false);
-    {
-      std::lock_guard<std::mutex> lock(pending_data_mutex);
-      pending_job_data[job_id] = std::move(worker_data);
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(tracker_mutex);
-      job_tracker[job_id] = JobInfo{
-        job_id, JobStatus::QUEUED, std::chrono::steady_clock::now(), {}, state.is_mip, "", false};
-    }
-
-    job_queue[job_idx].ready.store(true, std::memory_order_release);
-    job_queue[job_idx].claimed.store(false, std::memory_order_release);
+    auto [ok, job_id] = submit_chunked_job_async(std::move(pending), state.is_mip);
+    if (!ok) { return Status(StatusCode::RESOURCE_EXHAUSTED, job_id); }
 
     response->set_job_id(job_id);
     response->set_message("Job submitted via chunked arrays");
@@ -314,6 +270,9 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     return Status::OK;
   }
 
+  // Return the full result in a single gRPC response (unary path).
+  // If the result exceeds the server's max message size, the client must
+  // fall back to the chunked download RPCs instead.
   Status GetResult(ServerContext* context,
                    const cuopt::remote::GetResultRequest* request,
                    cuopt::remote::ResultResponse* response) override
@@ -336,6 +295,8 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       return Status::OK;
     }
 
+    // Guard against results that would exceed gRPC/protobuf message limits.
+    // The client detects RESOURCE_EXHAUSTED and switches to chunked download.
     int64_t total_result_bytes = it->second.result_size_bytes;
     const int64_t max_bytes    = server_max_message_bytes();
     if (max_bytes > 0 && total_result_bytes > max_bytes) {
@@ -349,6 +310,8 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       return Status(StatusCode::RESOURCE_EXHAUSTED, msg);
     }
 
+    // Build the full protobuf solution from the raw arrays that were read
+    // back from the worker pipe by the result retrieval thread.
     if (it->second.is_mip) {
       cuopt::remote::MIPSolution mip_solution;
       build_mip_solution_proto<int, double>(
@@ -376,12 +339,17 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
   // Chunked Result Download RPCs
   // =========================================================================
 
+  // Begin a chunked result download: snapshot the result arrays into a
+  // download session. The client calls GetResultChunk to fetch slices and
+  // FinishChunkedDownload when done (which frees the session).
   Status StartChunkedDownload(ServerContext* context,
                               const cuopt::remote::StartChunkedDownloadRequest* request,
                               cuopt::remote::StartChunkedDownloadResponse* response) override
   {
     std::string job_id = request->job_id();
 
+    // Copy the result data into a download session. This snapshot lets the
+    // client fetch chunks at its own pace without holding the tracker lock.
     bool is_mip = false;
     ChunkedDownloadState state;
     {
@@ -445,10 +413,10 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
 
     const uint8_t* raw_bytes = nullptr;
     int64_t total_bytes      = 0;
-    auto ait                 = state.raw_arrays.find(static_cast<int32_t>(field_id));
-    if (ait != state.raw_arrays.end() && !ait->second.empty()) {
-      raw_bytes   = ait->second.data();
-      total_bytes = static_cast<int64_t>(ait->second.size());
+    auto array_it            = state.raw_arrays.find(static_cast<int32_t>(field_id));
+    if (array_it != state.raw_arrays.end() && !array_it->second.empty()) {
+      raw_bytes   = array_it->second.data();
+      total_bytes = static_cast<int64_t>(array_it->second.size());
     }
 
     if (raw_bytes == nullptr || total_bytes == 0) {
@@ -581,12 +549,17 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     return Status::OK;
   }
 
+  // Block until a job reaches a terminal state (COMPLETED / FAILED / CANCELLED).
+  // Uses a shared JobWaiter with a condition variable that the result retrieval
+  // thread signals when it processes the job's result. Falls back to polling
+  // every 200ms in case the signal is missed (e.g., worker crash recovery).
   Status WaitForCompletion(ServerContext* context,
                            const cuopt::remote::WaitRequest* request,
                            cuopt::remote::WaitResponse* response) override
   {
     const std::string job_id = request->job_id();
 
+    // Fast path: if the job is already in a terminal state, return immediately.
     {
       std::lock_guard<std::mutex> lock(tracker_mutex);
       auto it = job_tracker.find(job_id);
@@ -616,6 +589,8 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       }
     }
 
+    // Slow path: register a waiter. Multiple concurrent WaitForCompletion
+    // RPCs for the same job share a single JobWaiter instance.
     std::shared_ptr<JobWaiter> waiter;
     {
       std::lock_guard<std::mutex> lock(waiters_mutex);
@@ -629,12 +604,17 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     }
     waiter->waiters.fetch_add(1, std::memory_order_relaxed);
 
+    // Wait loop: cv is signaled by the result retrieval thread; we also
+    // poll check_job_status as a safety net and check for client disconnect.
+    // All exit paths (ready, terminal status, cancellation) break out of the
+    // loop so that cleanup (waiters decrement) happens in one place below.
+    bool client_cancelled = false;
     {
       std::unique_lock<std::mutex> lock(waiter->mutex);
       while (!waiter->ready) {
         if (context->IsCancelled()) {
-          waiter->waiters.fetch_sub(1, std::memory_order_relaxed);
-          return Status(StatusCode::CANCELLED, "Client cancelled WaitForCompletion");
+          client_cancelled = true;
+          break;
         }
         lock.unlock();
         std::string msg;
@@ -648,26 +628,45 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       }
     }
 
+    waiter->waiters.fetch_sub(1, std::memory_order_relaxed);
+
+    if (client_cancelled) {
+      if (config.verbose) {
+        std::cout << "[gRPC] WaitForCompletion cancelled by client, job_id=" << job_id << "\n";
+        std::cout.flush();
+      }
+      return Status(StatusCode::CANCELLED, "Client cancelled WaitForCompletion");
+    }
+
+    // Build the response from the final job state.
+    // The waiter's `success` flag is set by the result retrieval thread when it
+    // processes a successful result. It is true only for normal completion.
     if (waiter->success) {
       response->set_job_status(cuopt::remote::COMPLETED);
       response->set_message("");
       {
-        std::lock_guard<std::mutex> tlock(tracker_mutex);
-        auto tit = job_tracker.find(job_id);
-        response->set_result_size_bytes((tit != job_tracker.end()) ? tit->second.result_size_bytes
-                                                                   : 0);
+        std::lock_guard<std::mutex> lock(tracker_mutex);
+        auto job_it = job_tracker.find(job_id);
+        response->set_result_size_bytes(
+          (job_it != job_tracker.end()) ? job_it->second.result_size_bytes : 0);
       }
     } else {
+      // The waiter was not signaled with success. This happens when:
+      //   - The job failed (solver error, worker crash)
+      //   - The job was cancelled by the user
+      //   - The wait loop exited via the polling safety net (check_job_status
+      //     detected a terminal state before the cv was signaled)
+      // Re-check the authoritative job status to determine what happened.
       std::string msg;
       JobStatus status = check_job_status(job_id, msg);
       switch (status) {
         case JobStatus::COMPLETED: {
           response->set_job_status(cuopt::remote::COMPLETED);
           response->set_message("");
-          std::lock_guard<std::mutex> tlock2(tracker_mutex);
-          auto tit2 = job_tracker.find(job_id);
+          std::lock_guard<std::mutex> lock(tracker_mutex);
+          auto job_it = job_tracker.find(job_id);
           response->set_result_size_bytes(
-            (tit2 != job_tracker.end()) ? tit2->second.result_size_bytes : 0);
+            (job_it != job_tracker.end()) ? job_it->second.result_size_bytes : 0);
           break;
         }
         case JobStatus::FAILED: response->set_job_status(cuopt::remote::FAILED); break;
@@ -680,7 +679,6 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
         response->set_result_size_bytes(0);
       }
     }
-    waiter->waiters.fetch_sub(1, std::memory_order_relaxed);
 
     if (config.verbose) {
       std::cout << "[gRPC] WaitForCompletion finished job_id=" << job_id << "\n";
@@ -690,6 +688,11 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     return Status::OK;
   }
 
+  // Server-streaming RPC: tails the solver log file for a job, sending one
+  // LogMessage per line as new output appears (like `tail -f` over gRPC).
+  // The client supplies a byte offset so it can resume after reconnection.
+  // The stream ends with a sentinel message (job_complete=true) once the
+  // job reaches a terminal state and all remaining log content is flushed.
   Status StreamLogs(ServerContext* context,
                     const cuopt::remote::StreamLogsRequest* request,
                     ServerWriter<cuopt::remote::LogMessage>* writer) override
@@ -698,6 +701,10 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     int64_t from_byte          = request->from_byte();
     const std::string log_path = get_log_file_path(job_id);
 
+    // Phase 1: Wait for the log file to appear on disk.
+    // The worker may not have created it yet, so poll with a short sleep.
+    // Every 2 s, verify the job still exists to avoid waiting forever on
+    // a deleted/unknown job.
     int waited_ms = 0;
     while (!context->IsCancelled()) {
       struct stat st;
@@ -717,6 +724,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       }
     }
 
+    // Phase 2: Open the file and seek to the caller's resume point.
     std::ifstream in(log_path, std::ios::in | std::ios::binary);
     if (!in.is_open()) {
       cuopt::remote::LogMessage m;
@@ -732,6 +740,9 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     int64_t current_offset = from_byte;
     std::string line;
 
+    // Phase 3: Tail loop — read available lines, stream each one, then
+    // poll for more.  Each LogMessage carries the byte offset of the *next*
+    // unread byte so the client can resume from that point.
     while (!context->IsCancelled()) {
       std::streampos before = in.tellg();
       if (before >= 0) { current_offset = static_cast<int64_t>(before); }
@@ -742,6 +753,8 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
         if (after >= 0) {
           next_offset = static_cast<int64_t>(after);
         } else {
+          // tellg() can return -1 after the last line when there is no
+          // trailing newline; fall back to estimating from line length.
           next_offset = current_offset + static_cast<int64_t>(line.size());
         }
 
@@ -753,12 +766,17 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
         continue;
       }
 
+      // Caught up to the current end of file — clear the EOF/fail bit
+      // so the next getline attempt can see newly appended data.
       if (in.eof()) {
         in.clear();
       } else if (in.fail()) {
         in.clear();
       }
 
+      // Check whether the job has finished.  If so, drain any final
+      // bytes the solver may have flushed after our last read, then
+      // send the job_complete sentinel and close the stream.
       std::string msg;
       JobStatus s = check_job_status(job_id, msg);
       if (s == JobStatus::COMPLETED || s == JobStatus::FAILED || s == JobStatus::CANCELLED) {
@@ -783,6 +801,8 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
         return Status::OK;
       }
 
+      // Job still running but no new data yet — back off briefly before
+      // retrying so we don't spin-wait on the file.
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 

@@ -719,6 +719,7 @@ add_executable(cuopt_grpc_server
   src/grpc/server/grpc_worker.cpp
   src/grpc/server/grpc_worker_infra.cpp
   src/grpc/server/grpc_server_threads.cpp
+  src/grpc/server/grpc_pipe_io.cpp
   src/grpc/server/grpc_job_management.cpp
   src/grpc/server/grpc_service_impl.cpp
 )

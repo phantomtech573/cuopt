@@ -655,8 +655,7 @@ TEST_F(DefaultServerTests, SolveLPPolling)
 TEST_F(DefaultServerTests, SolveLPWaitRPC)
 {
   grpc_client_config_t config;
-  config.use_wait = true;
-  auto client     = create_client(config);
+  auto client = create_client(config);
   ASSERT_NE(client, nullptr);
 
   std::string mps_path = get_test_lp_path("afiro_original.mps");
@@ -1100,6 +1099,20 @@ class ChunkedUploadTests : public GrpcIntegrationTestBase {
     port_ = s_port_;
   }
 
+  void TearDown() override
+  {
+    if (HasFailure() && s_server_) {
+      std::string log_file = s_server_->log_path();
+      if (!log_file.empty()) {
+        std::ifstream f(log_file);
+        if (f) {
+          std::cerr << "\n=== Server log (" << log_file << ") ===\n"
+                    << f.rdbuf() << "\n=== End server log ===\n";
+        }
+      }
+    }
+  }
+
   static std::unique_ptr<ServerProcess> s_server_;
   static int s_port_;
 };
@@ -1226,9 +1239,9 @@ class PathSelectionTests : public GrpcIntegrationTestBase {
   {
     s_port_   = get_test_port();
     s_server_ = std::make_unique<ServerProcess>();
-    // 1024-byte logical threshold forces chunked result downloads for anything non-trivial.
-    // gRPC transport still uses 256 MiB (the default --max-message-mb).
-    ASSERT_TRUE(s_server_->start(s_port_, {"--max-message-bytes", "1024", "--verbose"}))
+    // Small threshold (clamped to 4 KiB) forces chunked result downloads for
+    // anything larger than ~4 KB, exercising the chunked download path.
+    ASSERT_TRUE(s_server_->start(s_port_, {"--max-message-bytes", "4096", "--verbose"}))
       << "Failed to start path-selection server";
   }
 
@@ -1253,11 +1266,10 @@ class PathSelectionTests : public GrpcIntegrationTestBase {
 std::unique_ptr<ServerProcess> PathSelectionTests::s_server_;
 int PathSelectionTests::s_port_ = 0;
 
-// Unary upload, unary result download (small problem, small result)
-// The LP result for afiro has ~32 vars + ~27 constraints = a few hundred bytes
-// of array data, which fits under the 1024-byte threshold... actually with
-// warm-start data and overhead it will likely exceed 1024 bytes, so we verify
-// the client handles whichever path the server chooses.
+// Unary upload for a small LP (afiro). The result is small enough that
+// the server returns it via unary GetResult. We verify the upload and
+// result paths in the server logs but don't assert the download method
+// since the result size may or may not exceed the 4 KiB threshold.
 TEST_F(PathSelectionTests, UnaryUploadLPWithPathLogging)
 {
   GrpcTestLogCapture log_capture;

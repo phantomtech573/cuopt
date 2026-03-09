@@ -29,9 +29,8 @@ void print_usage(const char* prog)
     << "Options:\n"
     << "  -p, --port PORT         Listen port (default: 8765)\n"
     << "  -w, --workers NUM       Number of worker processes (default: 1)\n"
-    << "      --max-message-mb N  gRPC max send/recv message size in MiB (default: 256, "
-       "0=unlimited)\n"
-    << "      --max-message-bytes N  Override max message size in bytes (min 4096, for testing)\n"
+    << "      --max-message-mb N  gRPC max send/recv message size in MiB (default: 256)\n"
+    << "      --max-message-bytes N  Set max message size in exact bytes (min 4096, for testing)\n"
     << "      --chunk-timeout N   Per-chunk timeout in seconds for streaming (default: 60, "
        "0=disabled)\n"
     << "      --enable-transfer-hash  Log data hashes for streaming transfers (for testing)\n"
@@ -54,9 +53,11 @@ int main(int argc, char** argv)
     } else if (arg == "-w" || arg == "--workers") {
       if (i + 1 < argc) { config.num_workers = std::stoi(argv[++i]); }
     } else if (arg == "--max-message-mb") {
-      if (i + 1 < argc) { config.max_message_mb = std::stoi(argv[++i]); }
+      if (i + 1 < argc) {
+        config.max_message_bytes = static_cast<int64_t>(std::stoi(argv[++i])) * kMiB;
+      }
     } else if (arg == "--max-message-bytes") {
-      if (i + 1 < argc) { config.max_message_b = std::max(4096LL, std::stoll(argv[++i])); }
+      if (i + 1 < argc) { config.max_message_bytes = std::max(4096LL, std::stoll(argv[++i])); }
     } else if (arg == "--enable-transfer-hash") {
       config.enable_transfer_hash = true;
     } else if (arg == "--tls") {
@@ -78,6 +79,9 @@ int main(int argc, char** argv)
       return 0;
     }
   }
+
+  config.max_message_bytes =
+    std::clamp(config.max_message_bytes, kServerMinMessageBytes, kServerMaxMessageBytes);
 
   std::cout << "cuOpt gRPC Remote Solve Server\n"
             << "==============================\n"
@@ -245,9 +249,7 @@ int main(int argc, char** argv)
   builder.RegisterService(service.get());
   const int64_t max_bytes = server_max_message_bytes();
   const int channel_limit =
-    (max_bytes <= 0)
-      ? -1
-      : static_cast<int>(std::min<int64_t>(max_bytes, std::numeric_limits<int>::max()));
+    static_cast<int>(std::min<int64_t>(max_bytes, std::numeric_limits<int>::max()));
   builder.SetMaxReceiveMessageSize(channel_limit);
   builder.SetMaxSendMessageSize(channel_limit);
 
@@ -260,10 +262,8 @@ int main(int argc, char** argv)
 
   std::cout << "[gRPC Server] Listening on " << server_address << std::endl;
   std::cout << "[gRPC Server] Workers: " << config.num_workers << std::endl;
-  std::cout << "[gRPC Server] Max message size: " << server_max_message_bytes() << " bytes"
-            << (config.max_message_b >= 0 ? " (--max-message-bytes override)"
-                                          : " (" + std::to_string(config.max_message_mb) + " MiB)")
-            << std::endl;
+  std::cout << "[gRPC Server] Max message size: " << server_max_message_bytes() << " bytes ("
+            << (server_max_message_bytes() / kMiB) << " MiB)" << std::endl;
   std::cout << "[gRPC Server] Press Ctrl+C to shutdown" << std::endl;
 
   std::thread shutdown_thread([&server]() {

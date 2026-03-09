@@ -11,169 +11,196 @@
 #include "cuopt_remote_service.pb.h"
 #include "grpc_field_element_size.hpp"
 
-#include <google/protobuf/io/coded_stream.h>
-#include <google/protobuf/io/zero_copy_stream_impl_lite.h>
-#include <google/protobuf/util/delimited_message_util.h>
-
-#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <map>
 #include <vector>
 
-// Max bytes per ArrayChunk data payload on the internal pipe (64 MiB).
-// Keeps each varint-delimited protobuf message well under the 2 GiB hard limit.
-static constexpr size_t kPipeChunkBytes = 64ULL * 1024 * 1024;
+// Requested pipe buffer size (1 MiB). The kernel default is 64 KiB, which
+// forces excessive context-switching on large transfers. fcntl(F_SETPIPE_SZ)
+// may silently cap this to /proc/sys/fs/pipe-max-size.
+static constexpr int kPipeBufferSize = 1024 * 1024;
 
-// Serialize a result header + raw arrays into a pipe blob.
-// Format: varint-delimited ChunkedResultHeader, then N varint-delimited ArrayChunk messages.
-// Large arrays are split into multiple ArrayChunk messages of at most kPipeChunkBytes each.
-inline std::vector<uint8_t> serialize_result_pipe_blob(
-  const cuopt::remote::ChunkedResultHeader& header,
-  const std::map<int32_t, std::vector<uint8_t>>& arrays)
+// Pipe I/O primitives defined in grpc_job_management.cpp.
+bool write_to_pipe(int fd, const void* data, size_t size);
+bool read_from_pipe(int fd, void* data, size_t size, int timeout_ms = 120000);
+
+// =============================================================================
+// Low-level: write/read a single protobuf message with a uint32 length prefix.
+// Uses standard protobuf SerializeToArray / ParseFromArray for the payload.
+// =============================================================================
+
+inline bool write_protobuf_to_pipe(int fd, const google::protobuf::MessageLite& msg)
 {
-  auto emit_chunks = [&](auto callback) {
-    for (const auto& [fid, data] : arrays) {
-      size_t remaining = data.size();
-      size_t offset    = 0;
-      do {
-        size_t slice = std::min(remaining, kPipeChunkBytes);
-        cuopt::remote::ArrayChunk ac;
-        ac.set_field_id(static_cast<cuopt::remote::ArrayFieldId>(fid));
-        ac.set_element_offset(static_cast<int64_t>(offset));
-        ac.set_total_elements(static_cast<int64_t>(data.size()));
-        ac.set_data(data.data() + offset, slice);
-        callback(ac);
-        offset += slice;
-        remaining -= slice;
-      } while (remaining > 0);
-    }
-  };
-
-  size_t total = 0;
-  {
-    uint32_t hdr_size = static_cast<uint32_t>(header.ByteSizeLong());
-    total += google::protobuf::io::CodedOutputStream::VarintSize32(hdr_size) + hdr_size;
-  }
-  emit_chunks([&](const cuopt::remote::ArrayChunk& ac) {
-    uint32_t msg_size = static_cast<uint32_t>(ac.ByteSizeLong());
-    total += google::protobuf::io::CodedOutputStream::VarintSize32(msg_size) + msg_size;
-  });
-
-  std::vector<uint8_t> blob(total);
-  google::protobuf::io::ArrayOutputStream raw(blob.data(), static_cast<int>(blob.size()));
-  google::protobuf::io::CodedOutputStream coded(&raw);
-
-  google::protobuf::util::SerializeDelimitedToCodedStream(header, &coded);
-  emit_chunks([&](const cuopt::remote::ArrayChunk& ac) {
-    google::protobuf::util::SerializeDelimitedToCodedStream(ac, &coded);
-  });
-  return blob;
+  uint32_t size = static_cast<uint32_t>(msg.ByteSizeLong());
+  if (!write_to_pipe(fd, &size, sizeof(size))) return false;
+  std::vector<uint8_t> buf(size);
+  if (!msg.SerializeToArray(buf.data(), static_cast<int>(size))) return false;
+  return write_to_pipe(fd, buf.data(), size);
 }
 
-// Deserialize a result pipe blob back into header + reassembled arrays.
-inline bool deserialize_result_pipe_blob(const uint8_t* data,
-                                         size_t size,
-                                         cuopt::remote::ChunkedResultHeader& header_out,
-                                         std::map<int32_t, std::vector<uint8_t>>& arrays_out)
+inline bool read_protobuf_from_pipe(int fd, google::protobuf::MessageLite& msg)
 {
-  google::protobuf::io::ArrayInputStream raw(data, static_cast<int>(size));
-  google::protobuf::io::CodedInputStream coded(&raw);
+  uint32_t size;
+  if (!read_from_pipe(fd, &size, sizeof(size))) return false;
+  std::vector<uint8_t> buf(size);
+  if (!read_from_pipe(fd, buf.data(), size)) return false;
+  return msg.ParseFromArray(buf.data(), static_cast<int>(size));
+}
 
-  bool clean_eof = false;
-  if (!google::protobuf::util::ParseDelimitedFromCodedStream(&header_out, &coded, &clean_eof)) {
-    return false;
-  }
+// =============================================================================
+// Chunked request: server → worker pipe (ChunkedProblemHeader + raw arrays)
+//
+// Wire format (protobuf header + raw byte arrays):
+//   [uint32 hdr_size][protobuf header bytes]
+//   [uint32 num_arrays]
+//   per array: [int32 field_id][uint64 total_bytes][raw bytes...]
+//
+// The protobuf ChunkedProblemHeader carries all metadata (settings, field
+// types, element counts). Array data bypasses protobuf serialization and
+// flows directly through the pipe as raw bytes.
+// =============================================================================
 
-  while (!clean_eof) {
-    cuopt::remote::ArrayChunk ac;
-    if (!google::protobuf::util::ParseDelimitedFromCodedStream(&ac, &coded, &clean_eof)) {
-      if (!clean_eof) return false;
-      break;
-    }
+inline bool write_chunked_request_to_pipe(int fd,
+                                          const cuopt::remote::ChunkedProblemHeader& header,
+                                          const std::vector<cuopt::remote::ArrayChunk>& chunks)
+{
+  // Step 1: write the protobuf header (settings, scalars, string arrays).
+  if (!write_protobuf_to_pipe(fd, header)) return false;
+
+  // Step 2: group incoming gRPC chunks by field_id. A single field may arrive
+  // as multiple chunks (the client splits large arrays at chunk_size_bytes).
+  struct FieldInfo {
+    std::vector<const cuopt::remote::ArrayChunk*> chunks;
+    int64_t total_bytes = 0;
+  };
+  std::map<int32_t, FieldInfo> fields;
+  for (const auto& ac : chunks) {
     int32_t fid = static_cast<int32_t>(ac.field_id());
-    auto& dest  = arrays_out[fid];
-    if (dest.empty() && ac.total_elements() > 0) {
-      dest.resize(static_cast<size_t>(ac.total_elements()), 0);
-    }
-    int64_t offset         = ac.element_offset();
-    const auto& chunk_data = ac.data();
-    if (offset < 0 || static_cast<size_t>(offset) > dest.size()) continue;
-    if (offset + static_cast<int64_t>(chunk_data.size()) <= static_cast<int64_t>(dest.size())) {
-      std::memcpy(dest.data() + offset, chunk_data.data(), chunk_data.size());
+    auto& fi    = fields[fid];
+    fi.chunks.push_back(&ac);
+    if (fi.total_bytes == 0 && ac.total_elements() > 0) {
+      fi.total_bytes = ac.total_elements() * array_field_element_size(ac.field_id());
     }
   }
+
+  // Step 3: write per-field raw byte arrays.
+  uint32_t num_arrays = static_cast<uint32_t>(fields.size());
+  if (!write_to_pipe(fd, &num_arrays, sizeof(num_arrays))) return false;
+
+  for (const auto& [fid, fi] : fields) {
+    int32_t field_id     = fid;
+    uint64_t total_bytes = static_cast<uint64_t>(fi.total_bytes);
+    if (!write_to_pipe(fd, &field_id, sizeof(field_id))) return false;
+    if (!write_to_pipe(fd, &total_bytes, sizeof(total_bytes))) return false;
+    if (total_bytes == 0) continue;
+
+    // Fast path: field arrived in a single chunk that covers the whole array.
+    // Write directly from the protobuf bytes string, avoiding an assembly copy.
+    if (fi.chunks.size() == 1 && fi.chunks[0]->element_offset() == 0 &&
+        static_cast<int64_t>(fi.chunks[0]->data().size()) == fi.total_bytes) {
+      if (!write_to_pipe(fd, fi.chunks[0]->data().data(), fi.chunks[0]->data().size()))
+        return false;
+    } else {
+      // Slow path: stitch multiple chunks into a contiguous buffer, placing
+      // each chunk at its element_offset * elem_size byte position.
+      std::vector<uint8_t> assembled(static_cast<size_t>(fi.total_bytes), 0);
+      int64_t elem_size = (fi.total_bytes > 0 && fi.chunks[0]->total_elements() > 0)
+                            ? fi.total_bytes / fi.chunks[0]->total_elements()
+                            : 1;
+      for (const auto* ac : fi.chunks) {
+        int64_t byte_offset    = ac->element_offset() * elem_size;
+        const auto& chunk_data = ac->data();
+        if (byte_offset >= 0 &&
+            byte_offset + static_cast<int64_t>(chunk_data.size()) <= fi.total_bytes) {
+          std::memcpy(assembled.data() + byte_offset, chunk_data.data(), chunk_data.size());
+        }
+      }
+      if (!write_to_pipe(fd, assembled.data(), assembled.size())) return false;
+    }
+  }
+
   return true;
 }
 
-// Serialize a chunked request (ChunkedProblemHeader + ArrayChunk messages) into a pipe blob.
-inline std::vector<uint8_t> serialize_chunked_request_pipe_blob(
-  const cuopt::remote::ChunkedProblemHeader& header,
-  const std::vector<cuopt::remote::ArrayChunk>& chunks)
+inline bool read_chunked_request_from_pipe(int fd,
+                                           cuopt::remote::ChunkedProblemHeader& header_out,
+                                           std::map<int32_t, std::vector<uint8_t>>& arrays_out)
 {
-  size_t total = 0;
-  {
-    uint32_t hdr_size = static_cast<uint32_t>(header.ByteSizeLong());
-    total += google::protobuf::io::CodedOutputStream::VarintSize32(hdr_size) + hdr_size;
-  }
-  for (const auto& ac : chunks) {
-    uint32_t msg_size = static_cast<uint32_t>(ac.ByteSizeLong());
-    total += google::protobuf::io::CodedOutputStream::VarintSize32(msg_size) + msg_size;
+  if (!read_protobuf_from_pipe(fd, header_out)) return false;
+
+  uint32_t num_arrays;
+  if (!read_from_pipe(fd, &num_arrays, sizeof(num_arrays))) return false;
+
+  // Read each field's raw bytes directly into the output map, keyed by field_id.
+  for (uint32_t i = 0; i < num_arrays; ++i) {
+    int32_t field_id;
+    uint64_t total_bytes;
+    if (!read_from_pipe(fd, &field_id, sizeof(field_id))) return false;
+    if (!read_from_pipe(fd, &total_bytes, sizeof(total_bytes))) return false;
+    auto& dest = arrays_out[field_id];
+    dest.resize(static_cast<size_t>(total_bytes));
+    if (total_bytes > 0 && !read_from_pipe(fd, dest.data(), static_cast<size_t>(total_bytes)))
+      return false;
   }
 
-  std::vector<uint8_t> blob(total);
-  google::protobuf::io::ArrayOutputStream raw(blob.data(), static_cast<int>(blob.size()));
-  google::protobuf::io::CodedOutputStream coded(&raw);
-
-  google::protobuf::util::SerializeDelimitedToCodedStream(header, &coded);
-  for (const auto& ac : chunks) {
-    google::protobuf::util::SerializeDelimitedToCodedStream(ac, &coded);
-  }
-  return blob;
+  return true;
 }
 
-// Deserialize a chunked request pipe blob: header + ArrayChunk messages reassembled into arrays.
-inline bool deserialize_chunked_request_pipe_blob(
-  const uint8_t* data,
-  size_t size,
-  cuopt::remote::ChunkedProblemHeader& header_out,
-  std::map<int32_t, std::vector<uint8_t>>& arrays_out)
+// =============================================================================
+// Result: worker → server pipe (ChunkedResultHeader + raw arrays)
+//
+// Same wire format as the chunked request above. Unlike the request path,
+// result arrays are already assembled into contiguous vectors by the worker,
+// so no chunk grouping or assembly is needed.
+// =============================================================================
+
+inline bool write_result_to_pipe(int fd,
+                                 const cuopt::remote::ChunkedResultHeader& header,
+                                 const std::map<int32_t, std::vector<uint8_t>>& arrays)
 {
-  google::protobuf::io::ArrayInputStream raw(data, static_cast<int>(size));
-  google::protobuf::io::CodedInputStream coded(&raw);
+  if (!write_protobuf_to_pipe(fd, header)) return false;
 
-  bool clean_eof = false;
-  if (!google::protobuf::util::ParseDelimitedFromCodedStream(&header_out, &coded, &clean_eof)) {
-    return false;
+  uint32_t num_arrays = static_cast<uint32_t>(arrays.size());
+  if (!write_to_pipe(fd, &num_arrays, sizeof(num_arrays))) return false;
+
+  // Each array is already contiguous — write field_id, size, and raw bytes.
+  for (const auto& [fid, data] : arrays) {
+    int32_t field_id     = fid;
+    uint64_t total_bytes = data.size();
+    if (!write_to_pipe(fd, &field_id, sizeof(field_id))) return false;
+    if (!write_to_pipe(fd, &total_bytes, sizeof(total_bytes))) return false;
+    if (total_bytes > 0 && !write_to_pipe(fd, data.data(), data.size())) return false;
   }
 
-  while (!clean_eof) {
-    cuopt::remote::ArrayChunk ac;
-    if (!google::protobuf::util::ParseDelimitedFromCodedStream(&ac, &coded, &clean_eof)) {
-      if (!clean_eof) return false;
-      break;
-    }
-    int32_t fid = static_cast<int32_t>(ac.field_id());
-    auto& dest  = arrays_out[fid];
-    if (dest.empty() && ac.total_elements() > 0) {
-      int64_t elem_size = array_field_element_size(ac.field_id());
-      dest.resize(static_cast<size_t>(ac.total_elements() * elem_size), 0);
-    }
-    int64_t elem_size      = (dest.size() > 0 && ac.total_elements() > 0)
-                               ? static_cast<int64_t>(dest.size()) / ac.total_elements()
-                               : 1;
-    int64_t byte_offset    = ac.element_offset() * elem_size;
-    const auto& chunk_data = ac.data();
-    if (byte_offset < 0 || static_cast<size_t>(byte_offset) > dest.size()) continue;
-    if (byte_offset + static_cast<int64_t>(chunk_data.size()) <=
-        static_cast<int64_t>(dest.size())) {
-      std::memcpy(dest.data() + byte_offset, chunk_data.data(), chunk_data.size());
-    }
+  return true;
+}
+
+inline bool read_result_from_pipe(int fd,
+                                  cuopt::remote::ChunkedResultHeader& header_out,
+                                  std::map<int32_t, std::vector<uint8_t>>& arrays_out)
+{
+  if (!read_protobuf_from_pipe(fd, header_out)) return false;
+
+  uint32_t num_arrays;
+  if (!read_from_pipe(fd, &num_arrays, sizeof(num_arrays))) return false;
+
+  for (uint32_t i = 0; i < num_arrays; ++i) {
+    int32_t field_id;
+    uint64_t total_bytes;
+    if (!read_from_pipe(fd, &field_id, sizeof(field_id))) return false;
+    if (!read_from_pipe(fd, &total_bytes, sizeof(total_bytes))) return false;
+    auto& dest = arrays_out[field_id];
+    dest.resize(static_cast<size_t>(total_bytes));
+    if (total_bytes > 0 && !read_from_pipe(fd, dest.data(), static_cast<size_t>(total_bytes)))
+      return false;
   }
+
   return true;
 }
 
 // Serialize a SubmitJobRequest directly to a pipe blob using standard protobuf.
+// Used for unary submits only (always well under 2 GiB).
 inline std::vector<uint8_t> serialize_submit_request_to_pipe(
   const cuopt::remote::SubmitJobRequest& request)
 {

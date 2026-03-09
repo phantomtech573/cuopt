@@ -85,7 +85,7 @@ All paths below are under `cpp/src/grpc/server/`.
 | `grpc_service_impl.cpp` | `CuOptRemoteServiceImpl`: all 14 RPC handlers (SubmitJob, CheckStatus, GetResult, chunked upload/download, StreamLogs, GetIncumbents, CancelJob, DeleteResult, WaitForCompletion, Status probe). Uses mappers and job_management to enqueue jobs and trigger pipe I/O. |
 | `grpc_server_types.hpp` | Shared structs (e.g. `JobQueueEntry`, `ResultQueueEntry`, `ServerConfig`, `JobInfo`), enums, globals (atomics, mutexes, condition variables), and forward declarations used across server .cpp files. |
 | `grpc_field_element_size.hpp` | Maps `cuopt::remote::ArrayFieldId` to element byte size; used by pipe deserialization and chunked logic. |
-| `grpc_pipe_serialization.hpp` | Serialize/deserialize result blobs (ChunkedResultHeader + array chunks) and chunked request blobs (ChunkedProblemHeader + chunks) and SubmitJobRequest for pipe transfer. |
+| `grpc_pipe_serialization.hpp` | Streaming pipe I/O: write/read individual length-prefixed protobuf messages (ChunkedProblemHeader, ChunkedResultHeader, ArrayChunk) directly to/from pipe fds. Avoids large intermediate buffers. Also serializes SubmitJobRequest for unary pipe transfer. |
 | `grpc_incumbent_proto.hpp` | Build `Incumbent` proto from (job_id, objective, assignment) and parse it back; used by worker when pushing incumbents and by main when reading from the incumbent pipe. |
 | `grpc_worker.cpp` | `worker_process(worker_index)`: loop over job queue, receive job data via pipe (unary or chunked), call solver, send result (and optionally incumbents) back. Contains `IncumbentPipeCallback` and `store_simple_result`. |
 | `grpc_worker_infra.cpp` | Pipe creation/teardown, `spawn_worker` / `spawn_workers`, `wait_for_workers`, `mark_worker_jobs_failed`, `cleanup_shared_memory`. |
@@ -97,9 +97,11 @@ All paths below are under `cpp/src/grpc/server/`.
 For large problems uploaded via chunked gRPC RPCs:
 
 1. Server holds chunked upload state in memory (`ChunkedUploadState`: header + array chunks per `upload_id`).
-2. When `FinishChunkedUpload` is called, the server serializes header and chunks (varint-delimited) and sends them to a worker via the job's pipe.
-3. Worker deserializes, runs the solver, and writes result (and optionally incumbents) back via pipes.
-4. Main process result-retrieval thread reads the result pipe and stores the result for `GetResult` or chunked download.
+2. When `FinishChunkedUpload` is called, the header and chunks are stored in `pending_chunked_data`. The data dispatch thread streams them directly to the worker pipe as individual length-prefixed protobuf messages — no intermediate blob is created.
+3. Worker reads the streamed messages from the pipe, reassembles arrays, runs the solver, and writes the result (and optionally incumbents) back via pipes using the same streaming format.
+4. Main process result-retrieval thread reads the streamed result messages from the pipe and stores the result for `GetResult` or chunked download.
+
+This streaming approach avoids creating a single large buffer, eliminating the 2 GiB protobuf serialization limit for pipe transfers and reducing peak memory usage. Each individual protobuf message (max 64 MiB) is serialized with standard `SerializeToArray`/`ParseFromArray`.
 
 No disk spooling: chunked data is kept in memory in the main process until forwarded to the worker.
 

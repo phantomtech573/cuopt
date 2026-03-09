@@ -46,6 +46,45 @@ install(
 )
 
 # ##################################################################################################
+# - gRPC Pipe Serialization Unit Tests -------------------------------------------------------------
+# These tests verify pipe serialization round-trips using real pipe(2) FDs.
+# No running server is required; pipe I/O functions are self-contained in the test.
+
+add_executable(GRPC_PIPE_SERIALIZATION_TEST
+    ${CMAKE_CURRENT_SOURCE_DIR}/grpc_pipe_serialization_test.cpp
+    "${CUOPT_SOURCE_DIR}/src/grpc/server/grpc_pipe_io.cpp"
+)
+
+target_include_directories(GRPC_PIPE_SERIALIZATION_TEST
+    PRIVATE
+    "${CUOPT_SOURCE_DIR}/include"
+    "${CUOPT_SOURCE_DIR}/src/grpc"
+    "${CUOPT_SOURCE_DIR}/src/grpc/server"
+    "${CMAKE_BINARY_DIR}"  # For generated protobuf headers
+)
+
+target_link_libraries(GRPC_PIPE_SERIALIZATION_TEST
+    PRIVATE
+    cuopt
+    GTest::gtest
+    GTest::gtest_main
+    protobuf::libprotobuf
+)
+
+if(NOT DEFINED INSTALL_TARGET OR "${INSTALL_TARGET}" STREQUAL "")
+  target_link_options(GRPC_PIPE_SERIALIZATION_TEST PRIVATE -Wl,--enable-new-dtags)
+endif()
+
+add_test(NAME GRPC_PIPE_SERIALIZATION_TEST COMMAND GRPC_PIPE_SERIALIZATION_TEST)
+
+install(
+    TARGETS GRPC_PIPE_SERIALIZATION_TEST
+    COMPONENT testing
+    DESTINATION bin/gtests/libcuopt
+    EXCLUDE_FROM_ALL
+)
+
+# ##################################################################################################
 # - gRPC Integration Tests -------------------------------------------------------------------------
 # These tests start a real server process and run end-to-end tests
 

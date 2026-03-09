@@ -75,33 +75,6 @@ using grpc::StatusCode;
 using namespace cuopt::linear_programming;
 // Note: NOT using "using namespace cuopt::remote" to avoid JobStatus enum conflict
 
-// =============================================================================
-// Data Integrity - Simple Hash for Transfer Verification
-// =============================================================================
-
-/**
- * @brief Compute FNV-1a 64-bit hash for data integrity verification.
- * Same algorithm as client - allows comparison of upload/download hashes.
- */
-inline uint64_t compute_data_hash(const uint8_t* data, size_t size)
-{
-  constexpr uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
-  constexpr uint64_t FNV_PRIME        = 1099511628211ULL;
-  uint64_t hash                       = FNV_OFFSET_BASIS;
-  for (size_t i = 0; i < size; ++i) {
-    hash ^= static_cast<uint64_t>(data[i]);
-    hash *= FNV_PRIME;
-  }
-  return hash;
-}
-
-inline std::string hash_to_hex(uint64_t hash)
-{
-  std::ostringstream oss;
-  oss << std::hex << std::setfill('0') << std::setw(16) << hash;
-  return oss.str();
-}
-
 // ============================================================================
 // Pipe IPC result serialization.
 // Uses standard protobuf varint-delimited format (SerializeDelimitedToCodedStream).
