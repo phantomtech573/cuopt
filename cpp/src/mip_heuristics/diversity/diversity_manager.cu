@@ -155,7 +155,7 @@ void diversity_manager_t<i_t, f_t>::generate_solution(f_t time_limit, bool rando
   sol.compute_feasibility();
   // if a feasible is found, it is added to the population
   ls.generate_solution(sol, random_start, &population, time_limit);
-  population.add_solution(std::move(sol), internals::mip_solution_origin_t::QUICK_FEASIBLE);
+  population.add_solution(std::move(sol), internals::mip_solution_origin_t::LOCAL_SEARCH);
 }
 
 template <typename i_t, typename f_t>
@@ -798,18 +798,20 @@ void diversity_manager_t<i_t, f_t>::recombine_and_ls_with_all(solution_t<i_t, f_
 
 template <typename i_t, typename f_t>
 void diversity_manager_t<i_t, f_t>::recombine_and_ls_with_all(
-  std::vector<solution_t<i_t, f_t>>& solutions, bool add_only_feasible)
+  std::vector<typename population_t<i_t, f_t>::drained_external_solution_t>& solutions,
+  bool add_only_feasible)
 {
   raft::common::nvtx::range fun_scope("recombine_and_ls_with_all");
   if (solutions.size() > 0) {
     CUOPT_LOG_DEBUG("Running recombiners on B&B solutions with size %lu", solutions.size());
     // add all solutions because time limit might have been consumed and we might have exited before
-    for (auto& sol : solutions) {
+    for (auto& drained_sol : solutions) {
+      auto& sol = drained_sol.solution;
       cuopt_func_call(sol.test_feasibility(true));
-      population.add_solution(std::move(solution_t<i_t, f_t>(sol)),
-                              internals::mip_solution_origin_t::BRANCH_AND_BOUND);
+      population.add_solution(std::move(solution_t<i_t, f_t>(sol)), drained_sol.origin);
     }
-    for (auto& sol : solutions) {
+    for (auto& drained_sol : solutions) {
+      auto& sol = drained_sol.solution;
       if (work_limit_reached()) { return; }
       solution_t<i_t, f_t> ls_solution(sol);
       ls_config_t<i_t, f_t> ls_config;

@@ -3077,8 +3077,8 @@ void branch_and_bound_t<i_t, f_t>::run_deterministic_coordinator(const csr_matri
 
   deterministic_horizon_step_ = 0.50;
 
-  // Compute worker counts using the same formula as reliability-branching scheduler
-  const i_t num_workers = 2 * settings_.num_threads;
+  // In deterministic mode, honor the user-visible B&B thread budget exactly.
+  const i_t num_workers = settings_.num_threads;
   std::vector<search_strategy_t> search_strategies =
     get_search_strategies(settings_.diving_settings);
   std::array<i_t, num_search_strategies> max_num_workers =
@@ -3134,8 +3134,9 @@ void branch_and_bound_t<i_t, f_t>::run_deterministic_coordinator(const csr_matri
   int actual_diving_workers =
     deterministic_diving_workers_ ? (int)deterministic_diving_workers_->size() : 0;
   settings_.log.printf(
-    "Deterministic Mode: %d BFS workers + %d diving workers, horizon step = %.2f work "
-    "units\n",
+    "Deterministic Mode: %d total threads split as %d BFS workers + %d diving workers, "
+    "horizon step = %.2f work units\n",
+    num_workers,
     num_bfs_workers,
     actual_diving_workers,
     deterministic_horizon_step_);

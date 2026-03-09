@@ -202,11 +202,11 @@ size_t population_t<i_t, f_t>::get_external_solution_size()
 template <typename i_t, typename f_t>
 void population_t<i_t, f_t>::add_external_solution(const std::vector<f_t>& solution,
                                                    f_t objective,
-                                                   solution_origin_t origin)
+                                                   internals::mip_solution_origin_t origin)
 {
   std::lock_guard<std::mutex> lock(solution_mutex);
 
-  if (origin == solution_origin_t::CPUFJ) {
+  if (origin == internals::mip_solution_origin_t::CPU_FEASIBILITY_JUMP) {
     external_solution_queue_cpufj.emplace_back(solution, objective, origin);
   } else {
     external_solution_queue.emplace_back(solution, objective, origin);
@@ -224,7 +224,7 @@ void population_t<i_t, f_t>::add_external_solution(const std::vector<f_t>& solut
   }
 
   CUOPT_LOG_DEBUG("%s added a solution to population, solution queue size %lu with objective %g",
-                  solution_origin_to_string(origin),
+                  internals::mip_solution_origin_to_string(origin),
                   external_solution_queue.size(),
                   problem_ptr->get_user_obj_from_solver_obj(objective));
   if (objective < best_feasible_objective) {
@@ -241,7 +241,9 @@ void population_t<i_t, f_t>::add_external_solutions_to_population()
   if (is_deterministic_mode(context.settings.determinism_mode)) { return; }
   // don't do early exit checks here. mutex needs to be acquired to prevent race conditions
   auto new_sol_vector = get_external_solutions();
-  add_solutions_from_vec(std::move(new_sol_vector));
+  for (auto& drained_sol : new_sol_vector) {
+    add_solution(std::move(drained_sol.solution), drained_sol.origin);
+  }
 }
 
 // normally we would need a lock here but these are boolean types and race conditions are not
@@ -254,10 +256,11 @@ void population_t<i_t, f_t>::preempt_heuristic_solver()
 }
 
 template <typename i_t, typename f_t>
-std::vector<solution_t<i_t, f_t>> population_t<i_t, f_t>::get_external_solutions()
+std::vector<typename population_t<i_t, f_t>::drained_external_solution_t>
+population_t<i_t, f_t>::get_external_solutions()
 {
   std::lock_guard<std::mutex> lock(solution_mutex);
-  std::vector<solution_t<i_t, f_t>> return_vector;
+  std::vector<drained_external_solution_t> return_vector;
   i_t counter                     = 0;
   f_t new_best_feasible_objective = best_feasible_objective;
   f_t longest_wait_time           = 0;
@@ -265,10 +268,10 @@ std::vector<solution_t<i_t, f_t>> population_t<i_t, f_t>::get_external_solutions
     for (auto& h_entry : queue) {
       // ignore CPUFJ solutions if they're not better than the best feasible.
       // It seems they worsen results on some instances despite the potential for improved diversity
-      if (h_entry.origin == solution_origin_t::CPUFJ &&
+      if (h_entry.origin == internals::mip_solution_origin_t::CPU_FEASIBILITY_JUMP &&
           h_entry.objective > new_best_feasible_objective) {
         continue;
-      } else if (h_entry.origin != solution_origin_t::CPUFJ &&
+      } else if (h_entry.origin != internals::mip_solution_origin_t::CPU_FEASIBILITY_JUMP &&
                  h_entry.objective > new_best_feasible_objective) {
         new_best_feasible_objective = h_entry.objective;
       }
@@ -293,7 +296,7 @@ std::vector<solution_t<i_t, f_t>> population_t<i_t, f_t>::get_external_solutions
           problem_ptr->n_integer_vars);
       }
       sol.handle_ptr->sync_stream();
-      return_vector.emplace_back(std::move(sol));
+      return_vector.emplace_back(std::move(sol), h_entry.origin);
       counter++;
     }
   }
@@ -418,7 +421,7 @@ void population_t<i_t, f_t>::run_solution_callbacks(
                    "External solution objective mismatch");
       auto h_outside_sol = outside_sol.get_host_assignment();
       add_external_solution(
-        h_outside_sol, outside_sol.get_objective(), solution_origin_t::EXTERNAL);
+        h_outside_sol, outside_sol.get_objective(), internals::mip_solution_origin_t::USER_INITIAL);
     }
   }
 }
@@ -1028,8 +1031,8 @@ void population_t<i_t, f_t>::print()
 template <typename i_t, typename f_t>
 void population_t<i_t, f_t>::run_all_recombiners(solution_t<i_t, f_t>& sol)
 {
-  std::vector<solution_t<i_t, f_t>> sol_vec;
-  sol_vec.emplace_back(std::move(solution_t<i_t, f_t>(sol)));
+  std::vector<typename population_t<i_t, f_t>::drained_external_solution_t> sol_vec;
+  sol_vec.emplace_back(solution_t<i_t, f_t>(sol), internals::mip_solution_origin_t::LOCAL_SEARCH);
   dm.recombine_and_ls_with_all(sol_vec, true);
 }
 

@@ -65,7 +65,7 @@ struct branch_and_bound_solution_helper_t {
   {
     if (!settings_.deterministic) {
       dm->population.add_external_solution(
-        solution, objective, solution_origin_t::BRANCH_AND_BOUND);
+        solution, objective, internals::mip_solution_origin_t::BRANCH_AND_BOUND_NODE);
       dm->rins.new_best_incumbent_callback(solution);
     }
   }
@@ -77,7 +77,7 @@ struct branch_and_bound_solution_helper_t {
   {
     if (!settings_.deterministic) {
       dm->population.add_external_solution(
-        solution, objective, solution_origin_t::BRANCH_AND_BOUND);
+        solution, objective, internals::mip_solution_origin_t::BRANCH_AND_BOUND_NODE);
       dm->rins.new_best_incumbent_callback(solution);
       return;
     }

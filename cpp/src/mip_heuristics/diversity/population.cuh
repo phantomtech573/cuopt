@@ -25,22 +25,20 @@ namespace cuopt::linear_programming::detail {
 template <typename i_t, typename f_t>
 class diversity_manager_t;
 
-enum class solution_origin_t { BRANCH_AND_BOUND, CPUFJ, RINS, EXTERNAL };
-
-constexpr const char* solution_origin_to_string(solution_origin_t origin)
-{
-  switch (origin) {
-    case solution_origin_t::BRANCH_AND_BOUND: return "B&B";
-    case solution_origin_t::CPUFJ: return "CPUFJ";
-    case solution_origin_t::RINS: return "RINS";
-    case solution_origin_t::EXTERNAL: return "injected";
-    default: return "unknown";
-  }
-}
-
 template <typename i_t, typename f_t>
 class population_t {
  public:
+  struct drained_external_solution_t {
+    drained_external_solution_t(solution_t<i_t, f_t>&& solution_,
+                                internals::mip_solution_origin_t origin_)
+      : solution(std::move(solution_)), origin(origin_)
+    {
+    }
+
+    solution_t<i_t, f_t> solution;
+    internals::mip_solution_origin_t origin;
+  };
+
   population_t(std::string const& name,
                mip_solver_context_t<i_t, f_t>& context,
                diversity_manager_t<i_t, f_t>& dm,
@@ -112,8 +110,8 @@ class population_t {
     internals::mip_solution_origin_t callback_origin = internals::mip_solution_origin_t::UNKNOWN);
   void add_external_solution(const std::vector<f_t>& solution,
                              f_t objective,
-                             solution_origin_t origin);
-  std::vector<solution_t<i_t, f_t>> get_external_solutions();
+                             internals::mip_solution_origin_t origin);
+  std::vector<drained_external_solution_t> get_external_solutions();
   void add_external_solutions_to_population();
   size_t get_external_solution_size();
   void preempt_heuristic_solver();
@@ -193,7 +191,9 @@ class population_t {
 
   struct external_solution_t {
     external_solution_t() = default;
-    external_solution_t(const std::vector<f_t>& solution, f_t objective, solution_origin_t origin)
+    external_solution_t(const std::vector<f_t>& solution,
+                        f_t objective,
+                        internals::mip_solution_origin_t origin)
       : solution(solution),
         objective(objective),
         origin(origin),
@@ -202,7 +202,7 @@ class population_t {
     }
     std::vector<f_t> solution;
     f_t objective;
-    solution_origin_t origin;
+    internals::mip_solution_origin_t origin;
     timer_t timer;  // debug timer to track how long a solution has lingered in the queue
   };
 

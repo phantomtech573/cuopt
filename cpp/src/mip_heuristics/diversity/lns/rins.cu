@@ -342,8 +342,9 @@ void rins_t<i_t, f_t>::run_rins()
       cuopt_assert(best_sol.assignment.size() == sol_size_before_rins, "Assignment size mismatch");
       cuopt_assert(best_sol.assignment.size() == problem_copy->n_variables,
                    "Assignment size mismatch");
-      dm.population.add_external_solution(
-        best_sol.get_host_assignment(), best_sol.get_objective(), solution_origin_t::RINS);
+      dm.population.add_external_solution(best_sol.get_host_assignment(),
+                                          best_sol.get_objective(),
+                                          internals::mip_solution_origin_t::LOCAL_SEARCH);
     }
   }
 
