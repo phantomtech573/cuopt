@@ -220,9 +220,6 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
     ls.constraint_prop.bounds_update.set_updated_bounds(*problem_ptr);
   }
   bool run_probing_cache = !fj_only_run;
-  // Don't run probing cache in deterministic mode yet as neither B&B nor CPUFJ need it
-  // and it doesn't make use of work units yet
-  if (is_deterministic_mode(context.settings.determinism_mode)) { run_probing_cache = false; }
   if (run_probing_cache) {
     // Run probing cache before trivial presolve to discover variable implications
     const f_t max_time_on_probing = diversity_config.max_time_on_probing;

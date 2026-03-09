@@ -132,6 +132,7 @@ class branch_and_bound_t {
 
   // This queues the solution to be processed at the correct work unit timestamp
   void queue_external_solution_deterministic(const std::vector<f_t>& solution,
+                                             f_t user_objective,
                                              double work_unit_ts,
                                              cuopt::internals::mip_solution_origin_t origin =
                                                cuopt::internals::mip_solution_origin_t::UNKNOWN);
@@ -180,6 +181,7 @@ class branch_and_bound_t {
   const simplex_solver_settings_t<i_t, f_t> settings_;
 
   work_limit_context_t work_unit_context_{"B&B"};
+  double pre_exploration_work_{0.0};
 
   // Initial guess.
   std::vector<f_t> guess_;
@@ -432,10 +434,19 @@ class branch_and_bound_t {
   double max_producer_wait_time_{0.0};
   i_t producer_wait_count_{0};
 
-  // Determinism heuristic solution queue - solutions received from GPU heuristics
-  // Stored with work unit timestamp for deterministic ordering
+  struct queued_external_solution_t {
+    std::vector<f_t> solution;
+    f_t user_objective{std::numeric_limits<f_t>::infinity()};
+    double work_timestamp{0.0};
+    cuopt::internals::mip_solution_origin_t origin{
+      cuopt::internals::mip_solution_origin_t::UNKNOWN};
+  };
+
+  // Deterministic pending external solution queue.
+  // External solutions stay raw until their retirement horizon, where they are
+  // crushed, checked, and repaired immediately if needed.
   omp_mutex_t mutex_heuristic_queue_;
-  std::vector<queued_integer_solution_t<i_t, f_t>> heuristic_solution_queue_;
+  std::vector<queued_external_solution_t> heuristic_solution_queue_;
 
   // ============================================================================
   // Determinism Diving state

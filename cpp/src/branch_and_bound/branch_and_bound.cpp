@@ -43,6 +43,13 @@
 #include <unordered_map>
 #include <vector>
 
+// uncomment to enable detailed detemrinism logs
+#undef CUOPT_DETERMINISM_LOG_PRINTF
+#define CUOPT_DETERMINISM_LOG_PRINTF(logger, ...) \
+  do {                                            \
+    logger.printf(__VA_ARGS__);                   \
+  } while (0)
+
 namespace cuopt::linear_programming::dual_simplex {
 
 namespace {
@@ -577,11 +584,12 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
 template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
   const std::vector<f_t>& solution,
+  f_t user_objective,
   double work_unit_ts,
   cuopt::internals::mip_solution_origin_t origin)
 {
-  // In deterministic mode, queue the solution to be processed at the correct work unit timestamp
-  // This ensures deterministic ordering of solution events
+  // In deterministic mode, external solutions remain raw until their retirement
+  // horizon so that feasibility and repair use the retirement LP state.
 
   if (solution.size() != original_problem_.num_cols) {
     settings_.log.printf(
@@ -591,7 +599,9 @@ void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
   const double bnb_work_total = work_unit_context_.current_work();
   const uint32_t host_hash    = detail::compute_hash(solution);
   settings_.log.printf(
-    "Queueing deterministic external incumbent: wut=%.3f (bnb_wut=%.3f) origin=%s hash=0x%x\n",
+    "Queueing deterministic external incumbent: obj=%g wut=%.3f (bnb_wut=%.3f) origin=%s "
+    "hash=0x%x\n",
+    user_objective,
     work_unit_ts,
     bnb_work_total,
     cuopt::internals::mip_solution_origin_to_string(origin),
@@ -626,57 +636,19 @@ void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
     a_col_hash,
     a_row_hash,
     a_val_hash);
-  std::vector<f_t> crushed_solution;
-  crush_primal_solution<i_t, f_t>(
-    original_problem_, original_lp_, solution, new_slacks_, crushed_solution);
-  f_t obj                     = compute_objective(original_lp_, crushed_solution);
-  const uint32_t crushed_hash = detail::compute_hash(crushed_solution);
-
-  // Validate solution before queueing
-  f_t primal_err;
-  f_t bound_err;
-  i_t num_fractional;
-  bool is_feasible = check_guess(
-    original_lp_, settings_, var_types_, crushed_solution, primal_err, bound_err, num_fractional);
   mutex_original_lp_.unlock();
 
-  if (!is_feasible) {
-    // Queue the uncrushed solution for repair; it will be crushed at
-    // consumption time so that the crush reflects the current LP state
-    // (which may have gained slack columns from cuts added after this point).
-    mutex_repair_.lock();
-    repair_queue_.push_back({solution, origin, work_unit_ts});
-    const size_t repair_queue_size = repair_queue_.size();
-    mutex_repair_.unlock();
-    CUOPT_DETERMINISM_LOG_PRINTF(
-      settings_.log,
-      "Deterministic external reject_to_repair: wut=%.6f obj=%.16e host_hash=0x%x "
-      "crushed_hash=0x%x primal_err=%.6e bound_err=%.6e fractional=%d repair_q=%zu\n",
-      work_unit_ts,
-      obj,
-      host_hash,
-      crushed_hash,
-      primal_err,
-      bound_err,
-      num_fractional,
-      repair_queue_size);
-    return;
-  }
-
-  // Queue the solution with its work unit timestamp
   mutex_heuristic_queue_.lock();
-  heuristic_solution_queue_.push_back(
-    {obj, std::move(crushed_solution), 0, -1, 0, work_unit_ts, origin});
+  heuristic_solution_queue_.push_back({solution, user_objective, work_unit_ts, origin});
   const size_t heuristic_queue_size = heuristic_solution_queue_.size();
   mutex_heuristic_queue_.unlock();
   CUOPT_DETERMINISM_LOG_PRINTF(
     settings_.log,
-    "Deterministic external queued: wut=%.6f obj=%.16e host_hash=0x%x crushed_hash=0x%x "
+    "Deterministic external queued_for_retirement: wut=%.6f user_obj=%.16e host_hash=0x%x "
     "heur_q=%zu\n",
     work_unit_ts,
-    obj,
+    user_objective,
     host_hash,
-    crushed_hash,
     heuristic_queue_size);
 }
 
@@ -720,24 +692,33 @@ bool branch_and_bound_t<i_t, f_t>::repair_solution(const std::vector<f_t>& edge_
     f_t primal_error;
     f_t bound_error;
     i_t num_fractional;
-    feasible               = check_guess(original_lp_,
+    feasible     = check_guess(original_lp_,
                            settings_,
                            var_types_,
                            lp_solution.x,
                            primal_error,
                            bound_error,
                            num_fractional);
-    repaired_obj           = compute_objective(original_lp_, repaired_solution);
-    constexpr bool verbose = false;
-    if (verbose) {
+    repaired_obj = compute_objective(original_lp_, repaired_solution);
+    if (!feasible) {
       settings_.log.printf(
-        "After repair: feasible %d primal error %e bound error %e fractional %d. Objective %e\n",
-        feasible,
+        "Repair LP optimal but check_guess failed: primal_err=%e bound_err=%e fractional=%d "
+        "obj=%e iters=%d time=%.3fs\n",
         primal_error,
         bound_error,
         num_fractional,
-        repaired_obj);
+        repaired_obj,
+        iter,
+        toc(lp_start_time));
     }
+  } else {
+    settings_.log.printf(
+      "Repair LP failed: status=%s iters=%d time=%.3fs time_limit=%.3f cut_off=%e\n",
+      dual::status_to_string(lp_status).c_str(),
+      iter,
+      toc(lp_start_time),
+      lp_settings.time_limit,
+      lp_settings.cut_off);
   }
 
   return feasible;
@@ -2213,6 +2194,16 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   exploration_stats_.nodes_explored   = 0;
   original_lp_.A.to_compressed_row(Arow_);
 
+  work_unit_scheduler_t* saved_scheduler = work_unit_context_.scheduler;
+  if (settings_.deterministic) {
+    work_unit_context_.deterministic = true;
+    // Detach the scheduler during the serial root/cuts/SB phase.
+    // record_work_sync_on_horizon still accumulates global_work_units_elapsed,
+    // but avoids scheduler->on_work_recorded whose OMP directives
+    // perturb FP state in a single-thread context.
+    work_unit_context_.scheduler = nullptr;
+  }
+
   if (guess_.size() != 0) {
     raft::common::nvtx::range scope_guess("BB::check_initial_guess");
     std::vector<f_t> crushed_guess;
@@ -2263,7 +2254,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                                            basic_list,
                                                            nonbasic_list,
                                                            root_vstatus_,
-                                                           edge_norms_);
+                                                           edge_norms_,
+                                                           &work_unit_context_);
   } else {
     settings_.log.printf("\nSolving LP root relaxation in concurrent mode\n");
     root_status = solve_root_relaxation(lp_settings,
@@ -2560,8 +2552,30 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       i_t iter                    = 0;
       bool initialize_basis       = false;
       lp_settings.concurrent_halt = NULL;
-      f_t dual_phase2_start_time  = tic();
-      dual::status_t cut_status   = dual_phase2_with_advanced_basis(2,
+      CUOPT_DETERMINISM_LOG_PRINTF(settings_.log,
+                                   "Cut loop LP warm-start: pass=%d rows=%d cols=%d "
+                                   "lower_hash=0x%x upper_hash=0x%x "
+                                   "x_hash=0x%x y_hash=0x%x z_hash=0x%x "
+                                   "basic_hash=0x%x nonbasic_hash=0x%x "
+                                   "vstatus_hash=0x%x edge_norms_hash=0x%x "
+                                   "cut_off=%.16e work_limit=%.16e time_limit=%.16e\n",
+                                   cut_pass,
+                                   original_lp_.num_rows,
+                                   original_lp_.num_cols,
+                                   detail::compute_hash(original_lp_.lower),
+                                   detail::compute_hash(original_lp_.upper),
+                                   detail::compute_hash(root_relax_soln_.x),
+                                   detail::compute_hash(root_relax_soln_.y),
+                                   detail::compute_hash(root_relax_soln_.z),
+                                   detail::compute_hash(basic_list),
+                                   detail::compute_hash(nonbasic_list),
+                                   detail::compute_hash(root_vstatus_),
+                                   detail::compute_hash(edge_norms_),
+                                   lp_settings.cut_off,
+                                   lp_settings.work_limit,
+                                   lp_settings.time_limit);
+      f_t dual_phase2_start_time = tic();
+      dual::status_t cut_status  = dual_phase2_with_advanced_basis(2,
                                                                   0,
                                                                   initialize_basis,
                                                                   exploration_stats_.start_time,
@@ -2573,7 +2587,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                                                   nonbasic_list,
                                                                   root_relax_soln_,
                                                                   iter,
-                                                                  edge_norms_);
+                                                                  edge_norms_,
+                                                                  &work_unit_context_);
       exploration_stats_.total_lp_iters += iter;
       {
         const f_t previous_root_objective = root_objective_;
@@ -2598,6 +2613,12 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         return solver_status_;
       }
 
+      if (cut_status == dual::status_t::WORK_LIMIT) {
+        solver_status_ = mip_status_t::WORK_LIMIT;
+        set_final_solution(solution, root_objective_);
+        return solver_status_;
+      }
+
       if (cut_status != dual::status_t::OPTIMAL) {
         settings_.log.printf("Numerical issue at root node. Resolving from scratch\n");
         lp_status_t scratch_status =
@@ -2609,7 +2630,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                                    basic_list,
                                                    nonbasic_list,
                                                    root_vstatus_,
-                                                   edge_norms_);
+                                                   edge_norms_,
+                                                   &work_unit_context_);
         if (scratch_status == lp_status_t::OPTIMAL) {
           // We recovered
           cut_status = convert_lp_status_to_dual_status(scratch_status);
@@ -2833,7 +2855,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                root_objective_,
                                root_vstatus_,
                                edge_norms_,
-                               pc_);
+                               pc_,
+                               &work_unit_context_);
   }
 
   if (toc(exploration_stats_.start_time) > settings_.time_limit) {
@@ -2914,6 +2937,9 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     calculate_variable_locks(original_lp_, var_up_locks_, var_down_locks_);
   }
   if (settings_.deterministic) {
+    pre_exploration_work_        = work_unit_context_.current_work();
+    work_unit_context_.scheduler = saved_scheduler;
+    settings_.log.printf("Pre-exploration work: %.2f work units\n", pre_exploration_work_);
     settings_.log.printf(
       " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node "
       "|   Gap    |  Work |  Time  |\n");
@@ -3109,7 +3135,7 @@ void branch_and_bound_t<i_t, f_t>::run_deterministic_coordinator(const csr_matri
   }
 
   deterministic_mode_enabled_              = true;
-  deterministic_current_horizon_           = deterministic_horizon_step_;
+  deterministic_current_horizon_           = pre_exploration_work_ + deterministic_horizon_step_;
   deterministic_horizon_number_            = 0;
   deterministic_global_termination_status_ = mip_status_t::UNSET;
 
@@ -3726,68 +3752,110 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
   std::vector<typename branch_and_bound_t<i_t, f_t>::deterministic_replay_solution_t>&
     replay_solutions)
 {
-  // Infeasible solutions from GPU heuristics are queued for repair; process them now
+  // Retire external solutions that have reached the current horizon. Feasibility
+  // classification and repair happen only here in deterministic mode.
   {
-    std::vector<queued_repair_solution_t> to_repair;
-    // TODO: support repair queue in deterministic mode
-    // mutex_repair_.lock();
-    // if (repair_queue_.size() > 0) {
-    //   to_repair = repair_queue_;
-    //   repair_queue_.clear();
-    // }
-    // mutex_repair_.unlock();
+    std::vector<queued_external_solution_t> due_solutions;
+    mutex_heuristic_queue_.lock();
+    {
+      std::vector<queued_external_solution_t> future_solutions;
+      for (auto& sol : heuristic_solution_queue_) {
+        if (sol.work_timestamp < deterministic_current_horizon_) {
+          due_solutions.push_back(std::move(sol));
+        } else {
+          future_solutions.push_back(std::move(sol));
+        }
+      }
+      heuristic_solution_queue_ = std::move(future_solutions);
+    }
+    mutex_heuristic_queue_.unlock();
 
-    std::sort(to_repair.begin(),
-              to_repair.end(),
-              [](const queued_repair_solution_t& a, const queued_repair_solution_t& b) {
+    std::sort(due_solutions.begin(),
+              due_solutions.end(),
+              [](const queued_external_solution_t& a, const queued_external_solution_t& b) {
+                if (a.work_timestamp != b.work_timestamp) {
+                  return a.work_timestamp < b.work_timestamp;
+                }
+                if (a.user_objective != b.user_objective) {
+                  return a.user_objective < b.user_objective;
+                }
+                if (a.origin != b.origin) { return a.origin < b.origin; }
                 return a.solution < b.solution;
               });
 
-    if (to_repair.size() > 0) {
-      CUOPT_DETERMINISM_LOG_PRINTF(
-        settings_.log,
-        "Deterministic sync: Attempting to repair %ld injected solutions\n",
-        to_repair.size());
-      for (const auto& queued_solution : to_repair) {
-        const std::vector<f_t>& uncrushed_solution = queued_solution.solution;
+    if (!due_solutions.empty()) {
+      CUOPT_DETERMINISM_LOG_PRINTF(settings_.log,
+                                   "Deterministic sync: retiring %ld external solutions\n",
+                                   due_solutions.size());
+      for (const auto& queued_solution : due_solutions) {
         std::vector<f_t> crushed_solution;
+        f_t obj;
+        f_t primal_err;
+        f_t bound_err;
+        i_t num_fractional;
+        bool is_feasible = false;
+        mutex_original_lp_.lock();
         crush_primal_solution<i_t, f_t>(
-          original_problem_, original_lp_, uncrushed_solution, new_slacks_, crushed_solution);
+          original_problem_, original_lp_, queued_solution.solution, new_slacks_, crushed_solution);
+        obj         = compute_objective(original_lp_, crushed_solution);
+        is_feasible = check_guess(original_lp_,
+                                  settings_,
+                                  var_types_,
+                                  crushed_solution,
+                                  primal_err,
+                                  bound_err,
+                                  num_fractional);
+        mutex_original_lp_.unlock();
+
+        if (is_feasible) {
+          replay_solutions.push_back({{obj,
+                                       std::move(crushed_solution),
+                                       0,
+                                       -1,
+                                       0,
+                                       queued_solution.work_timestamp,
+                                       queued_solution.origin},
+                                      search_strategy_t::BEST_FIRST});
+          CUOPT_DETERMINISM_LOG_PRINTF(
+            settings_.log,
+            "Deterministic retirement accepted: wut=%.6f obj=%.16e origin=%s primal_err=%.6e "
+            "bound_err=%.6e fractional=%d\n",
+            queued_solution.work_timestamp,
+            obj,
+            cuopt::internals::mip_solution_origin_to_string(queued_solution.origin),
+            primal_err,
+            bound_err,
+            num_fractional);
+          continue;
+        }
+
         std::vector<f_t> repaired_solution;
         f_t repaired_obj;
         bool success =
           repair_solution(edge_norms_, crushed_solution, repaired_obj, repaired_solution);
         if (success) {
-          // Queue repaired solution with work unit timestamp (...workstamp?)
-          mutex_heuristic_queue_.lock();
-          heuristic_solution_queue_.push_back({repaired_obj,
-                                               std::move(repaired_solution),
-                                               0,
-                                               -1,
-                                               0,
-                                               deterministic_current_horizon_,
-                                               queued_solution.origin});
-          mutex_heuristic_queue_.unlock();
+          settings_.log.printf(
+            "Deterministic repair success: wut=%.3f obj=%.16e origin=%s\n",
+            queued_solution.work_timestamp,
+            repaired_obj,
+            cuopt::internals::mip_solution_origin_to_string(queued_solution.origin));
+          replay_solutions.push_back({{repaired_obj,
+                                       std::move(repaired_solution),
+                                       0,
+                                       -1,
+                                       0,
+                                       queued_solution.work_timestamp,
+                                       queued_solution.origin},
+                                      search_strategy_t::BEST_FIRST});
+        } else {
+          settings_.log.printf(
+            "Deterministic repair FAILED: wut=%.3f origin=%s\n",
+            queued_solution.work_timestamp,
+            cuopt::internals::mip_solution_origin_to_string(queued_solution.origin));
         }
       }
     }
   }
-
-  // Extract heuristic solutions, keeping future solutions for next horizon
-  // Use deterministic_current_horizon_ as the upper bound (horizon_end)
-  mutex_heuristic_queue_.lock();
-  {
-    std::vector<queued_integer_solution_t<i_t, f_t>> future_solutions;
-    for (auto& sol : heuristic_solution_queue_) {
-      if (sol.work_timestamp < deterministic_current_horizon_) {
-        replay_solutions.push_back({std::move(sol), search_strategy_t::BEST_FIRST});
-      } else {
-        future_solutions.push_back(std::move(sol));
-      }
-    }
-    heuristic_solution_queue_ = std::move(future_solutions);
-  }
-  mutex_heuristic_queue_.unlock();
   if (!replay_solutions.empty() || !heuristic_solution_queue_.empty()) {
     CUOPT_DETERMINISM_LOG_PRINTF(
       settings_.log,

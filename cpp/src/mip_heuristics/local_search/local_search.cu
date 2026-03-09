@@ -193,7 +193,7 @@ void local_search_t<i_t, f_t>::start_cpufj_deterministic(
   deterministic_cpu_fj.fj_cpu->improvement_callback =
     [&bb](f_t obj, const std::vector<f_t>& h_vec, double work_units) {
       bb.queue_external_solution_deterministic(
-        h_vec, work_units, cuopt::internals::mip_solution_origin_t::CPU_FEASIBILITY_JUMP);
+        h_vec, obj, work_units, cuopt::internals::mip_solution_origin_t::CPU_FEASIBILITY_JUMP);
     };
 
   deterministic_cpu_fj.start_cpu_solver();

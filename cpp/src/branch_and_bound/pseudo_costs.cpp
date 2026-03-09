@@ -34,7 +34,8 @@ void strong_branch_helper(i_t start,
                           const std::vector<f_t>& root_soln,
                           const std::vector<variable_status_t>& root_vstatus,
                           const std::vector<f_t>& edge_norms,
-                          pseudo_costs_t<i_t, f_t>& pc)
+                          pseudo_costs_t<i_t, f_t>& pc,
+                          cuopt::work_limit_context_t* work_unit_context)
 {
   raft::common::nvtx::range scope("BB::strong_branch_helper");
   lp_problem_t child_problem = original_lp;
@@ -74,7 +75,8 @@ void strong_branch_helper(i_t start,
                                           vstatus,
                                           solution,
                                           iter,
-                                          child_edge_norms);
+                                          child_edge_norms,
+                                          work_unit_context);
 
       f_t obj = std::numeric_limits<f_t>::quiet_NaN();
       if (status == dual::status_t::DUAL_UNBOUNDED) {
@@ -307,7 +309,8 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
                       f_t root_obj,
                       const std::vector<variable_status_t>& root_vstatus,
                       const std::vector<f_t>& edge_norms,
-                      pseudo_costs_t<i_t, f_t>& pc)
+                      pseudo_costs_t<i_t, f_t>& pc,
+                      cuopt::work_limit_context_t* work_unit_context)
 {
   pc.resize(original_lp.num_cols);
   pc.strong_branch_down.assign(fractional.size(), 0);
@@ -400,12 +403,23 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
                         fractional.size());
     f_t strong_branching_start_time = tic();
 
+    const bool use_work_accounting = work_unit_context && work_unit_context->deterministic;
+    std::vector<cuopt::work_limit_context_t> thread_work_contexts;
+    if (use_work_accounting) {
+      thread_work_contexts.reserve(settings.num_threads);
+      for (i_t t = 0; t < settings.num_threads; ++t) {
+        thread_work_contexts.emplace_back("sb_thread_" + std::to_string(t));
+        thread_work_contexts.back().deterministic = true;
+      }
+    }
+
 #pragma omp parallel num_threads(settings.num_threads)
     {
       i_t n = std::min<i_t>(4 * settings.num_threads, fractional.size());
 
-      // Here we are creating more tasks than the number of threads
-      // such that they can be scheduled dynamically to the threads.
+      cuopt::work_limit_context_t* thread_ctx =
+        use_work_accounting ? &thread_work_contexts[omp_get_thread_num()] : nullptr;
+
 #pragma omp for schedule(dynamic, 1)
       for (i_t k = 0; k < n; k++) {
         i_t start = std::floor(k * fractional.size() / n);
@@ -432,9 +446,19 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
                              root_soln,
                              root_vstatus,
                              edge_norms,
-                             pc);
+                             pc,
+                             thread_ctx);
       }
     }
+
+    if (use_work_accounting) {
+      double max_work = 0.0;
+      for (const auto& ctx : thread_work_contexts) {
+        max_work = std::max(max_work, ctx.current_work());
+      }
+      work_unit_context->record_work_sync_on_horizon(max_work);
+    }
+
     settings.log.printf("Strong branching completed in %.2fs\n", toc(strong_branching_start_time));
   }
 
@@ -786,7 +810,8 @@ template void strong_branching<int, double>(const user_problem_t<int, double>& o
                                             double root_obj,
                                             const std::vector<variable_status_t>& root_vstatus,
                                             const std::vector<double>& edge_norms,
-                                            pseudo_costs_t<int, double>& pc);
+                                            pseudo_costs_t<int, double>& pc,
+                                            cuopt::work_limit_context_t* work_unit_context);
 
 #endif
 

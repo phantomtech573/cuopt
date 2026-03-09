@@ -17,6 +17,7 @@
 
 #include <utilities/omp_helpers.hpp>
 #include <utilities/pcgenerator.hpp>
+#include <utilities/work_limit_context.hpp>
 
 #include <omp.h>
 #include <cmath>
@@ -527,6 +528,7 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
                       f_t root_obj,
                       const std::vector<variable_status_t>& root_vstatus,
                       const std::vector<f_t>& edge_norms,
-                      pseudo_costs_t<i_t, f_t>& pc);
+                      pseudo_costs_t<i_t, f_t>& pc,
+                      cuopt::work_limit_context_t* work_unit_context = nullptr);
 
 }  // namespace cuopt::linear_programming::dual_simplex

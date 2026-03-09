@@ -223,7 +223,7 @@ int run_single_file(std::string file_path,
   settings.presolver                     = cuopt::linear_programming::presolver_t::Default;
   settings.reliability_branching         = reliability_branching;
   settings.seed                          = 42;
-  settings.gpu_heur_work_unit_scale      = 0.05;
+  settings.gpu_heur_work_unit_scale      = 0.4;
   cuopt::linear_programming::benchmark_info_t benchmark_info;
   settings.benchmark_info_ptr = &benchmark_info;
   auto start_run_solver       = std::chrono::high_resolution_clock::now();
