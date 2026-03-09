@@ -221,6 +221,7 @@ class branch_and_bound_t {
     std::vector<f_t> solution;
     cuopt::internals::mip_solution_origin_t origin{
       cuopt::internals::mip_solution_origin_t::UNKNOWN};
+    double work_timestamp{-1.0};
   };
   std::vector<queued_repair_solution_t> repair_queue_;
 
@@ -266,7 +267,7 @@ class branch_and_bound_t {
   omp_atomic_t<f_t> lower_bound_ceiling_;
   std::function<void(f_t)> user_bound_callback_;
 
-  void report_heuristic(f_t obj);
+  void report_heuristic(f_t obj, double work_time = -1.0);
   void report(char symbol,
               f_t obj,
               f_t lower_bound,

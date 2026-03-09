@@ -323,19 +323,30 @@ f_t branch_and_bound_t<i_t, f_t>::get_lower_bound()
 }
 
 template <typename i_t, typename f_t>
-void branch_and_bound_t<i_t, f_t>::report_heuristic(f_t obj)
+void branch_and_bound_t<i_t, f_t>::report_heuristic(f_t obj, double work_time)
 {
   if (is_running_) {
     f_t user_obj         = compute_user_objective(original_lp_, obj);
     f_t user_lower       = compute_user_objective(original_lp_, get_lower_bound());
     std::string user_gap = user_mip_gap<f_t>(user_obj, user_lower);
-
-    settings_.log.printf(
-      "H                            %+13.6e    %+10.6e                               %s %9.2f\n",
-      user_obj,
-      user_lower,
-      user_gap.c_str(),
-      toc(exploration_stats_.start_time));
+    if (settings_.deterministic) {
+      const double reported_work = work_time >= 0.0 ? work_time : work_unit_context_.current_work();
+      settings_.log.printf(
+        "H                            %+13.6e    %+10.6e                               %s "
+        "%9.2f %9.2f\n",
+        user_obj,
+        user_lower,
+        user_gap.c_str(),
+        reported_work,
+        toc(exploration_stats_.start_time));
+    } else {
+      settings_.log.printf(
+        "H                            %+13.6e    %+10.6e                               %s %9.2f\n",
+        user_obj,
+        user_lower,
+        user_gap.c_str(),
+        toc(exploration_stats_.start_time));
+    }
   } else {
     settings_.log.printf("New solution from primal heuristics. Objective %+.6e. Time %.2f\n",
                          compute_user_objective(original_lp_, obj),
@@ -577,6 +588,14 @@ void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
       "Solution size mismatch %ld %d\n", solution.size(), original_problem_.num_cols);
     return;
   }
+  const double bnb_work_total = work_unit_context_.current_work();
+  const uint32_t host_hash    = detail::compute_hash(solution);
+  settings_.log.printf(
+    "Queueing deterministic external incumbent: wut=%.3f (bnb_wut=%.3f) origin=%s hash=0x%x\n",
+    work_unit_ts,
+    bnb_work_total,
+    cuopt::internals::mip_solution_origin_to_string(origin),
+    host_hash);
 
   mutex_original_lp_.lock();
   const size_t lp_nnz       = original_lp_.A.x.size();
@@ -611,7 +630,6 @@ void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
   crush_primal_solution<i_t, f_t>(
     original_problem_, original_lp_, solution, new_slacks_, crushed_solution);
   f_t obj                     = compute_objective(original_lp_, crushed_solution);
-  const uint32_t host_hash    = detail::compute_hash(solution);
   const uint32_t crushed_hash = detail::compute_hash(crushed_solution);
 
   // Validate solution before queueing
@@ -627,7 +645,7 @@ void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
     // consumption time so that the crush reflects the current LP state
     // (which may have gained slack columns from cuts added after this point).
     mutex_repair_.lock();
-    repair_queue_.push_back({solution, origin});
+    repair_queue_.push_back({solution, origin, work_unit_ts});
     const size_t repair_queue_size = repair_queue_.size();
     mutex_repair_.unlock();
     CUOPT_DETERMINISM_LOG_PRINTF(
@@ -764,7 +782,7 @@ void branch_and_bound_t<i_t, f_t>::repair_heuristic_solutions()
             upper_bound_.load(),
             repaired_obj,
             detail::compute_hash(repaired_solution));
-          report_heuristic(repaired_obj);
+          report_heuristic(repaired_obj, queued_solution.work_timestamp);
 
           emit_solution_callback_from_crushed(
             repaired_solution, repaired_obj, queued_solution.origin, -1.0);
@@ -3910,7 +3928,7 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
                  0,
                  deterministic_current_horizon_);
         } else {
-          report_heuristic(sol.objective);
+          report_heuristic(sol.objective, sol.work_timestamp);
         }
         emit_solution_callback_from_crushed(
           sol.solution, sol.objective, sol.origin, sol.work_timestamp);

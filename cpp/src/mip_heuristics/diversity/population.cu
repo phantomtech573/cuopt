@@ -338,12 +338,6 @@ void population_t<i_t, f_t>::run_solution_callbacks(
       const double work_timestamp = context.gpu_heur_loop.current_producer_work();
       cuopt_assert(std::isfinite(work_timestamp),
                    "Deterministic heuristic work timestamp must be finite");
-      CUOPT_LOG_DEBUG(
-        "Submitting deterministic heuristic incumbent: obj=%g wut=%.6f origin=%s hash=0x%x",
-        sol.get_user_objective(),
-        work_timestamp,
-        internals::mip_solution_origin_to_string(callback_origin),
-        sol.get_hash());
       context.branch_and_bound_ptr->queue_external_solution_deterministic(
         sol.get_host_assignment(), work_timestamp, callback_origin);
       // In deterministic mode, B&B replay is the single owner of GET_SOLUTION callback ordering.
