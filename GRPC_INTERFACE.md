@@ -18,14 +18,13 @@ All gRPC-related C++ source lives under a single tree:
 cpp/src/grpc/
 ├── cuopt_remote.proto              # Base protobuf messages (job status, settings, etc.)
 ├── cuopt_remote_service.proto      # Service definition + messages (SubmitJob, ChunkedUpload, Incumbent, etc.)
-├── grpc_problem_mapper.{hpp,cu}    # CPU problem ↔ proto (incl. chunked header)
-├── grpc_solution_mapper.{hpp,cu}   # LP/MIP solution ↔ proto (unary + chunked)
-├── grpc_settings_mapper.{hpp,cu}   # PDLP/MIP settings ↔ proto
-├── grpc_service_mapper.{hpp,cu}    # Request/response builders (status, cancel, stream logs, etc.)
+├── grpc_problem_mapper.{hpp,cpp}   # CPU problem ↔ proto (incl. chunked header)
+├── grpc_solution_mapper.{hpp,cpp}  # LP/MIP solution ↔ proto (unary + chunked)
+├── grpc_settings_mapper.{hpp,cpp}  # PDLP/MIP settings ↔ proto
+├── grpc_service_mapper.{hpp,cpp}   # Request/response builders (status, cancel, stream logs, etc.)
 ├── client/
-│   ├── grpc_client.{hpp,cu}        # High-level client: connect, submit, poll, get result
-│   ├── solve_remote.cu             # solve_lp_remote / solve_mip_remote (uses grpc_client)
-│   └── test_grpc_client.cpp         # CLI for testing against cuopt_grpc_server
+│   ├── grpc_client.{hpp,cpp}       # High-level client: connect, submit, poll, get result
+│   └── solve_remote.cpp            # solve_lp_remote / solve_mip_remote (uses grpc_client)
 └── server/
     ├── grpc_server_main.cpp        # main(), argument parsing, gRPC server setup
     ├── grpc_service_impl.cpp       # CuOptRemoteServiceImpl — all RPC handlers
@@ -42,7 +41,7 @@ cpp/src/grpc/
 - **Protos**: Live in `cpp/src/grpc/`. CMake generates C++ in the build dir (`cuopt_remote.pb.h`, `cuopt_remote_service.pb.h`, `cuopt_remote_service.grpc.pb.h`).
 - **Mappers**: Shared by client and server; convert between host C++ types and protobuf. Used for unary and chunked paths.
 - **Client**: Solver-level utility (not public API). Used by `solve_lp_remote`/`solve_mip_remote` and tests.
-- **Server**: Standalone executable `cuopt_grpc_server`. See `SERVER_ARCHITECTURE.md` for process model and file roles.
+- **Server**: Standalone executable `cuopt_grpc_server`. See `GRPC_SERVER_ARCHITECTURE.md` for process model and file roles.
 
 ## Protocol Files
 
@@ -280,8 +279,15 @@ config.incumbent_callback = [](int64_t idx, double obj, const auto& sol) {
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `CUOPT_REMOTE_HOST` | `localhost` | Server hostname for remote solves |
+| `CUOPT_REMOTE_PORT` | `8765` | Server port for remote solves |
 | `CUOPT_CHUNK_SIZE` | 16 MiB | Override `chunk_size_bytes` |
 | `CUOPT_MAX_MESSAGE_BYTES` | 256 MiB | Override `max_message_bytes` |
+| `CUOPT_GRPC_DEBUG` | `0` | Enable client debug/throughput logging (`0` or `1`) |
+| `CUOPT_TLS_ENABLED` | `0` | Enable TLS for client connections (`0` or `1`) |
+| `CUOPT_TLS_ROOT_CERT` | *(none)* | Path to PEM root CA file (server verification) |
+| `CUOPT_TLS_CLIENT_CERT` | *(none)* | Path to PEM client certificate file (for mTLS) |
+| `CUOPT_TLS_CLIENT_KEY` | *(none)* | Path to PEM client private key file (for mTLS) |
 
 ## TLS Configuration
 
@@ -307,7 +313,16 @@ Server requires client certificate:
   --require-client-cert
 ```
 
-Client provides certificate:
+Client provides certificate via environment variables (applies to Python, `cuopt_cli`, and C API):
+
+```bash
+export CUOPT_TLS_ENABLED=1
+export CUOPT_TLS_ROOT_CERT=ca.crt
+export CUOPT_TLS_CLIENT_CERT=client.crt
+export CUOPT_TLS_CLIENT_KEY=client.key
+```
+
+Or programmatically via `grpc_client_config_t`:
 
 ```cpp
 config.enable_tls = true;
@@ -321,7 +336,7 @@ config.tls_client_key = read_file("client.key");
 | Configuration | Default | Notes |
 |---------------|---------|-------|
 | Server `--max-message-mb` | 256 MiB | Per-message limit (also `--max-message-bytes` for exact byte values) |
-| Server clamping | [4 MiB, ~2 GiB] | Enforced at startup to stay within protobuf's serialization limit |
+| Server clamping | [4 KiB, ~2 GiB] | Enforced at startup to stay within protobuf's serialization limit |
 | Client `max_message_bytes` | 256 MiB | Clamped to [4 MiB, ~2 GiB] at construction |
 | Chunk size | 16 MiB | Payload per `SendArrayChunk`/`GetResultChunk` |
 | Chunked threshold | 75% of max_message_bytes | Problems above this use chunked upload (e.g. 192 MiB when max is 256 MiB) |
@@ -356,7 +371,7 @@ allows "unlimited" message size — both clamp to the protobuf 2 GiB ceiling.
 └─────────┘                                    └─────────────┘
 ```
 
-See `SERVER_ARCHITECTURE.md` for details on internal server architecture.
+See `GRPC_SERVER_ARCHITECTURE.md` for details on internal server architecture.
 
 ## Code Generation
 
@@ -371,8 +386,7 @@ Adding or changing a proto field can be done via YAML and regenerate instead of 
 
 ## Build
 
-- **libcuopt**: Includes the mapper `.cu` files, `grpc_client.cu`, and `solve_remote.cu`. Requires `CUOPT_ENABLE_GRPC`, gRPC, and protobuf. Proto generation is done by CMake custom commands that depend on the `.proto` files in `cpp/src/grpc/`.
+- **libcuopt**: Includes the mapper `.cpp` files, `grpc_client.cpp`, and `solve_remote.cpp`. Requires `CUOPT_ENABLE_GRPC`, gRPC, and protobuf. Proto generation is done by CMake custom commands that depend on the `.proto` files in `cpp/src/grpc/`.
 - **cuopt_grpc_server**: Executable built from `cpp/src/grpc/server/*.cpp`; links libcuopt, gRPC, protobuf.
-- **test_grpc_client**: Executable built from `cpp/src/grpc/client/test_grpc_client.cpp`; links libcuopt, gRPC, protobuf.
 
 Tests that use the client (e.g. `grpc_client_test.cpp`, `grpc_integration_test.cpp`) get `cpp/src/grpc` and `cpp/src/grpc/client` in their include path.
