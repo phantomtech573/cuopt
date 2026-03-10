@@ -1496,6 +1496,10 @@ bool fj_t<i_t, f_t>::cpu_solve(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t in_time_l
       CUOPT_LOG_TRACE("CPUFJ work units: %f incumbent %g",
                       fj_cpu.work_units_elapsed.load(std::memory_order_relaxed),
                       fj_cpu.pb_ptr->get_user_obj_from_solver_obj(fj_cpu.h_best_objective));
+
+      if (fj_cpu.work_units_elapsed.load(std::memory_order_relaxed) >= fj_cpu.work_budget) {
+        break;
+      }
     }
 
     cuopt_func_call(sanity_checks(fj_cpu));
