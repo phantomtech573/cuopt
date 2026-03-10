@@ -552,17 +552,19 @@ template <typename f_t>
 void set_presolve_parameters(papilo::Presolve<f_t>& presolver,
                              problem_category_t category,
                              int nrows,
-                             int ncols)
+                             int ncols,
+                             bool deterministic = false)
 {
-  // It looks like a copy. But this copy has the pointers to relevant variables in papilo
   auto params = presolver.getParameters();
   if (category == problem_category_t::MIP) {
-    // Papilo has work unit measurements for probing. Because of this when the first batch fails to
-    // produce any reductions, the algorithm stops. To avoid stopping the algorithm, we set a
-    // minimum badge size to a huge value. The time limit makes sure that we exit if it takes too
-    // long
-    int min_badgesize = std::max(ncols / 2, 32);
-    params.setParameter("probing.minbadgesize", min_badgesize);
+    if (!deterministic) {
+      // Papilo has work unit measurements for probing. Because of this when the first batch fails
+      // to produce any reductions, the algorithm stops. To avoid stopping the algorithm, we set a
+      // minimum badge size to a huge value. The time limit makes sure that we exit if it takes too
+      // long
+      int min_badgesize = std::max(ncols / 2, 32);
+      params.setParameter("probing.minbadgesize", min_badgesize);
+    }
     params.setParameter("cliquemerging.enabled", true);
     params.setParameter("cliquemerging.maxcalls", 50);
   }
@@ -633,8 +635,11 @@ std::optional<third_party_presolve_result_t<i_t, f_t>> third_party_presolve_t<i_
                                  time_limit,
                                  dual_postsolve,
                                  num_cpu_threads);
-  set_presolve_parameters<f_t>(
-    papilo_presolver, category, op_problem.get_n_constraints(), op_problem.get_n_variables());
+  set_presolve_parameters<f_t>(papilo_presolver,
+                               category,
+                               op_problem.get_n_constraints(),
+                               op_problem.get_n_variables(),
+                               deterministic_);
 
   // Disable papilo logs
   papilo_presolver.setVerbosityLevel(papilo::VerbosityLevel::kQuiet);

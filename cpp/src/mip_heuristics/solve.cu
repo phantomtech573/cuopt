@@ -291,7 +291,8 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
       // Note that this is not the presolve time, but the time limit for presolve.
       double presolve_time_limit = std::min(0.1 * time_limit, 60.0);
       if (deterministic_run) { presolve_time_limit = std::numeric_limits<double>::infinity(); }
-      presolver   = std::make_unique<detail::third_party_presolve_t<i_t, f_t>>();
+      presolver = std::make_unique<detail::third_party_presolve_t<i_t, f_t>>();
+      presolver->set_deterministic(deterministic_run);
       auto result = presolver->apply(op_problem,
                                      cuopt::linear_programming::problem_category_t::MIP,
                                      settings.presolver,
