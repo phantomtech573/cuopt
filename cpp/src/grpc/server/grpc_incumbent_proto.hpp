@@ -12,6 +12,7 @@
 #ifdef CUOPT_ENABLE_GRPC
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 #include "cuopt_remote.pb.h"
@@ -27,8 +28,10 @@ inline std::vector<uint8_t> build_incumbent_proto(const std::string& job_id,
   for (double v : assignment) {
     msg.add_assignment(v);
   }
-  std::vector<uint8_t> buffer(msg.ByteSizeLong());
-  msg.SerializeToArray(buffer.data(), static_cast<int>(buffer.size()));
+  auto size = msg.ByteSizeLong();
+  if (size > static_cast<size_t>(std::numeric_limits<int>::max())) { return {}; }
+  std::vector<uint8_t> buffer(size);
+  if (!msg.SerializeToArray(buffer.data(), static_cast<int>(buffer.size()))) { return {}; }
   return buffer;
 }
 
@@ -43,6 +46,7 @@ inline bool parse_incumbent_proto(const uint8_t* data,
 
   job_id    = incumbent_msg.job_id();
   objective = incumbent_msg.objective();
+  assignment.clear();
   assignment.reserve(incumbent_msg.assignment_size());
   for (int i = 0; i < incumbent_msg.assignment_size(); ++i) {
     assignment.push_back(incumbent_msg.assignment(i));

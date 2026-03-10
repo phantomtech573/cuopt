@@ -312,7 +312,7 @@ message LogMessage {
 // =============================================================================
 
 message IncumbentRequest {
-  bytes job_id = 1;
+  string job_id = 1;
   int64 from_index = 2;        // Return incumbents starting from this index
   int32 max_count = 3;         // Optional limit (0 or negative => no limit)
 }
@@ -321,7 +321,7 @@ message Incumbent {
   int64 index = 1;
   double objective = 2;
   repeated double assignment = 3;
-  bytes job_id = 4;
+  string job_id = 4;
 }
 
 message IncumbentResponse {

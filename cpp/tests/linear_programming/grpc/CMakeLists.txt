@@ -26,8 +26,6 @@ target_link_libraries(GRPC_CLIENT_TEST
     cuopt
     GTest::gmock
     GTest::gmock_main
-    GTest::gtest
-    GTest::gtest_main
     gRPC::grpc++
     protobuf::libprotobuf
 )
@@ -105,8 +103,7 @@ target_link_libraries(GRPC_INTEGRATION_TEST
     PRIVATE
     cuopt
     GTest::gmock
-    GTest::gtest
-    GTest::gtest_main
+    GTest::gmock_main
     gRPC::grpc++
     protobuf::libprotobuf
 )

@@ -23,6 +23,7 @@
 #include <future>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <thread>
 
@@ -31,6 +32,8 @@ namespace cuopt::linear_programming {
 // =============================================================================
 // Constants
 // =============================================================================
+
+constexpr int kDefaultRpcTimeoutSeconds = 60;  // per-RPC deadline for short operations
 
 constexpr int64_t kMinMessageBytes = 4LL * 1024 * 1024;  // 4 MiB floor for max_message_bytes
 
@@ -77,6 +80,18 @@ struct grpc_client_t::impl_t {
   std::shared_ptr<cuopt::remote::CuOptRemoteService::StubInterface> stub;
   bool mock_mode = false;  // Set to true when using injected mock stub
 };
+
+// All finite-duration RPCs (CheckStatus, SendArrayChunk, GetResult, etc.)
+// use kDefaultRpcTimeoutSeconds (60s).  Indefinite RPCs (StreamLogs,
+// WaitForCompletion) omit the deadline entirely and rely on TryCancel or
+// client-side polling for cancellation — a fixed deadline would kill
+// legitimate long-running solves.
+static void set_rpc_deadline(grpc::ClientContext& ctx, int timeout_seconds)
+{
+  if (timeout_seconds > 0) {
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(timeout_seconds));
+  }
+}
 
 // =============================================================================
 // Test Helper Functions (for mock stub injection)
@@ -205,6 +220,15 @@ void grpc_client_t::stop_log_streaming()
   constexpr auto kLogJoinTimeout = std::chrono::seconds(5);
 
   stop_logs_.store(true);
+  // Cancel the in-flight streaming RPC from this thread.  reader->Read()
+  // blocks until the server sends a message, so the stop_logs_ flag alone
+  // is not enough — TryCancel makes Read() return false immediately.
+  {
+    std::lock_guard<std::mutex> lk(log_context_mutex_);
+    if (active_log_context_) {
+      static_cast<grpc::ClientContext*>(active_log_context_)->TryCancel();
+    }
+  }
   if (log_thread_ && log_thread_->joinable()) {
     auto future = std::async(std::launch::async, [this]() { log_thread_->join(); });
     if (future.wait_for(kLogJoinTimeout) == std::future_status::timeout) {
@@ -241,7 +265,13 @@ job_status_result_t grpc_client_t::check_status(const std::string& job_id)
 {
   job_status_result_t result;
 
+  if (!impl_->stub) {
+    result.error_message = "Not connected to server";
+    return result;
+  }
+
   grpc::ClientContext context;
+  set_rpc_deadline(context, kDefaultRpcTimeoutSeconds);
   auto request = build_status_request(job_id);
   cuopt::remote::StatusResponse response;
   auto status = impl_->stub->CheckStatus(&context, request, &response);
@@ -269,7 +299,16 @@ job_status_result_t grpc_client_t::wait_for_completion(const std::string& job_id
 {
   job_status_result_t result;
 
+  if (!impl_->stub) {
+    result.error_message = "Not connected to server";
+    return result;
+  }
+
   grpc::ClientContext context;
+  // No RPC deadline: WaitForCompletion blocks until the solver finishes,
+  // which may exceed any fixed timeout.  The server detects client
+  // disconnect (context->IsCancelled), and the production path uses
+  // poll_for_completion which has its own config_.timeout_seconds loop.
   cuopt::remote::WaitRequest request;
   request.set_job_id(job_id);
   cuopt::remote::WaitResponse response;
@@ -294,7 +333,13 @@ cancel_result_t grpc_client_t::cancel_job(const std::string& job_id)
 {
   cancel_result_t result;
 
+  if (!impl_->stub) {
+    result.error_message = "Not connected to server";
+    return result;
+  }
+
   grpc::ClientContext context;
+  set_rpc_deadline(context, kDefaultRpcTimeoutSeconds);
   auto request = build_cancel_request(job_id);
   cuopt::remote::CancelResponse response;
   auto status = impl_->stub->CancelJob(&context, request, &response);
@@ -314,7 +359,13 @@ cancel_result_t grpc_client_t::cancel_job(const std::string& job_id)
 
 bool grpc_client_t::delete_job(const std::string& job_id)
 {
+  if (!impl_->stub) {
+    last_error_ = "Not connected to server";
+    return false;
+  }
+
   grpc::ClientContext context;
+  set_rpc_deadline(context, kDefaultRpcTimeoutSeconds);
   cuopt::remote::DeleteRequest request;
   request.set_job_id(job_id);
   cuopt::remote::DeleteResponse response;
@@ -345,7 +396,13 @@ incumbents_result_t grpc_client_t::get_incumbents(const std::string& job_id,
 {
   incumbents_result_t result;
 
+  if (!impl_->stub) {
+    result.error_message = "Not connected to server";
+    return result;
+  }
+
   grpc::ClientContext context;
+  set_rpc_deadline(context, kDefaultRpcTimeoutSeconds);
   cuopt::remote::IncumbentRequest request;
   request.set_job_id(job_id);
   request.set_from_index(from_index);
@@ -382,10 +439,26 @@ bool grpc_client_t::stream_logs(
   int64_t from_byte,
   std::function<bool(const std::string& line, bool job_complete)> callback)
 {
+  if (!impl_->stub) {
+    last_error_ = "Not connected to server";
+    return false;
+  }
+
   grpc::ClientContext context;
+  // No RPC deadline here: this stream stays open for the entire solve, which
+  // can exceed any fixed timeout.  Shutdown is via TryCancel from
+  // stop_log_streaming(), not a deadline.
   cuopt::remote::StreamLogsRequest request;
   request.set_job_id(job_id);
   request.set_from_byte(from_byte);
+
+  // Publish this context so stop_log_streaming() can TryCancel it from
+  // another thread.  The mutex ensures the pointer is never dangling:
+  // we clear it under the same lock before `context` goes out of scope.
+  {
+    std::lock_guard<std::mutex> lk(log_context_mutex_);
+    active_log_context_ = &context;
+  }
 
   auto reader = impl_->stub->StreamLogs(&context, request);
 
@@ -400,6 +473,12 @@ bool grpc_client_t::stream_logs(
   }
 
   auto status = reader->Finish();
+
+  {
+    std::lock_guard<std::mutex> lk(log_context_mutex_);
+    active_log_context_ = nullptr;
+  }
+
   return status.ok() || status.error_code() == grpc::StatusCode::CANCELLED;
 }
 
@@ -408,9 +487,15 @@ bool grpc_client_t::submit_unary(const cuopt::remote::SubmitJobRequest& request,
 {
   job_id_out.clear();
 
+  if (!impl_->stub) {
+    last_error_ = "Not connected to server";
+    return false;
+  }
+
   auto t0 = std::chrono::steady_clock::now();
 
   grpc::ClientContext context;
+  set_rpc_deadline(context, kDefaultRpcTimeoutSeconds);
   cuopt::remote::SubmitJobResponse response;
   auto status = impl_->stub->SubmitJob(&context, request, &response);
 
@@ -592,7 +677,10 @@ grpc_client_t::poll_result_t grpc_client_t::poll_for_completion(const std::strin
 
   int poll_count = 0;
   int poll_ms    = std::max(config_.poll_interval_ms, 1);
-  int max_polls  = (config_.timeout_seconds * 1000) / poll_ms;
+  // timeout_seconds <= 0 means "wait indefinitely" — the solver's own
+  // time_limit (passed via settings) is the authoritative bound.
+  int max_polls = (config_.timeout_seconds > 0) ? (config_.timeout_seconds * 1000) / poll_ms
+                                                : std::numeric_limits<int>::max();
 
   int64_t incumbent_next_index = 0;
   auto last_incumbent_poll     = std::chrono::steady_clock::now();
@@ -738,6 +826,7 @@ bool grpc_client_t::upload_chunked_arrays(const cpu_optimization_problem_t<i_t, 
   std::string upload_id;
   {
     grpc::ClientContext context;
+    set_rpc_deadline(context, kDefaultRpcTimeoutSeconds);
     cuopt::remote::StartChunkedUploadRequest request;
     *request.mutable_problem_header() = header;
 
@@ -772,6 +861,7 @@ bool grpc_client_t::upload_chunked_arrays(const cpu_optimization_problem_t<i_t, 
 
   for (auto& chunk_request : chunk_requests) {
     grpc::ClientContext chunk_context;
+    set_rpc_deadline(chunk_context, kDefaultRpcTimeoutSeconds);
     cuopt::remote::SendArrayChunkResponse chunk_response;
     auto status = impl_->stub->SendArrayChunk(&chunk_context, chunk_request, &chunk_response);
 
@@ -790,6 +880,7 @@ bool grpc_client_t::upload_chunked_arrays(const cpu_optimization_problem_t<i_t, 
   // --- 4. FinishChunkedUpload ---
   {
     grpc::ClientContext context;
+    set_rpc_deadline(context, kDefaultRpcTimeoutSeconds);
     cuopt::remote::FinishChunkedUploadRequest request;
     request.set_upload_id(upload_id);
 
@@ -816,9 +907,15 @@ bool grpc_client_t::get_result_or_download(const std::string& job_id,
 {
   result_out = downloaded_result_t{};
 
+  if (!impl_->stub) {
+    last_error_ = "Not connected to server";
+    return false;
+  }
+
   int64_t result_size_hint = 0;
   {
     grpc::ClientContext context;
+    set_rpc_deadline(context, kDefaultRpcTimeoutSeconds);
     auto request = build_status_request(job_id);
     cuopt::remote::StatusResponse response;
     auto status = impl_->stub->CheckStatus(&context, request, &response);
@@ -856,6 +953,7 @@ bool grpc_client_t::get_result_or_download(const std::string& job_id,
   auto download_t0 = std::chrono::steady_clock::now();
 
   grpc::ClientContext context;
+  set_rpc_deadline(context, kDefaultRpcTimeoutSeconds);
   auto request  = build_get_result_request(job_id);
   auto response = std::make_unique<cuopt::remote::ResultResponse>();
   auto status   = impl_->stub->GetResult(&context, request, response.get());
@@ -903,6 +1001,7 @@ bool grpc_client_t::download_chunked_result(const std::string& job_id,
   auto header = std::make_unique<cuopt::remote::ChunkedResultHeader>();
   {
     grpc::ClientContext context;
+    set_rpc_deadline(context, kDefaultRpcTimeoutSeconds);
     cuopt::remote::StartChunkedDownloadRequest request;
     request.set_job_id(job_id);
 
@@ -942,6 +1041,20 @@ bool grpc_client_t::download_chunked_result(const std::string& job_id,
     int64_t elem_size   = arr_desc.element_size_bytes();
     if (total_elems <= 0) continue;
 
+    if (elem_size <= 0) {
+      last_error_ = "Invalid chunk metadata: non-positive element_size_bytes for field " +
+                    std::to_string(field_id);
+      return false;
+    }
+    // Guard against total_elems * elem_size overflowing int64_t (both are
+    // positive at this point, so dividing INT64_MAX is safe and avoids the
+    // signed/unsigned pitfall of casting SIZE_MAX to int64_t).
+    if (total_elems > std::numeric_limits<int64_t>::max() / elem_size) {
+      last_error_ =
+        "Invalid chunk metadata: total byte size overflow for field " + std::to_string(field_id);
+      return false;
+    }
+
     int64_t elems_per_chunk = chunk_data_budget / elem_size;
     if (elems_per_chunk <= 0) elems_per_chunk = 1;
 
@@ -951,6 +1064,7 @@ bool grpc_client_t::download_chunked_result(const std::string& job_id,
       int64_t elems_wanted = std::min(elems_per_chunk, total_elems - elem_offset);
 
       grpc::ClientContext chunk_ctx;
+      set_rpc_deadline(chunk_ctx, kDefaultRpcTimeoutSeconds);
       cuopt::remote::GetResultChunkRequest chunk_req;
       chunk_req.set_download_id(download_id);
       chunk_req.set_field_id(field_id);
@@ -988,6 +1102,7 @@ bool grpc_client_t::download_chunked_result(const std::string& job_id,
   // --- 3. FinishChunkedDownload ---
   {
     grpc::ClientContext context;
+    set_rpc_deadline(context, kDefaultRpcTimeoutSeconds);
     cuopt::remote::FinishChunkedDownloadRequest request;
     request.set_download_id(download_id);
 

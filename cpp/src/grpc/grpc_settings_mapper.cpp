@@ -141,7 +141,10 @@ void map_proto_to_pdlp_settings(const cuopt::remote::PDLPSolverSettings& pb_sett
   // proto3 defaults numeric fields to 0; treat negative iteration_limit as "unset"
   // so the server keeps the library default (typically max()).
   if (pb_settings.iteration_limit() >= 0) {
-    settings.iteration_limit = static_cast<i_t>(pb_settings.iteration_limit());
+    const auto limit         = pb_settings.iteration_limit();
+    settings.iteration_limit = (limit > static_cast<int64_t>(std::numeric_limits<i_t>::max()))
+                                 ? std::numeric_limits<i_t>::max()
+                                 : static_cast<i_t>(limit);
   }
 
   // Solver configuration
@@ -150,10 +153,15 @@ void map_proto_to_pdlp_settings(const cuopt::remote::PDLPSolverSettings& pb_sett
   settings.strict_infeasibility = pb_settings.strict_infeasibility();
   settings.pdlp_solver_mode     = from_proto_pdlp_mode(pb_settings.pdlp_solver_mode());
   settings.method               = from_proto_method(pb_settings.method());
-  settings.presolver            = static_cast<presolver_t>(pb_settings.presolver());
-  settings.dual_postsolve       = pb_settings.dual_postsolve();
-  settings.crossover            = pb_settings.crossover();
-  settings.num_gpus             = pb_settings.num_gpus();
+  {
+    auto pv            = pb_settings.presolver();
+    settings.presolver = (pv >= CUOPT_PRESOLVE_DEFAULT && pv <= CUOPT_PRESOLVE_PSLP)
+                           ? static_cast<presolver_t>(pv)
+                           : presolver_t::Default;
+  }
+  settings.dual_postsolve = pb_settings.dual_postsolve();
+  settings.crossover      = pb_settings.crossover();
+  settings.num_gpus       = pb_settings.num_gpus();
 
   settings.per_constraint_residual    = pb_settings.per_constraint_residual();
   settings.cudss_deterministic        = pb_settings.cudss_deterministic();
@@ -216,8 +224,13 @@ void map_proto_to_mip_settings(const cuopt::remote::MIPSolverSettings& pb_settin
   settings.heuristics_only = pb_settings.heuristics_only();
   settings.num_cpu_threads = pb_settings.num_cpu_threads();
   settings.num_gpus        = pb_settings.num_gpus();
-  settings.presolver       = static_cast<presolver_t>(pb_settings.presolver());
-  settings.mip_scaling     = pb_settings.mip_scaling();
+  {
+    auto pv            = pb_settings.presolver();
+    settings.presolver = (pv >= CUOPT_PRESOLVE_DEFAULT && pv <= CUOPT_PRESOLVE_PSLP)
+                           ? static_cast<presolver_t>(pv)
+                           : presolver_t::Default;
+  }
+  settings.mip_scaling = pb_settings.mip_scaling();
 }
 
 // Explicit template instantiations

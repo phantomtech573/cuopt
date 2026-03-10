@@ -173,7 +173,9 @@ void map_proto_to_problem(const cuopt::remote::OptimizationProblem& pb_problem,
   cpu_problem.set_variable_upper_bounds(var_ub.data(), static_cast<i_t>(var_ub.size()));
 
   // Constraint bounds (prefer lower/upper bounds if available)
-  if (pb_problem.constraint_lower_bounds_size() > 0) {
+  if (pb_problem.constraint_lower_bounds_size() > 0 &&
+      pb_problem.constraint_upper_bounds_size() > 0 &&
+      pb_problem.constraint_lower_bounds_size() == pb_problem.constraint_upper_bounds_size()) {
     std::vector<f_t> con_lb(pb_problem.constraint_lower_bounds().begin(),
                             pb_problem.constraint_lower_bounds().end());
     std::vector<f_t> con_ub(pb_problem.constraint_upper_bounds().begin(),
@@ -400,14 +402,15 @@ void map_chunked_arrays_to_problem(const cuopt::remote::ChunkedProblemHeader& he
   auto get_doubles = [&](int32_t field_id) -> std::vector<f_t> {
     auto it = arrays.find(field_id);
     if (it == arrays.end() || it->second.empty()) return {};
+    if (it->second.size() % sizeof(double) != 0) return {};
     size_t n = it->second.size() / sizeof(double);
     if constexpr (std::is_same_v<f_t, double>) {
       std::vector<double> v(n);
-      std::memcpy(v.data(), it->second.data(), it->second.size());
+      std::memcpy(v.data(), it->second.data(), n * sizeof(double));
       return v;
     } else {
       std::vector<double> tmp(n);
-      std::memcpy(tmp.data(), it->second.data(), it->second.size());
+      std::memcpy(tmp.data(), it->second.data(), n * sizeof(double));
       return std::vector<f_t>(tmp.begin(), tmp.end());
     }
   };
@@ -415,14 +418,15 @@ void map_chunked_arrays_to_problem(const cuopt::remote::ChunkedProblemHeader& he
   auto get_ints = [&](int32_t field_id) -> std::vector<i_t> {
     auto it = arrays.find(field_id);
     if (it == arrays.end() || it->second.empty()) return {};
+    if (it->second.size() % sizeof(int32_t) != 0) return {};
     size_t n = it->second.size() / sizeof(int32_t);
     if constexpr (std::is_same_v<i_t, int32_t>) {
       std::vector<int32_t> v(n);
-      std::memcpy(v.data(), it->second.data(), it->second.size());
+      std::memcpy(v.data(), it->second.data(), n * sizeof(int32_t));
       return v;
     } else {
       std::vector<int32_t> tmp(n);
-      std::memcpy(tmp.data(), it->second.data(), it->second.size());
+      std::memcpy(tmp.data(), it->second.data(), n * sizeof(int32_t));
       return std::vector<i_t>(tmp.begin(), tmp.end());
     }
   };
@@ -452,7 +456,7 @@ void map_chunked_arrays_to_problem(const cuopt::remote::ChunkedProblemHeader& he
   auto a_values  = get_doubles(cuopt::remote::FIELD_A_VALUES);
   auto a_indices = get_ints(cuopt::remote::FIELD_A_INDICES);
   auto a_offsets = get_ints(cuopt::remote::FIELD_A_OFFSETS);
-  if (!a_values.empty()) {
+  if (!a_values.empty() && !a_indices.empty() && !a_offsets.empty()) {
     cpu_problem.set_csr_constraint_matrix(a_values.data(),
                                           static_cast<i_t>(a_values.size()),
                                           a_indices.data(),
@@ -524,7 +528,7 @@ void map_chunked_arrays_to_problem(const cuopt::remote::ChunkedProblemHeader& he
   auto q_values  = get_doubles(cuopt::remote::FIELD_Q_VALUES);
   auto q_indices = get_ints(cuopt::remote::FIELD_Q_INDICES);
   auto q_offsets = get_ints(cuopt::remote::FIELD_Q_OFFSETS);
-  if (!q_values.empty()) {
+  if (!q_values.empty() && !q_indices.empty() && !q_offsets.empty()) {
     cpu_problem.set_quadratic_objective_matrix(q_values.data(),
                                                static_cast<i_t>(q_values.size()),
                                                q_indices.data(),

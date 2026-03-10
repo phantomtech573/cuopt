@@ -518,19 +518,22 @@ std::vector<T> bytes_to_typed(const std::map<int32_t, std::vector<uint8_t>>& arr
 
   const auto& raw = it->second;
   if constexpr (std::is_same_v<T, float>) {
+    if (raw.size() % sizeof(double) != 0) return {};
     size_t n = raw.size() / sizeof(double);
     std::vector<double> tmp(n);
-    std::memcpy(tmp.data(), raw.data(), raw.size());
+    std::memcpy(tmp.data(), raw.data(), n * sizeof(double));
     return std::vector<T>(tmp.begin(), tmp.end());
   } else if constexpr (std::is_same_v<T, double>) {
+    if (raw.size() % sizeof(double) != 0) return {};
     size_t n = raw.size() / sizeof(double);
     std::vector<double> v(n);
-    std::memcpy(v.data(), raw.data(), raw.size());
+    std::memcpy(v.data(), raw.data(), n * sizeof(double));
     return v;
   } else {
+    if (raw.size() % sizeof(T) != 0) return {};
     size_t n = raw.size() / sizeof(T);
     std::vector<T> v(n);
-    std::memcpy(v.data(), raw.data(), raw.size());
+    std::memcpy(v.data(), raw.data(), n * sizeof(T));
     return v;
   }
 }

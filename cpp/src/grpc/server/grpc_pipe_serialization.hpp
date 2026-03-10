@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -80,7 +81,10 @@ inline bool write_chunked_request_to_pipe(int fd,
     auto& fi    = fields[fid];
     fi.chunks.push_back(&ac);
     if (fi.total_bytes == 0 && ac.total_elements() > 0) {
-      fi.total_bytes = ac.total_elements() * array_field_element_size(ac.field_id());
+      auto elem_size = array_field_element_size(ac.field_id());
+      if (elem_size > 0 && ac.total_elements() <= std::numeric_limits<int64_t>::max() / elem_size) {
+        fi.total_bytes = ac.total_elements() * elem_size;
+      }
     }
   }
 

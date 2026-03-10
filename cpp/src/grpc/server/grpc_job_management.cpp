@@ -12,8 +12,12 @@
 
 bool send_job_data_pipe(int worker_idx, const std::vector<uint8_t>& data)
 {
-  if (worker_idx < 0 || worker_idx >= static_cast<int>(worker_pipes.size())) { return false; }
-  int fd = worker_pipes[worker_idx].to_worker_fd;
+  int fd;
+  {
+    std::lock_guard<std::mutex> lock(worker_pipes_mutex);
+    if (worker_idx < 0 || worker_idx >= static_cast<int>(worker_pipes.size())) { return false; }
+    fd = worker_pipes[worker_idx].to_worker_fd;
+  }
   if (fd < 0) return false;
 
   uint64_t size = data.size();

@@ -13,11 +13,12 @@
  * that are normally hidden by the PIMPL pattern. Include this only in test code.
  */
 
+#include <memory>
+
 #include <cuopt_remote_service.grpc.pb.h>
 #include <grpcpp/grpcpp.h>
-#include "grpc_client.hpp"
 
-#include <memory>
+#include "grpc_client.hpp"
 
 namespace cuopt::linear_programming {
 

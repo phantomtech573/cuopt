@@ -97,7 +97,11 @@ void result_retrieval_thread()
               }
             }
             if (has_data) {
-              int to_fd    = worker_pipes[worker_idx].to_worker_fd;
+              int to_fd;
+              {
+                std::lock_guard<std::mutex> wpl(worker_pipes_mutex);
+                to_fd = worker_pipes[worker_idx].to_worker_fd;
+              }
               auto pipe_t0 = std::chrono::steady_clock::now();
               send_ok      = write_chunked_request_to_pipe(to_fd, chunked.header, chunked.chunks);
               if (send_ok && config.verbose) {
@@ -180,7 +184,11 @@ void result_retrieval_thread()
                       << "\n";
             std::cout.flush();
           }
-          int from_fd       = worker_pipes[worker_idx].from_worker_fd;
+          int from_fd;
+          {
+            std::lock_guard<std::mutex> wpl(worker_pipes_mutex);
+            from_fd = worker_pipes[worker_idx].from_worker_fd;
+          }
           auto pipe_recv_t0 = std::chrono::steady_clock::now();
           bool read_ok      = read_result_from_pipe(from_fd, hdr, arrays);
           if (!read_ok) {
@@ -263,10 +271,14 @@ void result_retrieval_thread()
           }
         }
 
-        result_queue[i].retrieved    = true;
-        result_queue[i].worker_index = -1;
-        result_queue[i].ready        = false;
-        found                        = true;
+        result_queue[i].retrieved = true;
+        result_queue[i].worker_index.store(-1, std::memory_order_relaxed);
+        // Clear claimed before ready: writers CAS claimed first, so clearing
+        // it here lets the slot be reused.  ready=false must come last so
+        // writers don't see a half-recycled slot.
+        result_queue[i].claimed.store(false, std::memory_order_release);
+        result_queue[i].ready.store(false, std::memory_order_release);
+        found = true;
       }
     }
 
@@ -286,14 +298,17 @@ void incumbent_retrieval_thread()
 
   while (keep_running) {
     std::vector<pollfd> pfds;
-    pfds.reserve(worker_pipes.size());
-    for (const auto& wp : worker_pipes) {
-      if (wp.incumbent_from_worker_fd >= 0) {
-        pollfd pfd;
-        pfd.fd      = wp.incumbent_from_worker_fd;
-        pfd.events  = POLLIN;
-        pfd.revents = 0;
-        pfds.push_back(pfd);
+    {
+      std::lock_guard<std::mutex> lock(worker_pipes_mutex);
+      pfds.reserve(worker_pipes.size());
+      for (const auto& wp : worker_pipes) {
+        if (wp.incumbent_from_worker_fd >= 0) {
+          pollfd pfd;
+          pfd.fd      = wp.incumbent_from_worker_fd;
+          pfd.events  = POLLIN;
+          pfd.revents = 0;
+          pfds.push_back(pfd);
+        }
       }
     }
 

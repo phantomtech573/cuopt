@@ -103,7 +103,9 @@ struct ResultQueueEntry {
   ResultStatus status;
   uint64_t data_size;  // Size of result data (uint64 for large results)
   char error_message[1024];
-  std::atomic<bool> ready;        // Result is ready
+  std::atomic<bool> claimed;      // CAS guard: prevents two forked workers from
+                                  // writing the same slot simultaneously.
+  std::atomic<bool> ready;        // Result is ready for reading (published last).
   std::atomic<bool> retrieved;    // Result has been retrieved
   std::atomic<int> worker_index;  // Index of worker that produced this result
 };
@@ -237,6 +239,7 @@ inline std::vector<pid_t> worker_pids;
 inline ServerConfig config;
 
 inline std::vector<WorkerPipes> worker_pipes;
+inline std::mutex worker_pipes_mutex;
 
 inline std::mutex pending_data_mutex;
 inline std::map<std::string, std::vector<uint8_t>> pending_job_data;

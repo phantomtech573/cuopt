@@ -74,10 +74,12 @@ class IncumbentPipeCallback : public cuopt::internals::get_solution_callback_t {
     }
 
     auto buffer = build_incumbent_proto(job_id_, objective, assignment);
-    std::cout << "[Worker] Incumbent callback job_id=" << job_id_ << " obj=" << objective
-              << " vars=" << assignment.size() << "\n";
-    std::cout.flush();
-    send_incumbent_pipe(fd_, buffer);
+    if (!send_incumbent_pipe(fd_, buffer)) {
+      std::cerr << "[Worker] Incumbent pipe write failed for job " << job_id_
+                << ", disabling further sends\n";
+      fd_ = -1;
+      return;
+    }
   }
 
  private:
@@ -123,29 +125,57 @@ template <typename T>
 static std::vector<T> device_to_host(const auto& device_vec)
 {
   std::vector<T> host(device_vec.size());
-  cudaMemcpy(host.data(), device_vec.data(), device_vec.size() * sizeof(T), cudaMemcpyDeviceToHost);
+  cudaError_t err = cudaMemcpy(
+    host.data(), device_vec.data(), device_vec.size() * sizeof(T), cudaMemcpyDeviceToHost);
+  if (err != cudaSuccess) {
+    throw std::runtime_error(std::string("cudaMemcpy device-to-host failed: ") +
+                             cudaGetErrorString(err));
+  }
   return host;
 }
 
 // Write a result entry with no payload (error, cancellation, etc.) into the
 // first free slot in the shared-memory result_queue.
+//
+// Lock-free protocol for cross-process writes (workers are forked):
+//   1. Skip slots where ready==true (still being consumed by the reader).
+//   2. CAS claimed false→true to get exclusive write access.  Another
+//      writer (different worker process) that races on the same slot will
+//      see the CAS fail and move to the next slot.
+//   3. Re-check ready after claiming, in case the reader set ready=true
+//      between step 1 and step 2.
+//   4. Write all non-atomic fields, then publish with ready=true (release)
+//      so the reader sees a consistent entry.
+//   5. Clear claimed so the slot can be recycled after the reader is done.
+//
+// The same protocol is used by publish_result() and the crash-recovery
+// path in grpc_worker_infra.cpp.
 static void store_simple_result(const std::string& job_id,
                                 int worker_id,
                                 ResultStatus status,
                                 const char* error_message)
 {
   for (size_t i = 0; i < MAX_RESULTS; ++i) {
-    if (!result_queue[i].ready) {
-      copy_cstr(result_queue[i].job_id, job_id);
-      result_queue[i].status       = status;
-      result_queue[i].data_size    = 0;
-      result_queue[i].worker_index = worker_id;
-      copy_cstr(result_queue[i].error_message, error_message);
-      result_queue[i].error_message[sizeof(result_queue[i].error_message) - 1] = '\0';
-      result_queue[i].retrieved                                                = false;
-      result_queue[i].ready                                                    = true;
-      break;
+    if (result_queue[i].ready.load(std::memory_order_acquire)) continue;
+    bool expected = false;
+    if (!result_queue[i].claimed.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel)) {
+      continue;
     }
+    if (result_queue[i].ready.load(std::memory_order_acquire)) {
+      result_queue[i].claimed.store(false, std::memory_order_release);
+      continue;
+    }
+    copy_cstr(result_queue[i].job_id, job_id);
+    result_queue[i].status    = status;
+    result_queue[i].data_size = 0;
+    result_queue[i].worker_index.store(worker_id, std::memory_order_relaxed);
+    copy_cstr(result_queue[i].error_message, error_message);
+    result_queue[i].error_message[sizeof(result_queue[i].error_message) - 1] = '\0';
+    result_queue[i].retrieved.store(false, std::memory_order_relaxed);
+    result_queue[i].ready.store(true, std::memory_order_release);
+    result_queue[i].claimed.store(false, std::memory_order_release);
+    break;
   }
 }
 
@@ -375,26 +405,36 @@ static void publish_result(const SolveResult& sr, const std::string& job_id, int
     }
   }
 
+  // Same CAS protocol as store_simple_result (see comment there).
   int result_slot = -1;
   for (size_t i = 0; i < MAX_RESULTS; ++i) {
-    if (!result_queue[i].ready) {
-      result_slot              = i;
-      ResultQueueEntry& result = result_queue[i];
-      copy_cstr(result.job_id, job_id);
-      result.status       = sr.success ? RESULT_SUCCESS : RESULT_ERROR;
-      result.data_size    = sr.success ? std::max<uint64_t>(result_total_bytes, 1) : 0;
-      result.worker_index = worker_id;
-      if (!sr.success) { copy_cstr(result.error_message, sr.error_message); }
-      result.retrieved = false;
-      result.ready     = true;
-      if (config.verbose) {
-        std::cout << "[Worker " << worker_id << "] Enqueued result metadata for job " << job_id
-                  << " in result_slot=" << result_slot << " status=" << result.status
-                  << " data_size=" << result.data_size << "\n";
-        std::cout.flush();
-      }
-      break;
+    if (result_queue[i].ready.load(std::memory_order_acquire)) continue;
+    bool expected = false;
+    if (!result_queue[i].claimed.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel)) {
+      continue;
     }
+    if (result_queue[i].ready.load(std::memory_order_acquire)) {
+      result_queue[i].claimed.store(false, std::memory_order_release);
+      continue;
+    }
+    result_slot              = static_cast<int>(i);
+    ResultQueueEntry& result = result_queue[i];
+    copy_cstr(result.job_id, job_id);
+    result.status    = sr.success ? RESULT_SUCCESS : RESULT_ERROR;
+    result.data_size = sr.success ? std::max<uint64_t>(result_total_bytes, 1) : 0;
+    result.worker_index.store(worker_id, std::memory_order_relaxed);
+    if (!sr.success) { copy_cstr(result.error_message, sr.error_message); }
+    result.retrieved.store(false, std::memory_order_relaxed);
+    result.ready.store(true, std::memory_order_release);
+    result.claimed.store(false, std::memory_order_release);
+    if (config.verbose) {
+      std::cout << "[Worker " << worker_id << "] Enqueued result metadata for job " << job_id
+                << " in result_slot=" << result_slot << " status=" << result.status
+                << " data_size=" << result.data_size << "\n";
+      std::cout.flush();
+    }
+    break;
   }
 
   // Stream the full solution payload through the worker's result pipe.

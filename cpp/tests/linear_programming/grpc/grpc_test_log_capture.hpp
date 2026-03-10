@@ -76,7 +76,6 @@ class GrpcTestLogCapture {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     client_logs_.clear();
-    server_logs_.clear();
     server_log_start_pos_ = 0;
     test_start_marked_    = false;
   }
@@ -212,6 +211,7 @@ class GrpcTestLogCapture {
    */
   void set_server_log_path(const std::string& path)
   {
+    std::lock_guard<std::mutex> lock(mutex_);
     server_log_path_      = path;
     server_log_start_pos_ = 0;
     test_start_marked_    = false;
@@ -228,15 +228,21 @@ class GrpcTestLogCapture {
    */
   std::string get_server_logs(bool since_test_start = true) const
   {
-    if (server_log_path_.empty()) { return ""; }
+    std::string path;
+    std::streampos start_pos;
+    bool marked;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      path      = server_log_path_;
+      start_pos = server_log_start_pos_;
+      marked    = test_start_marked_;
+    }
+    if (path.empty()) { return ""; }
 
-    std::ifstream file(server_log_path_);
+    std::ifstream file(path);
     if (!file.is_open()) { return ""; }
 
-    // If we have a marked start position and caller wants filtered logs, seek to it
-    if (since_test_start && test_start_marked_ && server_log_start_pos_ > 0) {
-      file.seekg(server_log_start_pos_);
-    }
+    if (since_test_start && marked && start_pos > 0) { file.seekg(start_pos); }
 
     std::ostringstream oss;
     oss << file.rdbuf();
@@ -274,6 +280,7 @@ class GrpcTestLogCapture {
    */
   int server_log_count(const std::string& substring) const
   {
+    if (substring.empty()) { return 0; }
     std::string logs = get_server_logs();
     int count        = 0;
     size_t pos       = 0;
@@ -352,12 +359,15 @@ class GrpcTestLogCapture {
   /**
    * @brief Get the server log file path
    */
-  const std::string& server_log_path() const { return server_log_path_; }
+  std::string server_log_path() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return server_log_path_;
+  }
 
  private:
   mutable std::mutex mutex_;
   std::vector<LogEntry> client_logs_;
-  std::vector<LogEntry> server_logs_;
   std::string server_log_path_;
   std::streampos server_log_start_pos_ = 0;  // Position in server log file when test started
   bool test_start_marked_              = false;

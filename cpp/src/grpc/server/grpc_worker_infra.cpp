@@ -102,6 +102,8 @@ void close_worker_pipes_child_ends(int worker_id)
 
 pid_t spawn_worker(int worker_id, bool is_replacement)
 {
+  std::lock_guard<std::mutex> lock(worker_pipes_mutex);
+
   if (is_replacement) { close_worker_pipes_server(worker_id); }
 
   if (!create_worker_pipes(worker_id)) {
@@ -146,7 +148,7 @@ void wait_for_workers()
 {
   for (pid_t pid : worker_pids) {
     int status;
-    waitpid(pid, &status, 0);
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
   }
   worker_pids.clear();
 }
@@ -183,18 +185,28 @@ void mark_worker_jobs_failed(pid_t dead_worker_pid)
 
       // 2. Post a synthetic error result into the first free result_queue slot
       //    so that any client polling for results gets a clear failure message.
+      //    Uses the same CAS protocol as store_simple_result (see comment there).
       for (size_t j = 0; j < MAX_RESULTS; ++j) {
-        if (!result_queue[j].ready) {
-          copy_cstr(result_queue[j].job_id, job_id);
-          result_queue[j].status       = was_cancelled ? RESULT_CANCELLED : RESULT_ERROR;
-          result_queue[j].data_size    = 0;
-          result_queue[j].worker_index = -1;
-          copy_cstr(result_queue[j].error_message,
-                    was_cancelled ? "Job was cancelled" : "Worker process died unexpectedly");
-          result_queue[j].retrieved = false;
-          result_queue[j].ready     = true;
-          break;
+        if (result_queue[j].ready.load(std::memory_order_acquire)) continue;
+        bool exp = false;
+        if (!result_queue[j].claimed.compare_exchange_strong(
+              exp, true, std::memory_order_acq_rel)) {
+          continue;
         }
+        if (result_queue[j].ready.load(std::memory_order_acquire)) {
+          result_queue[j].claimed.store(false, std::memory_order_release);
+          continue;
+        }
+        copy_cstr(result_queue[j].job_id, job_id);
+        result_queue[j].status    = was_cancelled ? RESULT_CANCELLED : RESULT_ERROR;
+        result_queue[j].data_size = 0;
+        result_queue[j].worker_index.store(-1, std::memory_order_relaxed);
+        copy_cstr(result_queue[j].error_message,
+                  was_cancelled ? "Job was cancelled" : "Worker process died unexpectedly");
+        result_queue[j].retrieved.store(false, std::memory_order_relaxed);
+        result_queue[j].ready.store(true, std::memory_order_release);
+        result_queue[j].claimed.store(false, std::memory_order_release);
+        break;
       }
 
       // 3. Release the job queue slot and update the in-process job tracker.

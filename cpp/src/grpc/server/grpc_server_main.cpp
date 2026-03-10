@@ -167,6 +167,7 @@ int main(int argc, char** argv)
 
   for (size_t i = 0; i < MAX_RESULTS; ++i) {
     new (&result_queue[i]) ResultQueueEntry{};
+    result_queue[i].claimed.store(false);
     result_queue[i].ready.store(false);
     result_queue[i].retrieved.store(false);
   }

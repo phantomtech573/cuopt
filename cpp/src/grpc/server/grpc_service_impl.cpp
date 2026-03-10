@@ -720,6 +720,14 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
           }
           return Status(grpc::StatusCode::NOT_FOUND, "Job not found: " + job_id);
         }
+        if (s == JobStatus::COMPLETED || s == JobStatus::FAILED || s == JobStatus::CANCELLED) {
+          cuopt::remote::LogMessage done;
+          done.set_line("");
+          done.set_byte_offset(from_byte);
+          done.set_job_complete(true);
+          writer->Write(done);
+          return Status::OK;
+        }
         waited_ms = 0;
       }
     }
@@ -842,14 +850,18 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       out->set_job_id(job_id);
     }
 
-    response->set_next_index(available);
+    // next_index is the resume cursor: the client passes it back as from_index
+    // on the next call.  Must be from_index + count (the first unsent entry),
+    // NOT available (total size), or the client skips entries when max_count
+    // limits the batch.
+    response->set_next_index(from_index + count);
     bool done =
       (it->second.status == JobStatus::COMPLETED || it->second.status == JobStatus::FAILED ||
        it->second.status == JobStatus::CANCELLED);
     response->set_job_complete(done);
     if (config.verbose) {
       std::cout << "[gRPC] GetIncumbents job_id=" << job_id << " from=" << from_index
-                << " returned=" << response->incumbents_size() << " next=" << available
+                << " returned=" << response->incumbents_size() << " next=" << (from_index + count)
                 << " done=" << (done ? 1 : 0) << "\n";
       std::cout.flush();
     }

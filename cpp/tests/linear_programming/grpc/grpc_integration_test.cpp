@@ -50,6 +50,7 @@
 
 #include "grpc_service_mapper.hpp"
 
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -692,9 +693,11 @@ TEST_F(DefaultServerTests, SolveInfeasibleLP)
   settings.time_limit = 10.0;
 
   auto result = client->solve_lp(problem, settings);
-  if (result.success && result.solution) {
-    EXPECT_NE(result.solution->get_termination_status(), pdlp_termination_status_t::Optimal);
-  }
+  ASSERT_TRUE(result.success) << result.error_message;
+  ASSERT_NE(result.solution, nullptr);
+  auto status = result.solution->get_termination_status();
+  EXPECT_NE(status, pdlp_termination_status_t::Optimal)
+    << "Expected non-optimal termination for infeasible problem";
 }
 
 // -- MIP Solve --
