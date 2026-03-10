@@ -161,11 +161,6 @@ class deterministic_bfs_worker_t
                                                     mip_node_t<i_t, f_t>* up_child,
                                                     rounding_direction_t preferred_direction)
   {
-    if (!plunge_stack.empty()) {
-      backlog.push(plunge_stack.back());
-      plunge_stack.pop_back();
-    }
-
     down_child->origin_worker_id = this->worker_id;
     down_child->creation_seq     = next_creation_seq++;
     up_child->origin_worker_id   = this->worker_id;
@@ -173,11 +168,11 @@ class deterministic_bfs_worker_t
 
     mip_node_t<i_t, f_t>* first_child;
     if (preferred_direction == rounding_direction_t::UP) {
-      plunge_stack.push_front(down_child);
+      backlog.push(down_child);
       plunge_stack.push_front(up_child);
       first_child = up_child;
     } else {
-      plunge_stack.push_front(up_child);
+      backlog.push(up_child);
       plunge_stack.push_front(down_child);
       first_child = down_child;
     }
@@ -291,6 +286,7 @@ class deterministic_diving_worker_t
 
   // Diving statistics
   i_t total_nodes_explored{0};
+  i_t nodes_explored_last_sync{0};
   i_t total_dives{0};
   i_t lp_iters_this_dive{0};
 

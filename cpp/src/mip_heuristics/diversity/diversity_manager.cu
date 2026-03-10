@@ -411,6 +411,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   const char* disable_heuristics_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
   if (disable_heuristics_env != nullptr && std::string(disable_heuristics_env) == "1") {
     CUOPT_LOG_INFO("GPU heuristics disabled via CUOPT_DISABLE_GPU_HEURISTICS=1");
+    if (is_deterministic_mode(context.settings.determinism_mode) &&
+        context.branch_and_bound_ptr != nullptr) {
+      auto& producer_sync = context.branch_and_bound_ptr->get_producer_sync();
+      producer_sync.registration_complete();
+    }
     population.initialize_population();
     population.allocate_solutions();
 

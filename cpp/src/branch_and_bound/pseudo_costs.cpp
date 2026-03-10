@@ -639,6 +639,20 @@ i_t pseudo_costs_t<i_t, f_t>::reliable_variable_selection(
   assert(num_candidates > 0);
   assert(num_tasks > 0);
 
+  settings.log.debug(
+    "Reliability branching: node=%d depth=%d fractional=%zu unreliable=%zu candidates=%d "
+    "threshold=%d sb_iters=%d bnb_iters=%lld explored=%lld tasks=%d\n",
+    node_ptr->node_id,
+    node_ptr->depth,
+    fractional.size(),
+    unreliable_list.size(),
+    num_candidates,
+    reliable_threshold,
+    strong_branching_lp_iter.load(),
+    (long long)branch_and_bound_lp_iters,
+    (long long)branch_and_bound_explored,
+    num_tasks);
+
   log.printf(
     "RB iters = %d, B&B iters = %d, unreliable = %d, num_tasks = %d, reliable_threshold = %d\n",
     strong_branching_lp_iter.load(),
@@ -734,6 +748,12 @@ i_t pseudo_costs_t<i_t, f_t>::reliable_variable_selection(
     }
     score_mutex.unlock();
   }
+
+  settings.log.debug("Reliability branching result: node=%d branch_var=%d value=%e score=%e\n",
+                     node_ptr->node_id,
+                     branch_var,
+                     solution[branch_var],
+                     max_score);
 
   log.printf(
     "pc branching on %d. Value %e. Score %e\n", branch_var, solution[branch_var], max_score);

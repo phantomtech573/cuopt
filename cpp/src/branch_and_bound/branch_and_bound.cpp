@@ -26,6 +26,7 @@
 
 #include <raft/core/nvtx.hpp>
 #include <utilities/hashing.hpp>
+#include <utilities/scope_guard.hpp>
 
 #include <omp.h>
 
@@ -2184,6 +2185,11 @@ template <typename i_t, typename f_t>
 mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range scope("BB::solve");
+  auto heuristic_preemption_guard = cuopt::scope_guard([this]() {
+    if (settings_.heuristic_preemption_callback != nullptr) {
+      settings_.heuristic_preemption_callback();
+    }
+  });
 
   logger_t log;
   log.log                             = false;
@@ -3453,6 +3459,14 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sync_callback()
     replay_solutions);
   deterministic_collect_diving_solutions_and_update_pseudocosts(replay_solutions);
 
+  if (deterministic_diving_workers_) {
+    for (auto& worker : *deterministic_diving_workers_) {
+      i_t delta = worker.total_nodes_explored - worker.nodes_explored_last_sync;
+      worker.nodes_explored_last_sync = worker.total_nodes_explored;
+      exploration_stats_.nodes_explored += delta;
+    }
+  }
+
   deterministic_sort_replay_events(all_events, replay_solutions);
 
   // deterministic_prune_worker_nodes_vs_incumbent();
@@ -3600,9 +3614,15 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
   simplex_solver_settings_t<i_t, f_t> lp_settings = settings_;
   lp_settings.set_log(false);
 
-  lp_settings.cut_off       = worker.local_upper_bound + settings_.dual_tol;
+  if (original_lp_.objective_is_integral) {
+    lp_settings.cut_off =
+      std::ceil(worker.local_upper_bound - settings_.integer_tol) + settings_.dual_tol;
+  } else {
+    lp_settings.cut_off = worker.local_upper_bound + settings_.dual_tol;
+  }
   lp_settings.inside_mip    = 2;
   lp_settings.time_limit    = remaining_time;
+  lp_settings.work_limit    = std::numeric_limits<f_t>::infinity();
   lp_settings.scale_columns = false;
 
   bool feasible = true;
@@ -3612,7 +3632,6 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
     lp_settings, worker.bounds_changed, worker.leaf_problem.lower, worker.leaf_problem.upper);
 
   if (settings_.deterministic) {
-    // TEMP APPROXIMATION;
     worker.work_context.record_work_sync_on_horizon(worker.node_presolver.last_nnz_processed / 1e8);
   }
 #endif
@@ -4057,34 +4076,12 @@ void branch_and_bound_t<i_t, f_t>::deterministic_balance_worker_loads()
   const size_t num_workers = deterministic_workers_->size();
   if (num_workers <= 1) return;
 
-  constexpr bool force_rebalance_every_sync = false;
-
-  // Count work for each worker: current_node (if any) + plunge_stack + backlog
-  std::vector<size_t> work_counts(num_workers);
-  size_t total_work = 0;
-  size_t max_work   = 0;
-  size_t min_work   = std::numeric_limits<size_t>::max();
-
-  for (size_t w = 0; w < num_workers; ++w) {
-    auto& worker   = (*deterministic_workers_)[w];
-    work_counts[w] = worker.queue_size();
-    total_work += work_counts[w];
-    max_work = std::max(max_work, work_counts[w]);
-    min_work = std::min(min_work, work_counts[w]);
-  }
-  if (total_work == 0) return;
-
-  bool needs_balance;
-  if (force_rebalance_every_sync) {
-    needs_balance = (total_work > 1);
-  } else {
-    needs_balance = (min_work == 0 && max_work >= 2) || (min_work > 0 && max_work > 4 * min_work);
-  }
-
-  if (!needs_balance) return;
-
   std::vector<mip_node_t<i_t, f_t>*> all_nodes;
   for (auto& worker : *deterministic_workers_) {
+    for (auto* node : worker.plunge_stack) {
+      all_nodes.push_back(node);
+    }
+    worker.plunge_stack.clear();
     for (auto* node : worker.backlog.data()) {
       all_nodes.push_back(node);
     }
@@ -4093,16 +4090,17 @@ void branch_and_bound_t<i_t, f_t>::deterministic_balance_worker_loads()
 
   if (all_nodes.empty()) return;
 
-  auto deterministic_less = [](const mip_node_t<i_t, f_t>* a, const mip_node_t<i_t, f_t>* b) {
-    if (a->origin_worker_id != b->origin_worker_id) {
-      return a->origin_worker_id < b->origin_worker_id;
-    }
-    return a->creation_seq < b->creation_seq;
-  };
-  std::sort(all_nodes.begin(), all_nodes.end(), deterministic_less);
+  std::sort(all_nodes.begin(),
+            all_nodes.end(),
+            [](const mip_node_t<i_t, f_t>* a, const mip_node_t<i_t, f_t>* b) {
+              if (a->lower_bound != b->lower_bound) { return a->lower_bound < b->lower_bound; }
+              if (a->origin_worker_id != b->origin_worker_id) {
+                return a->origin_worker_id < b->origin_worker_id;
+              }
+              return a->creation_seq < b->creation_seq;
+            });
 
-  // Distribute nodes
-  for (size_t i = 0; i < all_nodes.size(); ++i) {
+  for (int i = (int)all_nodes.size() - 1; i >= 0; --i) {
     size_t worker_idx = i % num_workers;
     (*deterministic_workers_)[worker_idx].enqueue_node(all_nodes[i]);
   }
@@ -4314,9 +4312,15 @@ void branch_and_bound_t<i_t, f_t>::deterministic_dive(
     // Setup LP settings
     simplex_solver_settings_t<i_t, f_t> lp_settings = settings_;
     lp_settings.set_log(false);
-    lp_settings.cut_off       = worker.local_upper_bound + settings_.dual_tol;
+    if (original_lp_.objective_is_integral) {
+      lp_settings.cut_off =
+        std::ceil(worker.local_upper_bound - settings_.integer_tol) + settings_.dual_tol;
+    } else {
+      lp_settings.cut_off = worker.local_upper_bound + settings_.dual_tol;
+    }
     lp_settings.inside_mip    = 2;
     lp_settings.time_limit    = remaining_time;
+    lp_settings.work_limit    = std::numeric_limits<f_t>::infinity();
     lp_settings.scale_columns = false;
 
 #ifndef DETERMINISM_DISABLE_BOUNDS_STRENGTHENING
@@ -4324,7 +4328,6 @@ void branch_and_bound_t<i_t, f_t>::deterministic_dive(
       lp_settings, worker.bounds_changed, worker.leaf_problem.lower, worker.leaf_problem.upper);
 
     if (settings_.deterministic) {
-      // TEMP APPROXIMATION;
       worker.work_context.record_work_sync_on_horizon(worker.node_presolver.last_nnz_processed /
                                                       1e8);
     }
