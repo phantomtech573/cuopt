@@ -116,6 +116,7 @@ message PDLPSolverSettings {
   bool eliminate_dense_columns = 37;
   bool save_best_primal_so_far = 38;
   bool first_primal_feasible = 39;
+  int32 pdlp_precision = 40;
 
   // Warm start data (if provided)
   PDLPWarmStartData warm_start_data = 50;
@@ -242,6 +243,7 @@ enum MIPTerminationStatus {
   MIP_INFEASIBLE = 3;
   MIP_UNBOUNDED = 4;
   MIP_TIME_LIMIT = 5;
+  MIP_WORK_LIMIT = 6;
 }
 
 // Array field identifiers for chunked array transfers

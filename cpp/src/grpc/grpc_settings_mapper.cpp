@@ -112,6 +112,7 @@ void map_pdlp_settings_to_proto(const pdlp_solver_settings_t<i_t, f_t>& settings
   pb_settings->set_ordering(settings.ordering);
   pb_settings->set_barrier_dual_initial_point(settings.barrier_dual_initial_point);
   pb_settings->set_eliminate_dense_columns(settings.eliminate_dense_columns);
+  pb_settings->set_pdlp_precision(static_cast<int32_t>(settings.pdlp_precision));
   pb_settings->set_save_best_primal_so_far(settings.save_best_primal_so_far);
   pb_settings->set_first_primal_feasible(settings.first_primal_feasible);
 
@@ -171,8 +172,15 @@ void map_proto_to_pdlp_settings(const cuopt::remote::PDLPSolverSettings& pb_sett
   settings.ordering                   = pb_settings.ordering();
   settings.barrier_dual_initial_point = pb_settings.barrier_dual_initial_point();
   settings.eliminate_dense_columns    = pb_settings.eliminate_dense_columns();
-  settings.save_best_primal_so_far    = pb_settings.save_best_primal_so_far();
-  settings.first_primal_feasible      = pb_settings.first_primal_feasible();
+  {
+    auto pv = pb_settings.pdlp_precision();
+    settings.pdlp_precision =
+      (pv >= CUOPT_PDLP_DEFAULT_PRECISION && pv <= CUOPT_PDLP_MIXED_PRECISION)
+        ? static_cast<pdlp_precision_t>(pv)
+        : pdlp_precision_t::DefaultPrecision;
+  }
+  settings.save_best_primal_so_far = pb_settings.save_best_primal_so_far();
+  settings.first_primal_feasible   = pb_settings.first_primal_feasible();
 
   // TODO: Add warmstart data support
   // if (pb_settings.has_warm_start_data()) {

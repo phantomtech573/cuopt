@@ -61,6 +61,7 @@ cuopt::remote::MIPTerminationStatus to_proto_mip_status(mip_termination_status_t
     case mip_termination_status_t::Infeasible: return cuopt::remote::MIP_INFEASIBLE;
     case mip_termination_status_t::Unbounded: return cuopt::remote::MIP_UNBOUNDED;
     case mip_termination_status_t::TimeLimit: return cuopt::remote::MIP_TIME_LIMIT;
+    case mip_termination_status_t::WorkLimit: return cuopt::remote::MIP_WORK_LIMIT;
     default: return cuopt::remote::MIP_NO_TERMINATION;
   }
 }
@@ -74,6 +75,7 @@ mip_termination_status_t from_proto_mip_status(cuopt::remote::MIPTerminationStat
     case cuopt::remote::MIP_INFEASIBLE: return mip_termination_status_t::Infeasible;
     case cuopt::remote::MIP_UNBOUNDED: return mip_termination_status_t::Unbounded;
     case cuopt::remote::MIP_TIME_LIMIT: return mip_termination_status_t::TimeLimit;
+    case cuopt::remote::MIP_WORK_LIMIT: return mip_termination_status_t::WorkLimit;
     default: return mip_termination_status_t::NoTermination;
   }
 }
