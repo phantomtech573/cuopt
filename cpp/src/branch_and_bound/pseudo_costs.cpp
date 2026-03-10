@@ -218,7 +218,238 @@ f_t trial_branching(const lp_problem_t<i_t, f_t>& original_lp,
   }
 }
 
+// Overload of trial_branching that takes a plain int64_t& counter (for deterministic/serial use).
+template <typename i_t, typename f_t>
+f_t trial_branching_plain(const lp_problem_t<i_t, f_t>& original_lp,
+                          const simplex_solver_settings_t<i_t, f_t>& settings,
+                          const std::vector<variable_type_t>& var_types,
+                          const std::vector<variable_status_t>& vstatus,
+                          const std::vector<f_t>& edge_norms,
+                          const basis_update_mpf_t<i_t, f_t>& basis_factors,
+                          const std::vector<i_t>& basic_list,
+                          const std::vector<i_t>& nonbasic_list,
+                          i_t branch_var,
+                          f_t branch_var_lower,
+                          f_t branch_var_upper,
+                          f_t upper_bound,
+                          i_t bnb_lp_iter_per_node,
+                          f_t start_time,
+                          i_t upper_max_lp_iter,
+                          i_t lower_max_lp_iter,
+                          int64_t& total_lp_iter)
+{
+  omp_atomic_t<int64_t> atomic_iter{0};
+  f_t result = trial_branching(original_lp,
+                               settings,
+                               var_types,
+                               vstatus,
+                               edge_norms,
+                               basis_factors,
+                               basic_list,
+                               nonbasic_list,
+                               branch_var,
+                               branch_var_lower,
+                               branch_var_upper,
+                               upper_bound,
+                               bnb_lp_iter_per_node,
+                               start_time,
+                               upper_max_lp_iter,
+                               lower_max_lp_iter,
+                               atomic_iter);
+  total_lp_iter += atomic_iter.load();
+  return result;
+}
+
 }  // namespace
+
+template <typename i_t, typename f_t>
+i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
+                                     const std::vector<i_t>& fractional,
+                                     const std::vector<f_t>& solution,
+                                     const simplex_solver_settings_t<i_t, f_t>& settings,
+                                     const std::vector<variable_type_t>& var_types,
+                                     const lp_problem_t<i_t, f_t>& leaf_problem,
+                                     const std::vector<f_t>& edge_norms,
+                                     const basis_update_mpf_t<i_t, f_t>& basis_factors,
+                                     const std::vector<i_t>& basic_list,
+                                     const std::vector<i_t>& nonbasic_list,
+                                     f_t* sum_down,
+                                     f_t* sum_up,
+                                     i_t* num_down,
+                                     i_t* num_up,
+                                     i_t n_vars,
+                                     int64_t& strong_branching_lp_iter,
+                                     f_t upper_bound,
+                                     int64_t bnb_lp_iters,
+                                     int64_t bnb_nodes_explored,
+                                     f_t start_time,
+                                     const reliability_branching_settings_t<i_t, f_t>& rb_settings,
+                                     int num_tasks,
+                                     omp_mutex_t* var_mutex_down,
+                                     omp_mutex_t* var_mutex_up,
+                                     pcgenerator_t* rng)
+{
+  constexpr f_t eps = 1e-6;
+  i_t branch_var    = fractional[0];
+  f_t max_score     = -1;
+
+  auto avgs = compute_pseudo_cost_averages(sum_down, sum_up, num_down, num_up, (size_t)n_vars);
+  f_t pseudo_cost_down_avg = avgs.down_avg;
+  f_t pseudo_cost_up_avg   = avgs.up_avg;
+
+  const i_t bnb_lp_iter_per_node =
+    bnb_nodes_explored > 0 ? (i_t)(bnb_lp_iters / bnb_nodes_explored) : 0;
+
+  i_t reliable_threshold = settings.reliability_branching;
+  if (reliable_threshold < 0) {
+    const int64_t alpha                = (int64_t)(rb_settings.bnb_lp_factor * bnb_lp_iters);
+    const int64_t max_reliability_iter = alpha + rb_settings.bnb_lp_offset;
+
+    f_t iter_fraction =
+      (max_reliability_iter - strong_branching_lp_iter) / (strong_branching_lp_iter + 1.0);
+    iter_fraction = std::min(1.0, iter_fraction);
+    iter_fraction = std::max((alpha - strong_branching_lp_iter) / (strong_branching_lp_iter + 1.0),
+                             iter_fraction);
+    reliable_threshold = (int)((1 - iter_fraction) * rb_settings.min_reliable_threshold +
+                               iter_fraction * rb_settings.max_reliable_threshold);
+    reliable_threshold = strong_branching_lp_iter < max_reliability_iter ? reliable_threshold : 0;
+  }
+
+  std::vector<i_t> unreliable_list;
+
+  for (i_t j : fractional) {
+    if (num_down[j] < reliable_threshold || num_up[j] < reliable_threshold) {
+      unreliable_list.push_back(j);
+      continue;
+    }
+    f_t pc_down = num_down[j] > 0 ? sum_down[j] / num_down[j] : pseudo_cost_down_avg;
+    f_t pc_up   = num_up[j] > 0 ? sum_up[j] / num_up[j] : pseudo_cost_up_avg;
+    f_t f_down  = solution[j] - std::floor(solution[j]);
+    f_t f_up    = std::ceil(solution[j]) - solution[j];
+    f_t score   = std::max(f_down * pc_down, eps) * std::max(f_up * pc_up, eps);
+    if (score > max_score) {
+      max_score  = score;
+      branch_var = j;
+    }
+  }
+
+  if (unreliable_list.empty()) { return branch_var; }
+
+  const i_t max_num_candidates = rb_settings.max_num_candidates;
+  const i_t num_candidates     = std::min<size_t>(unreliable_list.size(), max_num_candidates);
+
+  settings.log.debug(
+    "Reliability branching: node=%d depth=%d fractional=%zu unreliable=%zu candidates=%d "
+    "threshold=%d sb_iters=%lld bnb_iters=%lld explored=%lld tasks=%d\n",
+    node_ptr->node_id,
+    node_ptr->depth,
+    fractional.size(),
+    unreliable_list.size(),
+    num_candidates,
+    reliable_threshold,
+    (long long)strong_branching_lp_iter,
+    (long long)bnb_lp_iters,
+    (long long)bnb_nodes_explored,
+    num_tasks);
+
+  if (rng != nullptr && unreliable_list.size() > (size_t)max_num_candidates) {
+    rng->shuffle(unreliable_list);
+  }
+
+  if (toc(start_time) > settings.time_limit) { return branch_var; }
+
+  omp_mutex_t score_mutex;
+  const int task_priority = rb_settings.task_priority;
+
+#pragma omp taskloop if (num_tasks > 1) priority(task_priority) num_tasks(num_tasks) \
+  shared(score_mutex)
+  for (i_t i = 0; i < num_candidates; ++i) {
+    const i_t j = unreliable_list[i];
+
+    if (toc(start_time) > settings.time_limit) { continue; }
+
+    if (var_mutex_down) { var_mutex_down[j].lock(); }
+    if (num_down[j] < reliable_threshold) {
+      f_t obj = trial_branching_plain(leaf_problem,
+                                      settings,
+                                      var_types,
+                                      node_ptr->vstatus,
+                                      edge_norms,
+                                      basis_factors,
+                                      basic_list,
+                                      nonbasic_list,
+                                      j,
+                                      leaf_problem.lower[j],
+                                      std::floor(solution[j]),
+                                      upper_bound,
+                                      bnb_lp_iter_per_node,
+                                      start_time,
+                                      rb_settings.upper_max_lp_iter,
+                                      rb_settings.lower_max_lp_iter,
+                                      strong_branching_lp_iter);
+      if (!std::isnan(obj)) {
+        f_t change_in_obj = std::max(obj - node_ptr->lower_bound, eps);
+        f_t change_in_x   = solution[j] - std::floor(solution[j]);
+        sum_down[j] += change_in_obj / change_in_x;
+        num_down[j]++;
+      }
+    }
+    if (var_mutex_down) { var_mutex_down[j].unlock(); }
+
+    if (toc(start_time) > settings.time_limit) { continue; }
+
+    if (var_mutex_up) { var_mutex_up[j].lock(); }
+    if (num_up[j] < reliable_threshold) {
+      f_t obj = trial_branching_plain(leaf_problem,
+                                      settings,
+                                      var_types,
+                                      node_ptr->vstatus,
+                                      edge_norms,
+                                      basis_factors,
+                                      basic_list,
+                                      nonbasic_list,
+                                      j,
+                                      std::ceil(solution[j]),
+                                      leaf_problem.upper[j],
+                                      upper_bound,
+                                      bnb_lp_iter_per_node,
+                                      start_time,
+                                      rb_settings.upper_max_lp_iter,
+                                      rb_settings.lower_max_lp_iter,
+                                      strong_branching_lp_iter);
+      if (!std::isnan(obj)) {
+        f_t change_in_obj = std::max(obj - node_ptr->lower_bound, eps);
+        f_t change_in_x   = std::ceil(solution[j]) - solution[j];
+        sum_up[j] += change_in_obj / change_in_x;
+        num_up[j]++;
+      }
+    }
+    if (var_mutex_up) { var_mutex_up[j].unlock(); }
+
+    if (toc(start_time) > settings.time_limit) { continue; }
+
+    f_t pc_down = num_down[j] > 0 ? sum_down[j] / num_down[j] : pseudo_cost_down_avg;
+    f_t pc_up   = num_up[j] > 0 ? sum_up[j] / num_up[j] : pseudo_cost_up_avg;
+    f_t f_down  = solution[j] - std::floor(solution[j]);
+    f_t f_up    = std::ceil(solution[j]) - solution[j];
+    f_t score   = std::max(f_down * pc_down, eps) * std::max(f_up * pc_up, eps);
+
+    score_mutex.lock();
+    if (score > max_score) {
+      max_score  = score;
+      branch_var = j;
+    }
+    score_mutex.unlock();
+  }
+
+  settings.log.debug("Reliability branching result: node=%d branch_var=%d value=%e score=%e\n",
+                     node_ptr->node_id,
+                     branch_var,
+                     solution[branch_var],
+                     max_score);
+
+  return branch_var;
+}
 
 template <typename i_t, typename f_t>
 static cuopt::mps_parser::mps_data_model_t<i_t, f_t> simplex_problem_to_mps_data_model(
@@ -564,201 +795,52 @@ i_t pseudo_costs_t<i_t, f_t>::reliable_variable_selection(
   int max_num_tasks,
   logger_t& log)
 {
-  constexpr f_t eps = 1e-6;
-  f_t start_time    = bnb_stats.start_time;
-  i_t branch_var    = fractional[0];
-  f_t max_score     = -1;
-  i_t num_initialized_down;
-  i_t num_initialized_up;
-  f_t pseudo_cost_down_avg;
-  f_t pseudo_cost_up_avg;
-
-  initialized(num_initialized_down, num_initialized_up, pseudo_cost_down_avg, pseudo_cost_up_avg);
-
-  log.printf("PC: num initialized down %d up %d avg down %e up %e\n",
-             num_initialized_down,
-             num_initialized_up,
-             pseudo_cost_down_avg,
-             pseudo_cost_up_avg);
-
-  const int64_t branch_and_bound_lp_iters = bnb_stats.total_lp_iters;
-  const int64_t branch_and_bound_explored = bnb_stats.nodes_explored;
-  const i_t branch_and_bound_lp_iter_per_node =
-    branch_and_bound_lp_iters / bnb_stats.nodes_explored;
-
-  i_t reliable_threshold = settings.reliability_branching;
-  if (reliable_threshold < 0) {
-    const i_t max_threshold            = reliability_branching_settings.max_reliable_threshold;
-    const i_t min_threshold            = reliability_branching_settings.min_reliable_threshold;
-    const f_t iter_factor              = reliability_branching_settings.bnb_lp_factor;
-    const i_t iter_offset              = reliability_branching_settings.bnb_lp_offset;
-    const int64_t alpha                = iter_factor * branch_and_bound_lp_iters;
-    const int64_t max_reliability_iter = alpha + reliability_branching_settings.bnb_lp_offset;
-
-    f_t iter_fraction =
-      (max_reliability_iter - strong_branching_lp_iter) / (strong_branching_lp_iter + 1.0);
-    iter_fraction = std::min(1.0, iter_fraction);
-    iter_fraction = std::max((alpha - strong_branching_lp_iter) / (strong_branching_lp_iter + 1.0),
-                             iter_fraction);
-    reliable_threshold = (1 - iter_fraction) * min_threshold + iter_fraction * max_threshold;
-    reliable_threshold = strong_branching_lp_iter < max_reliability_iter ? reliable_threshold : 0;
+  const i_t n = (i_t)pseudo_cost_sum_down.size();
+  std::vector<f_t> sd(n), su(n);
+  std::vector<i_t> nd(n), nu(n);
+  for (i_t j = 0; j < n; ++j) {
+    sd[j] = pseudo_cost_sum_down[j];
+    su[j] = pseudo_cost_sum_up[j];
+    nd[j] = pseudo_cost_num_down[j];
+    nu[j] = pseudo_cost_num_up[j];
   }
+  int64_t sb_iter = strong_branching_lp_iter.load();
 
-  std::vector<i_t> unreliable_list;
-  omp_mutex_t score_mutex;
+  i_t result = reliable_variable_selection_core(node_ptr,
+                                                fractional,
+                                                solution,
+                                                settings,
+                                                var_types,
+                                                worker->leaf_problem,
+                                                worker->leaf_edge_norms,
+                                                worker->basis_factors,
+                                                worker->basic_list,
+                                                worker->nonbasic_list,
+                                                sd.data(),
+                                                su.data(),
+                                                nd.data(),
+                                                nu.data(),
+                                                n,
+                                                sb_iter,
+                                                upper_bound,
+                                                bnb_stats.total_lp_iters,
+                                                bnb_stats.nodes_explored,
+                                                bnb_stats.start_time,
+                                                reliability_branching_settings,
+                                                std::max(max_num_tasks, 1),
+                                                pseudo_cost_mutex_down.data(),
+                                                pseudo_cost_mutex_up.data(),
+                                                &worker->rng);
 
-  for (i_t j : fractional) {
-    if (pseudo_cost_num_down[j] < reliable_threshold ||
-        pseudo_cost_num_up[j] < reliable_threshold) {
-      unreliable_list.push_back(j);
-      continue;
-    }
-
-    f_t score = calculate_pseudocost_score(j, solution, pseudo_cost_up_avg, pseudo_cost_down_avg);
-
-    if (score > max_score) {
-      max_score  = score;
-      branch_var = j;
-    }
+  for (i_t j = 0; j < n; ++j) {
+    pseudo_cost_sum_down[j] = sd[j];
+    pseudo_cost_sum_up[j]   = su[j];
+    pseudo_cost_num_down[j] = nd[j];
+    pseudo_cost_num_up[j]   = nu[j];
   }
+  strong_branching_lp_iter = sb_iter;
 
-  if (unreliable_list.empty()) {
-    log.printf(
-      "pc branching on %d. Value %e. Score %e\n", branch_var, solution[branch_var], max_score);
-
-    return branch_var;
-  }
-
-  const int num_tasks          = std::max(max_num_tasks, 1);
-  const int task_priority      = reliability_branching_settings.task_priority;
-  const i_t max_num_candidates = reliability_branching_settings.max_num_candidates;
-  const i_t num_candidates     = std::min<size_t>(unreliable_list.size(), max_num_candidates);
-
-  assert(task_priority > 0);
-  assert(max_num_candidates > 0);
-  assert(num_candidates > 0);
-  assert(num_tasks > 0);
-
-  settings.log.debug(
-    "Reliability branching: node=%d depth=%d fractional=%zu unreliable=%zu candidates=%d "
-    "threshold=%d sb_iters=%d bnb_iters=%lld explored=%lld tasks=%d\n",
-    node_ptr->node_id,
-    node_ptr->depth,
-    fractional.size(),
-    unreliable_list.size(),
-    num_candidates,
-    reliable_threshold,
-    strong_branching_lp_iter.load(),
-    (long long)branch_and_bound_lp_iters,
-    (long long)branch_and_bound_explored,
-    num_tasks);
-
-  log.printf(
-    "RB iters = %d, B&B iters = %d, unreliable = %d, num_tasks = %d, reliable_threshold = %d\n",
-    strong_branching_lp_iter.load(),
-    branch_and_bound_lp_iters,
-    unreliable_list.size(),
-    num_tasks,
-    reliable_threshold);
-
-  // Shuffle the unreliable list so every variable has the same chance to be selected.
-  if (unreliable_list.size() > max_num_candidates) { worker->rng.shuffle(unreliable_list); }
-
-  if (toc(start_time) > settings.time_limit) {
-    log.printf("Time limit reached");
-    return branch_var;
-  }
-
-#pragma omp taskloop if (num_tasks > 1) priority(task_priority) num_tasks(num_tasks) \
-  shared(score_mutex)
-  for (i_t i = 0; i < num_candidates; ++i) {
-    const i_t j = unreliable_list[i];
-
-    if (toc(start_time) > settings.time_limit) { continue; }
-
-    pseudo_cost_mutex_down[j].lock();
-    if (pseudo_cost_num_down[j] < reliable_threshold) {
-      // Do trial branching on the down branch
-      f_t obj = trial_branching(worker->leaf_problem,
-                                settings,
-                                var_types,
-                                node_ptr->vstatus,
-                                worker->leaf_edge_norms,
-                                worker->basis_factors,
-                                worker->basic_list,
-                                worker->nonbasic_list,
-                                j,
-                                worker->leaf_problem.lower[j],
-                                std::floor(solution[j]),
-                                upper_bound,
-                                branch_and_bound_lp_iter_per_node,
-                                start_time,
-                                reliability_branching_settings.upper_max_lp_iter,
-                                reliability_branching_settings.lower_max_lp_iter,
-                                strong_branching_lp_iter);
-
-      if (!std::isnan(obj)) {
-        f_t change_in_obj = std::max(obj - node_ptr->lower_bound, eps);
-        f_t change_in_x   = solution[j] - std::floor(solution[j]);
-        pseudo_cost_sum_down[j] += change_in_obj / change_in_x;
-        pseudo_cost_num_down[j]++;
-      }
-    }
-    pseudo_cost_mutex_down[j].unlock();
-
-    if (toc(start_time) > settings.time_limit) { continue; }
-
-    pseudo_cost_mutex_up[j].lock();
-    if (pseudo_cost_num_up[j] < reliable_threshold) {
-      f_t obj = trial_branching(worker->leaf_problem,
-                                settings,
-                                var_types,
-                                node_ptr->vstatus,
-                                worker->leaf_edge_norms,
-                                worker->basis_factors,
-                                worker->basic_list,
-                                worker->nonbasic_list,
-                                j,
-                                std::ceil(solution[j]),
-                                worker->leaf_problem.upper[j],
-                                upper_bound,
-                                branch_and_bound_lp_iter_per_node,
-                                start_time,
-                                reliability_branching_settings.upper_max_lp_iter,
-                                reliability_branching_settings.lower_max_lp_iter,
-                                strong_branching_lp_iter);
-
-      if (!std::isnan(obj)) {
-        f_t change_in_obj = std::max(obj - node_ptr->lower_bound, eps);
-        f_t change_in_x   = std::ceil(solution[j]) - solution[j];
-        pseudo_cost_sum_up[j] += change_in_obj / change_in_x;
-        pseudo_cost_num_up[j]++;
-      }
-    }
-    pseudo_cost_mutex_up[j].unlock();
-
-    if (toc(start_time) > settings.time_limit) { continue; }
-
-    f_t score = calculate_pseudocost_score(j, solution, pseudo_cost_up_avg, pseudo_cost_down_avg);
-
-    score_mutex.lock();
-    if (score > max_score) {
-      max_score  = score;
-      branch_var = j;
-    }
-    score_mutex.unlock();
-  }
-
-  settings.log.debug("Reliability branching result: node=%d branch_var=%d value=%e score=%e\n",
-                     node_ptr->node_id,
-                     branch_var,
-                     solution[branch_var],
-                     max_score);
-
-  log.printf(
-    "pc branching on %d. Value %e. Score %e\n", branch_var, solution[branch_var], max_score);
-
-  return branch_var;
+  return result;
 }
 
 template <typename i_t, typename f_t>
@@ -819,6 +901,33 @@ void pseudo_costs_t<i_t, f_t>::update_pseudo_costs_from_strong_branching(
 #ifdef DUAL_SIMPLEX_INSTANTIATE_DOUBLE
 
 template class pseudo_costs_t<int, double>;
+
+template int reliable_variable_selection_core<int, double>(
+  mip_node_t<int, double>*,
+  const std::vector<int>&,
+  const std::vector<double>&,
+  const simplex_solver_settings_t<int, double>&,
+  const std::vector<variable_type_t>&,
+  const lp_problem_t<int, double>&,
+  const std::vector<double>&,
+  const basis_update_mpf_t<int, double>&,
+  const std::vector<int>&,
+  const std::vector<int>&,
+  double*,
+  double*,
+  int*,
+  int*,
+  int,
+  int64_t&,
+  double,
+  int64_t,
+  int64_t,
+  double,
+  const reliability_branching_settings_t<int, double>&,
+  int,
+  omp_mutex_t*,
+  omp_mutex_t*,
+  pcgenerator_t*);
 
 template void strong_branching<int, double>(const user_problem_t<int, double>& original_problem,
                                             const lp_problem_t<int, double>& original_lp,

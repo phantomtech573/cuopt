@@ -45,11 +45,11 @@
 #include <vector>
 
 // uncomment to enable detailed detemrinism logs
-#undef CUOPT_DETERMINISM_LOG_PRINTF
-#define CUOPT_DETERMINISM_LOG_PRINTF(logger, ...) \
-  do {                                            \
-    logger.printf(__VA_ARGS__);                   \
-  } while (0)
+// #undef CUOPT_DETERMINISM_LOG_PRINTF
+// #define CUOPT_DETERMINISM_LOG_PRINTF(logger, ...) \
+//   do {                                            \
+//     logger.printf(__VA_ARGS__);                   \
+//   } while (0)
 
 namespace cuopt::linear_programming::dual_simplex {
 
@@ -1200,11 +1200,41 @@ struct deterministic_bfs_policy_t
     }
   }
 
-  branch_variable_t<i_t> select_branch_variable(mip_node_t<i_t, f_t>*,
+  branch_variable_t<i_t> select_branch_variable(mip_node_t<i_t, f_t>* node,
                                                 const std::vector<i_t>& fractional,
                                                 const std::vector<f_t>& x) override
   {
-    i_t var  = this->worker.pc_snapshot.variable_selection(fractional, x);
+    i_t var;
+    if (this->bnb.settings_.reliability_branching != 0 &&
+        this->bnb.exploration_stats_.nodes_explored > 0) {
+      var = reliable_variable_selection_core(node,
+                                             fractional,
+                                             x,
+                                             this->bnb.settings_,
+                                             this->bnb.var_types_,
+                                             this->worker.leaf_problem,
+                                             this->worker.leaf_edge_norms,
+                                             this->worker.basis_factors,
+                                             this->worker.basic_list,
+                                             this->worker.nonbasic_list,
+                                             this->worker.pc_snapshot.sum_down_.data(),
+                                             this->worker.pc_snapshot.sum_up_.data(),
+                                             this->worker.pc_snapshot.num_down_.data(),
+                                             this->worker.pc_snapshot.num_up_.data(),
+                                             this->worker.pc_snapshot.n_vars(),
+                                             this->worker.pc_snapshot.strong_branching_lp_iter_,
+                                             this->worker.local_upper_bound,
+                                             this->bnb.exploration_stats_.total_lp_iters,
+                                             this->bnb.exploration_stats_.nodes_explored,
+                                             this->bnb.exploration_stats_.start_time,
+                                             this->bnb.pc_.reliability_branching_settings,
+                                             1,
+                                             nullptr,
+                                             nullptr,
+                                             nullptr);
+    } else {
+      var = this->worker.pc_snapshot.variable_selection(fractional, x);
+    }
     auto dir = martin_criteria(x[var], this->bnb.root_relax_soln_.x[var]);
     return {var, dir};
   }
@@ -3651,7 +3681,7 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
   std::vector<variable_status_t>& leaf_vstatus = node_ptr->vstatus;
   i_t node_iter                                = 0;
   f_t lp_start_time                            = tic();
-  std::vector<f_t> leaf_edge_norms             = edge_norms_;
+  worker.leaf_edge_norms                       = edge_norms_;
 
   dual::status_t lp_status = dual_phase2_with_advanced_basis(2,
                                                              0,
@@ -3665,7 +3695,7 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
                                                              worker.nonbasic_list,
                                                              worker.leaf_solution,
                                                              node_iter,
-                                                             leaf_edge_norms,
+                                                             worker.leaf_edge_norms,
                                                              &worker.work_context);
 
   if (lp_status == dual::status_t::NUMERICAL) {
@@ -3678,7 +3708,7 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
                                                                          worker.basic_list,
                                                                          worker.nonbasic_list,
                                                                          leaf_vstatus,
-                                                                         leaf_edge_norms,
+                                                                         worker.leaf_edge_norms,
                                                                          &worker.work_context);
     lp_status                 = convert_lp_status_to_dual_status(second_status);
   }
@@ -3741,12 +3771,17 @@ template <typename PoolT>
 void branch_and_bound_t<i_t, f_t>::deterministic_merge_pseudo_cost_updates(PoolT& pool)
 {
   std::vector<pseudo_cost_update_t<i_t, f_t>> all_pc_updates;
+  int64_t sb_iter_delta = 0;
   for (auto& worker : pool) {
     auto updates = worker.pc_snapshot.take_updates();
     all_pc_updates.insert(all_pc_updates.end(), updates.begin(), updates.end());
+    int64_t snapshot_sb = worker.pc_snapshot.strong_branching_lp_iter_;
+    int64_t base_sb     = pc_.strong_branching_lp_iter.load();
+    if (snapshot_sb > base_sb) { sb_iter_delta += snapshot_sb - base_sb; }
   }
   std::sort(all_pc_updates.begin(), all_pc_updates.end());
   pc_.merge_updates(all_pc_updates);
+  if (sb_iter_delta > 0) { pc_.strong_branching_lp_iter += sb_iter_delta; }
 }
 
 template <typename i_t, typename f_t>
