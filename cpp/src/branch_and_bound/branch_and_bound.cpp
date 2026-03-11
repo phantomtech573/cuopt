@@ -235,6 +235,15 @@ inline char feasible_solution_symbol(search_strategy_t strategy)
 }
 #endif
 
+// RAII guard: sets solving_root_relaxation_ to false on destruction.
+struct solving_root_relaxation_guard_t {
+  omp_atomic_t<bool>* flag_;
+  explicit solving_root_relaxation_guard_t(omp_atomic_t<bool>& flag) : flag_(&flag) {}
+  ~solving_root_relaxation_guard_t() { flag_->store(false); }
+  solving_root_relaxation_guard_t(const solving_root_relaxation_guard_t&)            = delete;
+  solving_root_relaxation_guard_t& operator=(const solving_root_relaxation_guard_t&) = delete;
+};
+
 }  // namespace
 
 template <typename i_t, typename f_t>
@@ -290,10 +299,6 @@ branch_and_bound_t<i_t, f_t>::branch_and_bound_t(
 template <typename i_t, typename f_t>
 f_t branch_and_bound_t<i_t, f_t>::get_lower_bound()
 {
-  if (solving_root_relaxation_.load()) {
-    f_t root = root_lp_current_lower_bound_.load();
-    return std::isfinite(root) ? root : -inf;
-  }
   f_t lower_bound      = lower_bound_ceiling_.load();
   f_t heap_lower_bound = node_queue_.get_lower_bound();
   lower_bound          = std::min(heap_lower_bound, lower_bound);
@@ -312,16 +317,12 @@ template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::report_heuristic(f_t obj)
 {
   const f_t user_obj = compute_user_objective(original_lp_, obj);
-  f_t lower          = get_lower_bound();
-  f_t user_lower     = std::isfinite(lower) ? compute_user_objective(original_lp_, lower) : -inf;
-  if (!solving_root_relaxation_.load() && exploration_stats_.nodes_explored == 0) {
-    f_t root_progress          = root_lp_current_lower_bound_.load();
-    const bool is_maximization = original_lp_.obj_scale < 0.0;
-    if (std::isfinite(root_progress) &&
-        (!std::isfinite(user_lower) ||
-         (is_maximization ? root_progress < user_lower : root_progress > user_lower))) {
-      user_lower = root_progress;
-    }
+  f_t user_lower;
+  if (solving_root_relaxation_.load()) {
+    user_lower = root_lp_current_lower_bound_.load();
+  } else {
+    const f_t lower = get_lower_bound();
+    user_lower      = std::isfinite(lower) ? compute_user_objective(original_lp_, lower) : -inf;
   }
 
   if (is_running_) {
@@ -333,12 +334,19 @@ void branch_and_bound_t<i_t, f_t>::report_heuristic(f_t obj)
       user_gap.c_str(),
       toc(exploration_stats_.start_time));
   } else {
-    std::string gap_str =
-      std::isfinite(user_lower) ? (". Gap: " + user_mip_gap<f_t>(user_obj, user_lower)) : "";
-    settings_.log.printf("New solution from primal heuristics. Objective %+.6e%s. Time %.2f\n",
-                         user_obj,
-                         gap_str.c_str(),
-                         toc(exploration_stats_.start_time));
+    if (solving_root_relaxation_.load()) {
+      std::string gap_str =
+        std::isfinite(user_lower) ? user_mip_gap<f_t>(user_obj, user_lower) : "   -  ";
+      settings_.log.printf(
+        "New solution from primal heuristics. Objective %+.6e. Gap %s. Time %.2f\n",
+        user_obj,
+        gap_str.c_str(),
+        toc(exploration_stats_.start_time));
+    } else {
+      settings_.log.printf("New solution from primal heuristics. Objective %+.6e. Time %.2f\n",
+                           user_obj,
+                           toc(exploration_stats_.start_time));
+    }
   }
 }
 
@@ -1989,7 +1997,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 
   root_relax_soln_.resize(original_lp_.num_rows, original_lp_.num_cols);
 
-  solving_root_relaxation_                    = true;
   i_t original_rows                           = original_lp_.num_rows;
   simplex_solver_settings_t lp_settings       = settings_;
   lp_settings.inside_mip                      = 1;
@@ -2003,491 +2010,491 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   basis_update_mpf_t<i_t, f_t> basis_update(original_lp_.num_rows, settings_.refactor_frequency);
   lp_status_t root_status;
 
-  if (!enable_concurrent_lp_root_solve()) {
-    // RINS/SUBMIP path
-    settings_.log.printf("\nSolving LP root relaxation with dual simplex\n");
-    root_status = solve_linear_program_with_advanced_basis(original_lp_,
-                                                           exploration_stats_.start_time,
-                                                           lp_settings,
-                                                           root_relax_soln_,
-                                                           basis_update,
-                                                           basic_list,
-                                                           nonbasic_list,
-                                                           root_vstatus_,
-                                                           edge_norms_);
-  } else {
-    settings_.log.printf("\nSolving LP root relaxation in concurrent mode\n");
-    root_status = solve_root_relaxation(lp_settings,
-                                        root_relax_soln_,
-                                        root_vstatus_,
-                                        basis_update,
-                                        basic_list,
-                                        nonbasic_list,
-                                        edge_norms_);
-  }
-  exploration_stats_.total_lp_iters      = root_relax_soln_.iterations;
-  exploration_stats_.total_lp_solve_time = toc(exploration_stats_.start_time);
+  {
+    solving_root_relaxation_ = true;
+    solving_root_relaxation_guard_t root_guard(solving_root_relaxation_);
 
-  if (root_status == lp_status_t::INFEASIBLE) {
-    solving_root_relaxation_ = false;
-    settings_.log.printf("MIP Infeasible\n");
-    // FIXME: rarely dual simplex detects infeasible whereas it is feasible.
-    // to add a small safety net, check if there is a primal solution already.
-    // Uncomment this if the issue with cost266-UUE is resolved
-    // if (settings.heuristic_preemption_callback != nullptr) {
-    //   settings.heuristic_preemption_callback();
-    // }
-    return mip_status_t::INFEASIBLE;
-  }
-  if (root_status == lp_status_t::UNBOUNDED) {
-    solving_root_relaxation_ = false;
-    settings_.log.printf("MIP Unbounded\n");
-    if (settings_.heuristic_preemption_callback != nullptr) {
-      settings_.heuristic_preemption_callback();
+    if (!enable_concurrent_lp_root_solve()) {
+      // RINS/SUBMIP path
+      settings_.log.printf("\nSolving LP root relaxation with dual simplex\n");
+      root_status = solve_linear_program_with_advanced_basis(original_lp_,
+                                                             exploration_stats_.start_time,
+                                                             lp_settings,
+                                                             root_relax_soln_,
+                                                             basis_update,
+                                                             basic_list,
+                                                             nonbasic_list,
+                                                             root_vstatus_,
+                                                             edge_norms_);
+    } else {
+      settings_.log.printf("\nSolving LP root relaxation in concurrent mode\n");
+      root_status = solve_root_relaxation(lp_settings,
+                                          root_relax_soln_,
+                                          root_vstatus_,
+                                          basis_update,
+                                          basic_list,
+                                          nonbasic_list,
+                                          edge_norms_);
     }
-    return mip_status_t::UNBOUNDED;
-  }
-  if (root_status == lp_status_t::TIME_LIMIT) {
-    solving_root_relaxation_ = false;
-    solver_status_           = mip_status_t::TIME_LIMIT;
-    set_final_solution(solution, -inf);
-    return solver_status_;
-  }
+    exploration_stats_.total_lp_iters      = root_relax_soln_.iterations;
+    exploration_stats_.total_lp_solve_time = toc(exploration_stats_.start_time);
 
-  if (root_status == lp_status_t::WORK_LIMIT) {
-    solving_root_relaxation_ = false;
-    solver_status_           = mip_status_t::WORK_LIMIT;
-    set_final_solution(solution, -inf);
-    return solver_status_;
-  }
+    if (root_status == lp_status_t::INFEASIBLE) {
+      settings_.log.printf("MIP Infeasible\n");
+      // FIXME: rarely dual simplex detects infeasible whereas it is feasible.
+      // to add a small safety net, check if there is a primal solution already.
+      // Uncomment this if the issue with cost266-UUE is resolved
+      // if (settings.heuristic_preemption_callback != nullptr) {
+      //   settings.heuristic_preemption_callback();
+      // }
+      return mip_status_t::INFEASIBLE;
+    }
+    if (root_status == lp_status_t::UNBOUNDED) {
+      settings_.log.printf("MIP Unbounded\n");
+      if (settings_.heuristic_preemption_callback != nullptr) {
+        settings_.heuristic_preemption_callback();
+      }
+      return mip_status_t::UNBOUNDED;
+    }
+    if (root_status == lp_status_t::TIME_LIMIT) {
+      solver_status_ = mip_status_t::TIME_LIMIT;
+      set_final_solution(solution, -inf);
+      return solver_status_;
+    }
 
-  if (root_status == lp_status_t::NUMERICAL_ISSUES) {
-    solving_root_relaxation_ = false;
-    solver_status_           = mip_status_t::NUMERICAL;
-    set_final_solution(solution, -inf);
-    return solver_status_;
-  }
+    if (root_status == lp_status_t::WORK_LIMIT) {
+      solver_status_ = mip_status_t::WORK_LIMIT;
+      set_final_solution(solution, -inf);
+      return solver_status_;
+    }
 
-  assert(root_vstatus_.size() == original_lp_.num_cols);
-  set_uninitialized_steepest_edge_norms<i_t, f_t>(original_lp_, basic_list, edge_norms_);
+    if (root_status == lp_status_t::NUMERICAL_ISSUES) {
+      solver_status_ = mip_status_t::NUMERICAL;
+      set_final_solution(solution, -inf);
+      return solver_status_;
+    }
 
-  root_objective_ = compute_objective(original_lp_, root_relax_soln_.x);
+    assert(root_vstatus_.size() == original_lp_.num_cols);
+    set_uninitialized_steepest_edge_norms<i_t, f_t>(original_lp_, basic_list, edge_norms_);
 
-  if (settings_.set_simplex_solution_callback != nullptr) {
-    std::vector<f_t> original_x;
-    uncrush_primal_solution(original_problem_, original_lp_, root_relax_soln_.x, original_x);
-    std::vector<f_t> original_dual;
-    std::vector<f_t> original_z;
-    uncrush_dual_solution(original_problem_,
-                          original_lp_,
-                          root_relax_soln_.y,
-                          root_relax_soln_.z,
-                          original_dual,
-                          original_z);
-    settings_.set_simplex_solution_callback(
-      original_x, original_dual, compute_user_objective(original_lp_, root_objective_));
-  }
+    root_objective_ = compute_objective(original_lp_, root_relax_soln_.x);
 
-  std::vector<i_t> fractional;
-  i_t num_fractional = fractional_variables(settings_, root_relax_soln_.x, var_types_, fractional);
+    if (settings_.set_simplex_solution_callback != nullptr) {
+      std::vector<f_t> original_x;
+      uncrush_primal_solution(original_problem_, original_lp_, root_relax_soln_.x, original_x);
+      std::vector<f_t> original_dual;
+      std::vector<f_t> original_z;
+      uncrush_dual_solution(original_problem_,
+                            original_lp_,
+                            root_relax_soln_.y,
+                            root_relax_soln_.z,
+                            original_dual,
+                            original_z);
+      settings_.set_simplex_solution_callback(
+        original_x, original_dual, compute_user_objective(original_lp_, root_objective_));
+    }
 
-  cut_info_t<i_t, f_t> cut_info;
+    std::vector<i_t> fractional;
+    i_t num_fractional =
+      fractional_variables(settings_, root_relax_soln_.x, var_types_, fractional);
 
-  if (num_fractional == 0) {
-    solving_root_relaxation_ = false;
-    set_solution_at_root(solution, cut_info);
-    return mip_status_t::OPTIMAL;
-  }
+    cut_info_t<i_t, f_t> cut_info;
 
-  is_running_          = true;
-  lower_bound_ceiling_ = inf;
-
-  if (num_fractional != 0 && settings_.max_cut_passes > 0) {
-    settings_.log.printf(
-      " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node |   "
-      "Gap    "
-      "|  Time  |\n");
-  }
-
-  cut_pool_t<i_t, f_t> cut_pool(original_lp_.num_cols, settings_);
-  cut_generation_t<i_t, f_t> cut_generation(
-    cut_pool, original_lp_, settings_, Arow_, new_slacks_, var_types_);
-
-  std::vector<f_t> saved_solution;
-#ifdef CHECK_CUTS_AGAINST_SAVED_SOLUTION
-  read_saved_solution_for_cut_verification(original_lp_, settings_, saved_solution);
-#endif
-
-  f_t last_upper_bound     = std::numeric_limits<f_t>::infinity();
-  f_t last_objective       = root_objective_;
-  f_t root_relax_objective = root_objective_;
-
-  i_t cut_pool_size = 0;
-  for (i_t cut_pass = 0; cut_pass < settings_.max_cut_passes; cut_pass++) {
     if (num_fractional == 0) {
-      solving_root_relaxation_ = false;
       set_solution_at_root(solution, cut_info);
       return mip_status_t::OPTIMAL;
-    } else {
-#ifdef PRINT_FRACTIONAL_INFO
+    }
+
+    is_running_          = true;
+    lower_bound_ceiling_ = inf;
+
+    if (num_fractional != 0 && settings_.max_cut_passes > 0) {
       settings_.log.printf(
-        "Found %d fractional variables on cut pass %d\n", num_fractional, cut_pass);
-      for (i_t j : fractional) {
-        settings_.log.printf("Fractional variable %d lower %e value %e upper %e\n",
-                             j,
-                             original_lp_.lower[j],
-                             root_relax_soln_.x[j],
-                             original_lp_.upper[j]);
-      }
+        " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node | "
+        "  "
+        "Gap    "
+        "|  Time  |\n");
+    }
+
+    cut_pool_t<i_t, f_t> cut_pool(original_lp_.num_cols, settings_);
+    cut_generation_t<i_t, f_t> cut_generation(
+      cut_pool, original_lp_, settings_, Arow_, new_slacks_, var_types_);
+
+    std::vector<f_t> saved_solution;
+#ifdef CHECK_CUTS_AGAINST_SAVED_SOLUTION
+    read_saved_solution_for_cut_verification(original_lp_, settings_, saved_solution);
 #endif
 
-      // Generate cuts and add them to the cut pool
-      f_t cut_start_time = tic();
-      cut_generation.generate_cuts(original_lp_,
-                                   settings_,
-                                   Arow_,
-                                   new_slacks_,
-                                   var_types_,
-                                   basis_update,
-                                   root_relax_soln_.x,
-                                   basic_list,
-                                   nonbasic_list);
-      f_t cut_generation_time = toc(cut_start_time);
-      if (cut_generation_time > 1.0) {
-        settings_.log.debug("Cut generation time %.2f seconds\n", cut_generation_time);
-      }
-      // Score the cuts
-      f_t score_start_time = tic();
-      cut_pool.score_cuts(root_relax_soln_.x);
-      f_t score_time = toc(score_start_time);
-      if (score_time > 1.0) { settings_.log.debug("Cut scoring time %.2f seconds\n", score_time); }
-      // Get the best cuts from the cut pool
-      csr_matrix_t<i_t, f_t> cuts_to_add(0, original_lp_.num_cols, 0);
-      std::vector<f_t> cut_rhs;
-      std::vector<cut_type_t> cut_types;
-      i_t num_cuts = cut_pool.get_best_cuts(cuts_to_add, cut_rhs, cut_types);
-      if (num_cuts == 0) { break; }
-      cut_info.record_cut_types(cut_types);
+    f_t last_upper_bound     = std::numeric_limits<f_t>::infinity();
+    f_t last_objective       = root_objective_;
+    f_t root_relax_objective = root_objective_;
+
+    i_t cut_pool_size = 0;
+    for (i_t cut_pass = 0; cut_pass < settings_.max_cut_passes; cut_pass++) {
+      if (num_fractional == 0) {
+        set_solution_at_root(solution, cut_info);
+        return mip_status_t::OPTIMAL;
+      } else {
+#ifdef PRINT_FRACTIONAL_INFO
+        settings_.log.printf(
+          "Found %d fractional variables on cut pass %d\n", num_fractional, cut_pass);
+        for (i_t j : fractional) {
+          settings_.log.printf("Fractional variable %d lower %e value %e upper %e\n",
+                               j,
+                               original_lp_.lower[j],
+                               root_relax_soln_.x[j],
+                               original_lp_.upper[j]);
+        }
+#endif
+
+        // Generate cuts and add them to the cut pool
+        f_t cut_start_time = tic();
+        cut_generation.generate_cuts(original_lp_,
+                                     settings_,
+                                     Arow_,
+                                     new_slacks_,
+                                     var_types_,
+                                     basis_update,
+                                     root_relax_soln_.x,
+                                     basic_list,
+                                     nonbasic_list);
+        f_t cut_generation_time = toc(cut_start_time);
+        if (cut_generation_time > 1.0) {
+          settings_.log.debug("Cut generation time %.2f seconds\n", cut_generation_time);
+        }
+        // Score the cuts
+        f_t score_start_time = tic();
+        cut_pool.score_cuts(root_relax_soln_.x);
+        f_t score_time = toc(score_start_time);
+        if (score_time > 1.0) {
+          settings_.log.debug("Cut scoring time %.2f seconds\n", score_time);
+        }
+        // Get the best cuts from the cut pool
+        csr_matrix_t<i_t, f_t> cuts_to_add(0, original_lp_.num_cols, 0);
+        std::vector<f_t> cut_rhs;
+        std::vector<cut_type_t> cut_types;
+        i_t num_cuts = cut_pool.get_best_cuts(cuts_to_add, cut_rhs, cut_types);
+        if (num_cuts == 0) { break; }
+        cut_info.record_cut_types(cut_types);
 #ifdef PRINT_CUT_POOL_TYPES
-      cut_pool.print_cutpool_types();
-      print_cut_types("In LP      ", cut_types, settings_);
-      printf("Cut pool size: %d\n", cut_pool.pool_size());
+        cut_pool.print_cutpool_types();
+        print_cut_types("In LP      ", cut_types, settings_);
+        printf("Cut pool size: %d\n", cut_pool.pool_size());
 #endif
 
 #ifdef CHECK_CUT_MATRIX
-      if (cuts_to_add.check_matrix() != 0) {
-        settings_.log.printf("Bad cuts matrix\n");
-        for (i_t i = 0; i < static_cast<i_t>(cut_types.size()); ++i) {
-          settings_.log.printf("row %d cut type %d\n", i, cut_types[i]);
+        if (cuts_to_add.check_matrix() != 0) {
+          settings_.log.printf("Bad cuts matrix\n");
+          for (i_t i = 0; i < static_cast<i_t>(cut_types.size()); ++i) {
+            settings_.log.printf("row %d cut type %d\n", i, cut_types[i]);
+          }
+          return mip_status_t::NUMERICAL;
         }
-        return mip_status_t::NUMERICAL;
-      }
 #endif
-      // Check against saved solution
+        // Check against saved solution
 #ifdef CHECK_CUTS_AGAINST_SAVED_SOLUTION
-      verify_cuts_against_saved_solution(cuts_to_add, cut_rhs, saved_solution);
+        verify_cuts_against_saved_solution(cuts_to_add, cut_rhs, saved_solution);
 #endif
-      cut_pool_size = cut_pool.pool_size();
+        cut_pool_size = cut_pool.pool_size();
 
-      // Resolve the LP with the new cuts
-      settings_.log.debug(
-        "Solving LP with %d cuts (%d cut nonzeros). Cuts in pool %d. Total constraints %d\n",
-        num_cuts,
-        cuts_to_add.row_start[cuts_to_add.m],
-        cut_pool.pool_size(),
-        cuts_to_add.m + original_lp_.num_rows);
-      lp_settings.log.log = false;
+        // Resolve the LP with the new cuts
+        settings_.log.debug(
+          "Solving LP with %d cuts (%d cut nonzeros). Cuts in pool %d. Total constraints %d\n",
+          num_cuts,
+          cuts_to_add.row_start[cuts_to_add.m],
+          cut_pool.pool_size(),
+          cuts_to_add.m + original_lp_.num_rows);
+        lp_settings.log.log = false;
 
-      f_t add_cuts_start_time = tic();
-      mutex_original_lp_.lock();
-      i_t add_cuts_status = add_cuts(settings_,
-                                     cuts_to_add,
-                                     cut_rhs,
-                                     original_lp_,
-                                     new_slacks_,
-                                     root_relax_soln_,
-                                     basis_update,
-                                     basic_list,
-                                     nonbasic_list,
-                                     root_vstatus_,
-                                     edge_norms_);
-      var_types_.resize(original_lp_.num_cols, variable_type_t::CONTINUOUS);
-      mutex_original_lp_.unlock();
-      f_t add_cuts_time = toc(add_cuts_start_time);
-      if (add_cuts_time > 1.0) {
-        settings_.log.debug("Add cuts time %.2f seconds\n", add_cuts_time);
+        f_t add_cuts_start_time = tic();
+        mutex_original_lp_.lock();
+        i_t add_cuts_status = add_cuts(settings_,
+                                       cuts_to_add,
+                                       cut_rhs,
+                                       original_lp_,
+                                       new_slacks_,
+                                       root_relax_soln_,
+                                       basis_update,
+                                       basic_list,
+                                       nonbasic_list,
+                                       root_vstatus_,
+                                       edge_norms_);
+        var_types_.resize(original_lp_.num_cols, variable_type_t::CONTINUOUS);
+        mutex_original_lp_.unlock();
+        f_t add_cuts_time = toc(add_cuts_start_time);
+        if (add_cuts_time > 1.0) {
+          settings_.log.debug("Add cuts time %.2f seconds\n", add_cuts_time);
+        }
+        if (add_cuts_status != 0) {
+          settings_.log.printf("Failed to add cuts\n");
+          return mip_status_t::NUMERICAL;
+        }
+
+        if (settings_.reduced_cost_strengthening >= 1 && upper_bound_.load() < last_upper_bound) {
+          mutex_upper_.lock();
+          last_upper_bound = upper_bound_.load();
+          std::vector<f_t> lower_bounds;
+          std::vector<f_t> upper_bounds;
+          find_reduced_cost_fixings(upper_bound_.load(), lower_bounds, upper_bounds);
+          mutex_upper_.unlock();
+          mutex_original_lp_.lock();
+          original_lp_.lower = lower_bounds;
+          original_lp_.upper = upper_bounds;
+          mutex_original_lp_.unlock();
+        }
+
+        // Try to do bound strengthening
+        std::vector<bool> bounds_changed(original_lp_.num_cols, true);
+        std::vector<char> row_sense;
+#ifdef CHECK_MATRICES
+        settings_.log.printf("Before A check\n");
+        original_lp_.A.check_matrix();
+#endif
+        original_lp_.A.to_compressed_row(Arow_);
+
+        f_t node_presolve_start_time = tic();
+        bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
+        std::vector<f_t> new_lower = original_lp_.lower;
+        std::vector<f_t> new_upper = original_lp_.upper;
+        bool feasible =
+          node_presolve.bounds_strengthening(settings_, bounds_changed, new_lower, new_upper);
+        mutex_original_lp_.lock();
+        original_lp_.lower = new_lower;
+        original_lp_.upper = new_upper;
+        mutex_original_lp_.unlock();
+        f_t node_presolve_time = toc(node_presolve_start_time);
+        if (node_presolve_time > 1.0) {
+          settings_.log.debug("Node presolve time %.2f seconds\n", node_presolve_time);
+        }
+        if (!feasible) {
+          settings_.log.printf("Bound strengthening detected infeasibility\n");
+          return mip_status_t::INFEASIBLE;
+        }
+
+        i_t iter                    = 0;
+        bool initialize_basis       = false;
+        lp_settings.concurrent_halt = NULL;
+        f_t dual_phase2_start_time  = tic();
+        dual::status_t cut_status   = dual_phase2_with_advanced_basis(2,
+                                                                    0,
+                                                                    initialize_basis,
+                                                                    exploration_stats_.start_time,
+                                                                    original_lp_,
+                                                                    lp_settings,
+                                                                    root_vstatus_,
+                                                                    basis_update,
+                                                                    basic_list,
+                                                                    nonbasic_list,
+                                                                    root_relax_soln_,
+                                                                    iter,
+                                                                    edge_norms_);
+        exploration_stats_.total_lp_iters += iter;
+        root_objective_      = compute_objective(original_lp_, root_relax_soln_.x);
+        f_t dual_phase2_time = toc(dual_phase2_start_time);
+        if (dual_phase2_time > 1.0) {
+          settings_.log.debug("Dual phase2 time %.2f seconds\n", dual_phase2_time);
+        }
+        if (cut_status == dual::status_t::TIME_LIMIT) {
+          solver_status_ = mip_status_t::TIME_LIMIT;
+          set_final_solution(solution, root_objective_);
+          return solver_status_;
+        }
+
+        if (cut_status != dual::status_t::OPTIMAL) {
+          settings_.log.printf("Numerical issue at root node. Resolving from scratch\n");
+          lp_status_t scratch_status =
+            solve_linear_program_with_advanced_basis(original_lp_,
+                                                     exploration_stats_.start_time,
+                                                     lp_settings,
+                                                     root_relax_soln_,
+                                                     basis_update,
+                                                     basic_list,
+                                                     nonbasic_list,
+                                                     root_vstatus_,
+                                                     edge_norms_);
+          if (scratch_status == lp_status_t::OPTIMAL) {
+            // We recovered
+            cut_status = convert_lp_status_to_dual_status(scratch_status);
+            exploration_stats_.total_lp_iters += root_relax_soln_.iterations;
+            root_objective_ = compute_objective(original_lp_, root_relax_soln_.x);
+          } else {
+            settings_.log.printf("Cut status %s\n", dual::status_to_string(cut_status).c_str());
+            return mip_status_t::NUMERICAL;
+          }
+        }
+
+        f_t remove_cuts_start_time = tic();
+        mutex_original_lp_.lock();
+        remove_cuts(original_lp_,
+                    settings_,
+                    exploration_stats_.start_time,
+                    Arow_,
+                    new_slacks_,
+                    original_rows,
+                    var_types_,
+                    root_vstatus_,
+                    edge_norms_,
+                    root_relax_soln_.x,
+                    root_relax_soln_.y,
+                    root_relax_soln_.z,
+                    basic_list,
+                    nonbasic_list,
+                    basis_update);
+        mutex_original_lp_.unlock();
+        f_t remove_cuts_time = toc(remove_cuts_start_time);
+        if (remove_cuts_time > 1.0) {
+          settings_.log.debug("Remove cuts time %.2f seconds\n", remove_cuts_time);
+        }
+        fractional.clear();
+        num_fractional =
+          fractional_variables(settings_, root_relax_soln_.x, var_types_, fractional);
+
+        if (num_fractional == 0) {
+          upper_bound_ = root_objective_;
+          mutex_upper_.lock();
+          incumbent_.set_incumbent_solution(root_objective_, root_relax_soln_.x);
+          mutex_upper_.unlock();
+        }
+        f_t obj = upper_bound_.load();
+        report(' ', obj, root_objective_, 0, num_fractional);
+
+        f_t rel_gap = user_relative_gap(original_lp_, upper_bound_.load(), root_objective_);
+        f_t abs_gap = upper_bound_.load() - root_objective_;
+        if (rel_gap < settings_.relative_mip_gap_tol || abs_gap < settings_.absolute_mip_gap_tol) {
+          set_solution_at_root(solution, cut_info);
+          set_final_solution(solution, root_objective_);
+          return mip_status_t::OPTIMAL;
+        }
+
+        f_t change_in_objective = root_objective_ - last_objective;
+        const f_t factor        = settings_.cut_change_threshold;
+        const f_t min_objective = 1e-3;
+        if (change_in_objective <=
+            factor * std::max(min_objective, std::abs(root_relax_objective))) {
+          settings_.log.debug(
+            "Change in objective %.16e is less than 1e-3 of root relax objective %.16e\n",
+            change_in_objective,
+            root_relax_objective);
+          break;
+        }
+        last_objective = root_objective_;
       }
-      if (add_cuts_status != 0) {
-        settings_.log.printf("Failed to add cuts\n");
-        return mip_status_t::NUMERICAL;
-      }
+    }
 
-      if (settings_.reduced_cost_strengthening >= 1 && upper_bound_.load() < last_upper_bound) {
-        mutex_upper_.lock();
-        last_upper_bound = upper_bound_.load();
-        std::vector<f_t> lower_bounds;
-        std::vector<f_t> upper_bounds;
-        find_reduced_cost_fixings(upper_bound_.load(), lower_bounds, upper_bounds);
-        mutex_upper_.unlock();
+    print_cut_info(settings_, cut_info);
+
+    if (cut_info.has_cuts()) {
+      settings_.log.printf("Cut pool size  : %d\n", cut_pool_size);
+      settings_.log.printf("Size with cuts : %d constraints, %d variables, %d nonzeros\n",
+                           original_lp_.num_rows,
+                           original_lp_.num_cols,
+                           original_lp_.A.col_start[original_lp_.A.n]);
+    }
+
+    set_uninitialized_steepest_edge_norms(original_lp_, basic_list, edge_norms_);
+
+    pc_.resize(original_lp_.num_cols);
+    {
+      raft::common::nvtx::range scope_sb("BB::strong_branching");
+      strong_branching<i_t, f_t>(original_problem_,
+                                 original_lp_,
+                                 settings_,
+                                 exploration_stats_.start_time,
+                                 var_types_,
+                                 root_relax_soln_.x,
+                                 fractional,
+                                 root_objective_,
+                                 root_vstatus_,
+                                 edge_norms_,
+                                 pc_);
+    }
+
+    if (toc(exploration_stats_.start_time) > settings_.time_limit) {
+      solver_status_ = mip_status_t::TIME_LIMIT;
+      set_final_solution(solution, root_objective_);
+      return solver_status_;
+    }
+
+    if (settings_.reduced_cost_strengthening >= 2 && upper_bound_.load() < last_upper_bound) {
+      std::vector<f_t> lower_bounds;
+      std::vector<f_t> upper_bounds;
+      i_t num_fixed = find_reduced_cost_fixings(upper_bound_.load(), lower_bounds, upper_bounds);
+      if (num_fixed > 0) {
+        std::vector<bool> bounds_changed(original_lp_.num_cols, true);
+        std::vector<char> row_sense;
+
+        bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
+
         mutex_original_lp_.lock();
         original_lp_.lower = lower_bounds;
         original_lp_.upper = upper_bounds;
+        bool feasible      = node_presolve.bounds_strengthening(
+          settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
         mutex_original_lp_.unlock();
-      }
-
-      // Try to do bound strengthening
-      std::vector<bool> bounds_changed(original_lp_.num_cols, true);
-      std::vector<char> row_sense;
-#ifdef CHECK_MATRICES
-      settings_.log.printf("Before A check\n");
-      original_lp_.A.check_matrix();
-#endif
-      original_lp_.A.to_compressed_row(Arow_);
-
-      f_t node_presolve_start_time = tic();
-      bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
-      std::vector<f_t> new_lower = original_lp_.lower;
-      std::vector<f_t> new_upper = original_lp_.upper;
-      bool feasible =
-        node_presolve.bounds_strengthening(settings_, bounds_changed, new_lower, new_upper);
-      mutex_original_lp_.lock();
-      original_lp_.lower = new_lower;
-      original_lp_.upper = new_upper;
-      mutex_original_lp_.unlock();
-      f_t node_presolve_time = toc(node_presolve_start_time);
-      if (node_presolve_time > 1.0) {
-        settings_.log.debug("Node presolve time %.2f seconds\n", node_presolve_time);
-      }
-      if (!feasible) {
-        settings_.log.printf("Bound strengthening detected infeasibility\n");
-        return mip_status_t::INFEASIBLE;
-      }
-
-      i_t iter                    = 0;
-      bool initialize_basis       = false;
-      lp_settings.concurrent_halt = NULL;
-      f_t dual_phase2_start_time  = tic();
-      dual::status_t cut_status   = dual_phase2_with_advanced_basis(2,
-                                                                  0,
-                                                                  initialize_basis,
-                                                                  exploration_stats_.start_time,
-                                                                  original_lp_,
-                                                                  lp_settings,
-                                                                  root_vstatus_,
-                                                                  basis_update,
-                                                                  basic_list,
-                                                                  nonbasic_list,
-                                                                  root_relax_soln_,
-                                                                  iter,
-                                                                  edge_norms_);
-      exploration_stats_.total_lp_iters += iter;
-      root_objective_      = compute_objective(original_lp_, root_relax_soln_.x);
-      f_t dual_phase2_time = toc(dual_phase2_start_time);
-      if (dual_phase2_time > 1.0) {
-        settings_.log.debug("Dual phase2 time %.2f seconds\n", dual_phase2_time);
-      }
-      if (cut_status == dual::status_t::TIME_LIMIT) {
-        solving_root_relaxation_ = false;
-        solver_status_           = mip_status_t::TIME_LIMIT;
-        set_final_solution(solution, root_objective_);
-        return solver_status_;
-      }
-
-      if (cut_status != dual::status_t::OPTIMAL) {
-        settings_.log.printf("Numerical issue at root node. Resolving from scratch\n");
-        lp_status_t scratch_status =
-          solve_linear_program_with_advanced_basis(original_lp_,
-                                                   exploration_stats_.start_time,
-                                                   lp_settings,
-                                                   root_relax_soln_,
-                                                   basis_update,
-                                                   basic_list,
-                                                   nonbasic_list,
-                                                   root_vstatus_,
-                                                   edge_norms_);
-        if (scratch_status == lp_status_t::OPTIMAL) {
-          // We recovered
-          cut_status = convert_lp_status_to_dual_status(scratch_status);
-          exploration_stats_.total_lp_iters += root_relax_soln_.iterations;
-          root_objective_ = compute_objective(original_lp_, root_relax_soln_.x);
-        } else {
-          solving_root_relaxation_ = false;
-          settings_.log.printf("Cut status %s\n", dual::status_to_string(cut_status).c_str());
-          return mip_status_t::NUMERICAL;
+        if (!feasible) {
+          settings_.log.printf("Bound strengthening failed\n");
+          return mip_status_t::NUMERICAL;  // We had a feasible integer solution, but bound
+                                           // strengthening thinks we are infeasible.
         }
-      }
-
-      f_t remove_cuts_start_time = tic();
-      mutex_original_lp_.lock();
-      remove_cuts(original_lp_,
-                  settings_,
-                  exploration_stats_.start_time,
-                  Arow_,
-                  new_slacks_,
-                  original_rows,
-                  var_types_,
-                  root_vstatus_,
-                  edge_norms_,
-                  root_relax_soln_.x,
-                  root_relax_soln_.y,
-                  root_relax_soln_.z,
-                  basic_list,
-                  nonbasic_list,
-                  basis_update);
-      mutex_original_lp_.unlock();
-      f_t remove_cuts_time = toc(remove_cuts_start_time);
-      if (remove_cuts_time > 1.0) {
-        settings_.log.debug("Remove cuts time %.2f seconds\n", remove_cuts_time);
-      }
-      fractional.clear();
-      num_fractional = fractional_variables(settings_, root_relax_soln_.x, var_types_, fractional);
-
-      if (num_fractional == 0) {
-        upper_bound_ = root_objective_;
-        mutex_upper_.lock();
-        incumbent_.set_incumbent_solution(root_objective_, root_relax_soln_.x);
-        mutex_upper_.unlock();
-      }
-      f_t obj = upper_bound_.load();
-      report(' ', obj, root_objective_, 0, num_fractional);
-
-      f_t rel_gap = user_relative_gap(original_lp_, upper_bound_.load(), root_objective_);
-      f_t abs_gap = upper_bound_.load() - root_objective_;
-      if (rel_gap < settings_.relative_mip_gap_tol || abs_gap < settings_.absolute_mip_gap_tol) {
-        solving_root_relaxation_ = false;
-        set_solution_at_root(solution, cut_info);
-        set_final_solution(solution, root_objective_);
-        return mip_status_t::OPTIMAL;
-      }
-
-      f_t change_in_objective = root_objective_ - last_objective;
-      const f_t factor        = settings_.cut_change_threshold;
-      const f_t min_objective = 1e-3;
-      if (change_in_objective <= factor * std::max(min_objective, std::abs(root_relax_objective))) {
-        settings_.log.debug(
-          "Change in objective %.16e is less than 1e-3 of root relax objective %.16e\n",
-          change_in_objective,
-          root_relax_objective);
-        break;
-      }
-      last_objective = root_objective_;
-    }
-  }
-
-  solving_root_relaxation_ = false;
-  print_cut_info(settings_, cut_info);
-
-  if (cut_info.has_cuts()) {
-    settings_.log.printf("Cut pool size  : %d\n", cut_pool_size);
-    settings_.log.printf("Size with cuts : %d constraints, %d variables, %d nonzeros\n",
-                         original_lp_.num_rows,
-                         original_lp_.num_cols,
-                         original_lp_.A.col_start[original_lp_.A.n]);
-  }
-
-  set_uninitialized_steepest_edge_norms(original_lp_, basic_list, edge_norms_);
-
-  pc_.resize(original_lp_.num_cols);
-  {
-    raft::common::nvtx::range scope_sb("BB::strong_branching");
-    strong_branching<i_t, f_t>(original_problem_,
-                               original_lp_,
-                               settings_,
-                               exploration_stats_.start_time,
-                               var_types_,
-                               root_relax_soln_.x,
-                               fractional,
-                               root_objective_,
-                               root_vstatus_,
-                               edge_norms_,
-                               pc_);
-  }
-
-  if (toc(exploration_stats_.start_time) > settings_.time_limit) {
-    solver_status_ = mip_status_t::TIME_LIMIT;
-    set_final_solution(solution, root_objective_);
-    return solver_status_;
-  }
-
-  if (settings_.reduced_cost_strengthening >= 2 && upper_bound_.load() < last_upper_bound) {
-    std::vector<f_t> lower_bounds;
-    std::vector<f_t> upper_bounds;
-    i_t num_fixed = find_reduced_cost_fixings(upper_bound_.load(), lower_bounds, upper_bounds);
-    if (num_fixed > 0) {
-      std::vector<bool> bounds_changed(original_lp_.num_cols, true);
-      std::vector<char> row_sense;
-
-      bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
-
-      mutex_original_lp_.lock();
-      original_lp_.lower = lower_bounds;
-      original_lp_.upper = upper_bounds;
-      bool feasible      = node_presolve.bounds_strengthening(
-        settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
-      mutex_original_lp_.unlock();
-      if (!feasible) {
-        settings_.log.printf("Bound strengthening failed\n");
-        return mip_status_t::NUMERICAL;  // We had a feasible integer solution, but bound
-                                         // strengthening thinks we are infeasible.
-      }
-      // Go through and check the fractional variables and remove any that are now fixed to their
-      // bounds
-      std::vector<i_t> to_remove(fractional.size(), 0);
-      i_t num_to_remove = 0;
-      for (i_t k = 0; k < fractional.size(); k++) {
-        const i_t j = fractional[k];
-        if (std::abs(original_lp_.upper[j] - original_lp_.lower[j]) < settings_.fixed_tol) {
-          to_remove[k] = 1;
-          num_to_remove++;
-        }
-      }
-      if (num_to_remove > 0) {
-        std::vector<i_t> new_fractional;
-        new_fractional.reserve(fractional.size() - num_to_remove);
+        // Go through and check the fractional variables and remove any that are now fixed to their
+        // bounds
+        std::vector<i_t> to_remove(fractional.size(), 0);
+        i_t num_to_remove = 0;
         for (i_t k = 0; k < fractional.size(); k++) {
-          if (!to_remove[k]) { new_fractional.push_back(fractional[k]); }
+          const i_t j = fractional[k];
+          if (std::abs(original_lp_.upper[j] - original_lp_.lower[j]) < settings_.fixed_tol) {
+            to_remove[k] = 1;
+            num_to_remove++;
+          }
         }
-        fractional     = new_fractional;
-        num_fractional = fractional.size();
+        if (num_to_remove > 0) {
+          std::vector<i_t> new_fractional;
+          new_fractional.reserve(fractional.size() - num_to_remove);
+          for (i_t k = 0; k < fractional.size(); k++) {
+            if (!to_remove[k]) { new_fractional.push_back(fractional[k]); }
+          }
+          fractional     = new_fractional;
+          num_fractional = fractional.size();
+        }
       }
     }
-  }
 
-  // Choose variable to branch on
-  i_t branch_var = pc_.variable_selection(fractional, root_relax_soln_.x, log);
+    // Choose variable to branch on
+    i_t branch_var = pc_.variable_selection(fractional, root_relax_soln_.x, log);
 
-  search_tree_.root      = std::move(mip_node_t<i_t, f_t>(root_objective_, root_vstatus_));
-  search_tree_.num_nodes = 0;
-  search_tree_.graphviz_node(settings_.log, &search_tree_.root, "lower bound", root_objective_);
-  search_tree_.branch(&search_tree_.root,
-                      branch_var,
-                      root_relax_soln_.x[branch_var],
-                      num_fractional,
-                      root_vstatus_,
-                      original_lp_,
-                      log);
-  node_queue_.push(search_tree_.root.get_down_child());
-  node_queue_.push(search_tree_.root.get_up_child());
+    search_tree_.root      = std::move(mip_node_t<i_t, f_t>(root_objective_, root_vstatus_));
+    search_tree_.num_nodes = 0;
+    search_tree_.graphviz_node(settings_.log, &search_tree_.root, "lower bound", root_objective_);
+    search_tree_.branch(&search_tree_.root,
+                        branch_var,
+                        root_relax_soln_.x[branch_var],
+                        num_fractional,
+                        root_vstatus_,
+                        original_lp_,
+                        log);
+    node_queue_.push(search_tree_.root.get_down_child());
+    node_queue_.push(search_tree_.root.get_up_child());
 
-  settings_.log.printf("Exploring the B&B tree using %d threads\n\n", settings_.num_threads);
+    settings_.log.printf("Exploring the B&B tree using %d threads\n\n", settings_.num_threads);
 
-  exploration_stats_.nodes_explored       = 0;
-  exploration_stats_.nodes_unexplored     = 2;
-  exploration_stats_.nodes_since_last_log = 0;
-  exploration_stats_.last_log             = tic();
-  min_node_queue_size_                    = 2 * settings_.num_threads;
+    exploration_stats_.nodes_explored       = 0;
+    exploration_stats_.nodes_unexplored     = 2;
+    exploration_stats_.nodes_since_last_log = 0;
+    exploration_stats_.last_log             = tic();
+    min_node_queue_size_                    = 2 * settings_.num_threads;
 
-  if (settings_.diving_settings.coefficient_diving != 0) {
-    calculate_variable_locks(original_lp_, var_up_locks_, var_down_locks_);
-  }
-  if (settings_.deterministic) {
-    settings_.log.printf(
-      " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node "
-      "|   Gap    |  Work |  Time  |\n");
-  } else {
-    settings_.log.printf(
-      " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node "
-      "|   Gap    |  Time  |\n");
+    if (settings_.diving_settings.coefficient_diving != 0) {
+      calculate_variable_locks(original_lp_, var_up_locks_, var_down_locks_);
+    }
+    if (settings_.deterministic) {
+      settings_.log.printf(
+        " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node "
+        "|   Gap    |  Work |  Time  |\n");
+    } else {
+      settings_.log.printf(
+        " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node "
+        "|   Gap    |  Time  |\n");
+    }
   }
 
   if (settings_.deterministic) {
