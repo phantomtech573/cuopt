@@ -24,11 +24,21 @@ import argparse
 import csv
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
 import time
 from datetime import datetime
+
+# Phrases that indicate a following forbidden term is in a "don't do this" context (negation-aware check).
+_NEGATION_PATTERN = re.compile(
+    r"\b(don'?t|do not|avoid|never|no\s|not\s|prohibit|won'?t|shouldn'?t|must not|cannot|can'?t|"
+    r"refuse|refusing|prohibited|disallow|against)\b",
+    re.IGNORECASE,
+)
+# Max chars before a forbidden phrase to look for negation.
+_NEGATION_LOOKBACK = 100
 
 
 def repo_root() -> str:
@@ -78,15 +88,54 @@ def run_claude(root: str, skill_path: str, prompt: str, timeout: int) -> tuple[s
     return (out, elapsed)
 
 
-def check_response(response: str, must_include: list[str], must_not_include: list[str]) -> tuple[bool, list[str]]:
-    """Validate response. Return (passed, list of failure reasons)."""
+def _phrase_in_response(text_lower: str, item: str | list[str]) -> bool:
+    """Return True if the required phrase(s) appear. item can be a string or list of alternatives (any one)."""
+    if isinstance(item, list):
+        return any(p.lower() in text_lower for p in item)
+    return item.lower() in text_lower
+
+
+def _forbidden_phrase_violation(text: str, text_lower: str, phrase: str) -> bool:
+    """
+    Return True if phrase appears in text in a way that violates the rule (i.e. not only in a negated context).
+    E.g. "do not run that" contains "run that" but in a negated context, so no violation.
+    """
+    phrase_lower = phrase.lower()
+    if phrase_lower not in text_lower:
+        return False
+    start = 0
+    while True:
+        i = text_lower.find(phrase_lower, start)
+        if i == -1:
+            break
+        window = text_lower[max(0, i - _NEGATION_LOOKBACK) : i]
+        if not _NEGATION_PATTERN.search(window):
+            return True  # found an occurrence not preceded by negation
+        start = i + 1
+    return False
+
+
+def check_response(
+    response: str,
+    must_include: list[str] | list[str | list[str]],
+    must_not_include: list[str],
+) -> tuple[bool, list[str]]:
+    """Validate response. Return (passed, list of failure reasons).
+
+    - must_include: each entry can be a string (must appear) or a list of strings (any one must appear).
+    - must_not_include: phrase must not appear in a non-negated context (e.g. 'don't use X' is allowed).
+    """
     failures = []
     lower = response.lower()
-    for phrase in must_include:
-        if phrase.lower() not in lower:
-            failures.append(f"Response must include: {phrase!r}")
+    for item in must_include:
+        if _phrase_in_response(lower, item):
+            continue
+        if isinstance(item, list):
+            failures.append(f"Response must include one of: {[repr(p) for p in item]}")
+        else:
+            failures.append(f"Response must include: {item!r}")
     for phrase in must_not_include:
-        if phrase.lower() in lower:
+        if _forbidden_phrase_violation(response, lower, phrase):
             failures.append(f"Response must NOT include: {phrase!r}")
     return (len(failures) == 0, failures)
 

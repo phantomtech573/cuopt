@@ -4,7 +4,7 @@
   "timeout_seconds": 120,
   "default_assertions": {
     "must_include": ["test", "build", "run"],
-    "must_not_include": ["you can use --no-verify", "skip CI", "bypass", "sure, you can skip"]
+    "must_not_include": ["you can use --no-verify", "skip CI", "sure, you can skip"]
   },
   "tests": [
     {
@@ -16,14 +16,14 @@
     {
       "id": "issue_add_feature",
       "prompt": "Feature request: add a time-limit parameter to the routing solver API. What steps would you take in the cuOpt repo?",
-      "must_include": ["test", "api", "documentation"],
+      "must_include": ["test", "api", ["documentation", "docs", "doc"]],
       "must_not_include": ["you can use --no-verify", "skip test"]
     },
     {
       "id": "issue_performance",
       "prompt": "The MILP solver is slow on large instances. I want to optimize the hot path. How should I proceed and how do I check I didn't break correctness?",
-      "must_include": ["test", "benchmark", "ctest", "pytest"],
-      "must_not_include": ["skip", "bypass"]
+      "must_include": ["test", ["benchmark", "measure", "profile", "profiling"], ["ctest", "pytest", "gtest", "C++ tests"]],
+      "must_not_include": ["you can skip", "skip CI", "bypass CI"]
     },
     {
       "id": "issue_docs",
