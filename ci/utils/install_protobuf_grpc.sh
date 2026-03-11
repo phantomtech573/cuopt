@@ -69,6 +69,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+PREFIX=$(realpath -m "$PREFIX" 2>/dev/null || readlink -f "$PREFIX" 2>/dev/null || echo "$PREFIX")
+BUILD_DIR=$(realpath -m "$BUILD_DIR" 2>/dev/null || readlink -f "$BUILD_DIR" 2>/dev/null || echo "$BUILD_DIR")
+
+if [[ -z "$PREFIX" || "$PREFIX" == "/" ]]; then
+    echo "ERROR: Invalid PREFIX: '$PREFIX'" >&2
+    exit 1
+fi
+if [[ -z "$BUILD_DIR" || "$BUILD_DIR" == "/" ]]; then
+    echo "ERROR: Invalid BUILD_DIR: '$BUILD_DIR'" >&2
+    exit 1
+fi
+
+mkdir -p "$BUILD_DIR"
+
 echo "=============================================="
 echo "Installing gRPC ${GRPC_VERSION} from source"
 echo "  Prefix: ${PREFIX}"
@@ -106,7 +120,7 @@ echo ""
 echo "Checking required tools..."
 for tool in git cmake ninja; do
     if ! command -v "$tool" &> /dev/null; then
-        echo "Error: Required tool '$tool' not found. Please install it or use --skip-deps=false"
+        echo "Error: Required tool '$tool' not found. Please install it (e.g., via your package manager) and re-run this script."
         exit 1
     fi
 done

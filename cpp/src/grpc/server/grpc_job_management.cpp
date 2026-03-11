@@ -49,8 +49,10 @@ bool send_incumbent_pipe(int fd, const std::vector<uint8_t>& data)
 
 bool recv_incumbent_pipe(int fd, std::vector<uint8_t>& data)
 {
+  static constexpr uint64_t kMaxIncumbentBytes = 256ULL * 1024 * 1024;
   uint64_t size;
   if (!read_from_pipe(fd, &size, sizeof(size))) return false;
+  if (size > kMaxIncumbentBytes) return false;
   data.resize(size);
   if (size > 0 && !read_from_pipe(fd, data.data(), size)) return false;
   return true;
@@ -88,6 +90,7 @@ std::pair<bool, std::string> submit_job_async(std::vector<uint8_t>&& request_dat
   job_queue[slot].worker_index.store(-1);
   job_queue[slot].data_sent.store(false);
   job_queue[slot].is_chunked = false;
+  job_queue[slot].worker_pid = 0;
 
   {
     std::lock_guard<std::mutex> lock(pending_data_mutex);
@@ -135,6 +138,7 @@ std::pair<bool, std::string> submit_chunked_job_async(PendingChunkedUpload&& chu
   job_queue[slot].worker_index.store(-1);
   job_queue[slot].data_sent.store(false);
   job_queue[slot].is_chunked = true;
+  job_queue[slot].worker_pid = 0;
 
   {
     std::lock_guard<std::mutex> lock(pending_data_mutex);
@@ -239,46 +243,55 @@ int cancel_job(const std::string& job_id, JobStatus& job_status_out, std::string
   }
 
   for (size_t i = 0; i < MAX_JOBS; ++i) {
-    if (job_queue[i].ready && strcmp(job_queue[i].job_id, job_id.c_str()) == 0) {
-      pid_t worker_pid = job_queue[i].worker_pid;
+    if (!job_queue[i].ready.load(std::memory_order_acquire)) continue;
+    if (strcmp(job_queue[i].job_id, job_id.c_str()) != 0) continue;
 
-      if (worker_pid > 0 && job_queue[i].claimed) {
-        if (config.verbose) {
-          std::cout << "[Server] Cancelling running job " << job_id << " (killing worker "
-                    << worker_pid << ")\n";
-        }
-        job_queue[i].cancelled = true;
-        kill(worker_pid, SIGKILL);
-      } else {
-        if (config.verbose) { std::cout << "[Server] Cancelling queued job " << job_id << "\n"; }
-        job_queue[i].cancelled = true;
-      }
-
-      it->second.status        = JobStatus::CANCELLED;
-      it->second.error_message = "Job cancelled by user";
-      job_status_out           = JobStatus::CANCELLED;
-      message                  = "Job cancelled successfully";
-
-      delete_log_file(job_id);
-
-      {
-        std::lock_guard<std::mutex> wlock(waiters_mutex);
-        auto wit = waiting_threads.find(job_id);
-        if (wit != waiting_threads.end()) {
-          auto waiter = wit->second;
-          {
-            std::lock_guard<std::mutex> waiter_lock(waiter->mutex);
-            waiter->error_message = "Job cancelled by user";
-            waiter->success       = false;
-            waiter->ready         = true;
-          }
-          waiter->cv.notify_all();
-          waiting_threads.erase(wit);
-        }
-      }
-
-      return 0;
+    // Re-validate the slot: the job_id could have changed between the
+    // initial check and now if the slot was recycled.  Load ready with
+    // acquire so we see all writes that published it.
+    if (!job_queue[i].ready.load(std::memory_order_acquire) ||
+        strcmp(job_queue[i].job_id, job_id.c_str()) != 0) {
+      continue;
     }
+
+    pid_t worker_pid = job_queue[i].worker_pid.load(std::memory_order_relaxed);
+
+    if (worker_pid > 0 && job_queue[i].claimed.load(std::memory_order_relaxed)) {
+      if (config.verbose) {
+        std::cout << "[Server] Cancelling running job " << job_id << " (killing worker "
+                  << worker_pid << ")\n";
+      }
+      job_queue[i].cancelled.store(true, std::memory_order_release);
+      kill(worker_pid, SIGKILL);
+    } else {
+      if (config.verbose) { std::cout << "[Server] Cancelling queued job " << job_id << "\n"; }
+      job_queue[i].cancelled.store(true, std::memory_order_release);
+    }
+
+    it->second.status        = JobStatus::CANCELLED;
+    it->second.error_message = "Job cancelled by user";
+    job_status_out           = JobStatus::CANCELLED;
+    message                  = "Job cancelled successfully";
+
+    delete_log_file(job_id);
+
+    {
+      std::lock_guard<std::mutex> wlock(waiters_mutex);
+      auto wit = waiting_threads.find(job_id);
+      if (wit != waiting_threads.end()) {
+        auto waiter = wit->second;
+        {
+          std::lock_guard<std::mutex> waiter_lock(waiter->mutex);
+          waiter->error_message = "Job cancelled by user";
+          waiter->success       = false;
+          waiter->ready         = true;
+        }
+        waiter->cv.notify_all();
+        waiting_threads.erase(wit);
+      }
+    }
+
+    return 0;
   }
 
   if (it->second.status == JobStatus::COMPLETED) {

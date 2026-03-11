@@ -39,6 +39,7 @@
 #include <chrono>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <mutex>
 #include <regex>
 #include <sstream>
@@ -76,8 +77,12 @@ class GrpcTestLogCapture {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     client_logs_.clear();
-    server_log_start_pos_ = 0;
-    test_start_marked_    = false;
+
+    if (!server_log_path_.empty()) {
+      std::ifstream file(server_log_path_, std::ios::ate);
+      if (file.is_open()) { server_log_start_pos_ = file.tellg(); }
+    }
+    test_start_marked_ = true;
   }
 
   /**
@@ -370,7 +375,7 @@ class GrpcTestLogCapture {
   std::vector<LogEntry> client_logs_;
   std::string server_log_path_;
   std::streampos server_log_start_pos_ = 0;  // Position in server log file when test started
-  bool test_start_marked_              = false;
+  std::atomic<bool> test_start_marked_{false};
 };
 
 }  // namespace cuopt::linear_programming::testing

@@ -95,7 +95,32 @@ Repeat step 2 for each authorized client. Keep `ca.key` private;
 distribute only `ca.crt` (to the server) and the per-client
 `client.crt` + `client.key` pairs.
 
-**3. Start the server with your CA:**
+**3. Issue a server certificate (signed by the same CA):**
+
+```bash
+# Generate server key
+openssl genrsa -out server.key 2048
+
+# Create CSR with subjectAltName matching the hostname clients will use
+openssl req -new -key server.key \
+  -subj "/CN=server.example.com" -out server.csr
+
+# Write a SAN extension file (DNS and/or IP must match client's target)
+cat > server.ext <<EOF
+subjectAltName=DNS:server.example.com,DNS:localhost,IP:127.0.0.1
+EOF
+
+# Sign with your CA
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+  -CAcreateserial -days 365 -sha256 -extfile server.ext -out server.crt
+```
+
+> **Note:** `server.crt` must be signed by the same CA distributed to
+> clients, and its `subjectAltName` must match the hostname or IP that
+> clients connect to. gRPC (BoringSSL) requires SAN — `CN` alone is
+> not sufficient for hostname verification.
+
+**4. Start the server with your CA:**
 
 ```bash
 cuopt_grpc_server --port 8765 \
@@ -106,7 +131,7 @@ cuopt_grpc_server --port 8765 \
   --require-client-cert
 ```
 
-**4. Configure an authorized client:**
+**5. Configure an authorized client:**
 
 ```bash
 export CUOPT_REMOTE_HOST=server.example.com
@@ -194,9 +219,9 @@ With solver options:
 cuopt_cli model.mps --time-limit 30 --relaxation
 ```
 
-### C API
+### C++ API
 
-```c
+```cpp
 #include <cuopt/linear_programming/solve.hpp>
 #include <cuopt/linear_programming/cpu_optimization_problem.hpp>
 
@@ -212,11 +237,10 @@ gRPC server when they are set.
 
 | Symptom | Check |
 |---------|-------|
-| `CUOPT_REMOTE_HOST and/or CUOPT_REMOTE_PORT not set` | Both env vars must be set for remote execution. |
 | Connection refused | Verify the server is running and the host/port are correct. |
 | TLS handshake failure | Ensure `CUOPT_TLS_ENABLED=1` is set and certificate paths are correct. |
-| Timeout on large problems | Increase `CUOPT_CHUNK_SIZE` or `CUOPT_MAX_MESSAGE_BYTES`. |
 | `Cannot open TLS file: ...` | The path in the TLS env var does not exist or is not readable. |
+| Timeout on large problems | Increase the solver `time_limit` or the client `timeout_seconds`. |
 
 ## Further Reading
 

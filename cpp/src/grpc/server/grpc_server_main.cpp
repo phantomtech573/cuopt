@@ -40,44 +40,85 @@ void print_usage(const char* prog)
     << "      --tls-root PATH     Path to PEM root certs for client verification\n"
     << "      --require-client-cert  Require and verify client certs (mTLS)\n"
     << "      --log-to-console    Enable solver log output to console (default: off)\n"
+    << "  -v, --verbose           Increase verbosity (default: on)\n"
     << "  -q, --quiet             Reduce verbosity\n"
     << "  -h, --help              Show this help\n";
 }
 
 int main(int argc, char** argv)
 {
+  auto require_arg = [&](int i, const std::string& flag) -> bool {
+    if (i + 1 >= argc) {
+      std::cerr << "Error: " << flag << " requires a value\n";
+      print_usage(argv[0]);
+      return false;
+    }
+    return true;
+  };
+
   for (int i = 1; i < argc; i++) {
     std::string arg = argv[i];
     if (arg == "-p" || arg == "--port") {
-      if (i + 1 < argc) { config.port = std::stoi(argv[++i]); }
+      if (!require_arg(i, arg)) return 1;
+      config.port = std::stoi(argv[++i]);
     } else if (arg == "-w" || arg == "--workers") {
-      if (i + 1 < argc) { config.num_workers = std::stoi(argv[++i]); }
+      if (!require_arg(i, arg)) return 1;
+      config.num_workers = std::stoi(argv[++i]);
     } else if (arg == "--max-message-mb") {
-      if (i + 1 < argc) {
-        config.max_message_bytes = static_cast<int64_t>(std::stoi(argv[++i])) * kMiB;
-      }
+      if (!require_arg(i, arg)) return 1;
+      config.max_message_bytes = static_cast<int64_t>(std::stoi(argv[++i])) * kMiB;
     } else if (arg == "--max-message-bytes") {
-      if (i + 1 < argc) { config.max_message_bytes = std::max(4096LL, std::stoll(argv[++i])); }
+      if (!require_arg(i, arg)) return 1;
+      config.max_message_bytes = std::max(4096LL, std::stoll(argv[++i]));
+    } else if (arg == "--chunk-timeout") {
+      if (!require_arg(i, arg)) return 1;
+      config.chunk_timeout_seconds = std::max(0, std::stoi(argv[++i]));
     } else if (arg == "--enable-transfer-hash") {
       config.enable_transfer_hash = true;
     } else if (arg == "--tls") {
       config.enable_tls = true;
     } else if (arg == "--tls-cert") {
-      if (i + 1 < argc) { config.tls_cert_path = argv[++i]; }
+      if (!require_arg(i, arg)) return 1;
+      config.tls_cert_path = argv[++i];
     } else if (arg == "--tls-key") {
-      if (i + 1 < argc) { config.tls_key_path = argv[++i]; }
+      if (!require_arg(i, arg)) return 1;
+      config.tls_key_path = argv[++i];
     } else if (arg == "--tls-root") {
-      if (i + 1 < argc) { config.tls_root_path = argv[++i]; }
+      if (!require_arg(i, arg)) return 1;
+      config.tls_root_path = argv[++i];
     } else if (arg == "--require-client-cert") {
       config.require_client = true;
     } else if (arg == "--log-to-console") {
       config.log_to_console = true;
+    } else if (arg == "-v" || arg == "--verbose") {
+      config.verbose = true;
     } else if (arg == "-q" || arg == "--quiet") {
       config.verbose = false;
     } else if (arg == "-h" || arg == "--help") {
       print_usage(argv[0]);
       return 0;
+    } else {
+      std::cerr << "Unknown option: " << arg << "\n";
+      print_usage(argv[0]);
+      return 1;
     }
+  }
+
+  // Validate numeric ranges.
+  if (config.port < 1 || config.port > 65535) {
+    std::cerr << "Error: --port must be in range 1-65535\n";
+    print_usage(argv[0]);
+    return 1;
+  }
+  if (config.num_workers < 1) {
+    std::cerr << "Error: --workers must be >= 1\n";
+    print_usage(argv[0]);
+    return 1;
+  }
+  if (config.chunk_timeout_seconds < 0) {
+    std::cerr << "Error: --chunk-timeout must be >= 0\n";
+    print_usage(argv[0]);
+    return 1;
   }
 
   config.max_message_bytes =
@@ -156,6 +197,7 @@ int main(int argc, char** argv)
     std::cerr << "[Server] Failed to mmap control: " << strerror(errno) << "\n";
     return 1;
   }
+  new (shm_ctrl) SharedMemoryControl{};
 
   for (size_t i = 0; i < MAX_JOBS; ++i) {
     new (&job_queue[i]) JobQueueEntry{};
@@ -222,7 +264,14 @@ int main(int argc, char** argv)
     creds = grpc::InsecureServerCredentials();
   }
 
+  signal(SIGPIPE, SIG_IGN);
   spawn_workers();
+
+  if (worker_pids.empty()) {
+    std::cerr << "[Server] No workers started; exiting\n";
+    cleanup_shared_memory();
+    return 1;
+  }
 
   std::thread result_thread(result_retrieval_thread);
   std::thread incumbent_thread(incumbent_retrieval_thread);

@@ -163,6 +163,7 @@ struct ServerConfig {
   // Set via --max-message-mb (MiB) or --max-message-bytes (exact, min 4096).
   // Clamped at startup to [kServerMinMessageBytes, kServerMaxMessageBytes].
   int64_t max_message_bytes = 256LL * 1024 * 1024;  // 256 MiB
+  int chunk_timeout_seconds = 60;                   // 0 = disabled
   bool enable_transfer_hash = false;
   bool enable_tls           = false;
   bool require_client       = false;

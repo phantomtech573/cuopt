@@ -18,6 +18,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <stdexcept>
 
 namespace cuopt::linear_programming {
 
@@ -113,7 +114,9 @@ void map_problem_to_proto(const cpu_optimization_problem_t<i_t, f_t>& cpu_proble
       switch (vt) {
         case var_t::CONTINUOUS: var_types_str.push_back('C'); break;
         case var_t::INTEGER: var_types_str.push_back('I'); break;
-        default: var_types_str.push_back('C'); break;
+        default:
+          throw std::runtime_error("map_problem_to_proto: unknown var_t value " +
+                                   std::to_string(static_cast<int>(vt)));
       }
     }
     pb_problem->set_variable_types(var_types_str);
@@ -217,8 +220,10 @@ void map_proto_to_problem(const cuopt::remote::OptimizationProblem& pb_problem,
       switch (c) {
         case 'C': var_types.push_back(var_t::CONTINUOUS); break;
         case 'I':
-        case 'B': var_types.push_back(var_t::INTEGER); break;  // Binary treated as integer
-        default: var_types.push_back(var_t::CONTINUOUS); break;
+        case 'B': var_types.push_back(var_t::INTEGER); break;
+        default:
+          throw std::runtime_error(std::string("Unknown variable type character '") + c +
+                                   "' in variable_types string (expected 'C', 'I', or 'B')");
       }
     }
     cpu_problem.set_variable_types(var_types.data(), static_cast<i_t>(var_types.size()));
@@ -447,6 +452,7 @@ void map_chunked_arrays_to_problem(const cuopt::remote::ChunkedProblemHeader& he
       const char* nul = static_cast<const char*>(std::memchr(s, '\0', s_end - s));
       if (!nul) nul = s_end;
       names.emplace_back(s, nul);
+      if (nul == s_end) break;
       s = nul + 1;
     }
     return names;
@@ -510,12 +516,15 @@ void map_chunked_arrays_to_problem(const cuopt::remote::ChunkedProblemHeader& he
     bool has_ints = false;
     for (char c : var_types_str) {
       switch (c) {
+        case 'C': vtypes.push_back(var_t::CONTINUOUS); break;
         case 'I':
         case 'B':
           vtypes.push_back(var_t::INTEGER);
           has_ints = true;
           break;
-        default: vtypes.push_back(var_t::CONTINUOUS); break;
+        default:
+          throw std::runtime_error(std::string("Unknown variable type character '") + c +
+                                   "' in chunked variable_types (expected 'C', 'I', or 'B')");
       }
     }
     cpu_problem.set_variable_types(vtypes.data(), static_cast<i_t>(vtypes.size()));
@@ -641,7 +650,9 @@ std::vector<cuopt::remote::SendArrayChunkRequest> build_array_chunk_requests(
       switch (vt) {
         case var_t::CONTINUOUS: vt_bytes.push_back('C'); break;
         case var_t::INTEGER: vt_bytes.push_back('I'); break;
-        default: vt_bytes.push_back('C'); break;
+        default:
+          throw std::runtime_error("chunk_problem_to_proto: unknown var_t value " +
+                                   std::to_string(static_cast<int>(vt)));
       }
     }
     chunk_byte_blob(

@@ -147,6 +147,7 @@ void spawn_workers()
 void wait_for_workers()
 {
   for (pid_t pid : worker_pids) {
+    if (pid <= 0) continue;
     int status;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
   }

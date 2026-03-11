@@ -13,6 +13,7 @@ TestSolutionInterfacePolymorphism:
     solution values against known optima.
 """
 
+import logging
 import os
 import shutil
 import signal
@@ -26,8 +27,10 @@ import pytest
 from cuopt import linear_programming
 from cuopt.linear_programming.solver.solver_parameters import CUOPT_TIME_LIMIT
 
+logger = logging.getLogger(__name__)
+
 RAPIDS_DATASET_ROOT_DIR = os.environ.get(
-    "RAPIDS_DATASET_ROOT_DIR", "/home/datasets/cuopt"
+    "RAPIDS_DATASET_ROOT_DIR", "./datasets"
 )
 
 
@@ -57,7 +60,7 @@ def _find_grpc_server():
     conda_prefix = os.environ.get("CONDA_PREFIX", "")
     if conda_prefix:
         p = os.path.join(conda_prefix, "bin", "cuopt_grpc_server")
-        if os.path.isfile(p):
+        if os.path.isfile(p) and os.access(p, os.X_OK):
             return p
     return None
 
@@ -77,6 +80,8 @@ def _wait_for_port(port, timeout=15):
 def _cpu_only_env(port):
     """Return an env dict that hides all GPUs and enables remote mode."""
     env = os.environ.copy()
+    for key in [k for k in env if k.startswith("CUOPT_TLS_")]:
+        env.pop(key)
     env["CUDA_VISIBLE_DEVICES"] = ""
     env["CUOPT_REMOTE_HOST"] = "localhost"
     env["CUOPT_REMOTE_PORT"] = str(port)
@@ -92,32 +97,81 @@ def _generate_test_certs(cert_dir):
         return False
 
     def _run(cmd):
-        return (
-            subprocess.run(
-                cmd, shell=True, capture_output=True, timeout=30
-            ).returncode
-            == 0
-        )
+        result = subprocess.run(cmd, capture_output=True, timeout=30)
+        if result.returncode != 0:
+            logger.warning(
+                "cert command failed: %s (rc=%d)\nstdout: %s\nstderr: %s",
+                cmd,
+                result.returncode,
+                result.stdout.decode(errors="replace"),
+                result.stderr.decode(errors="replace"),
+            )
+            return False
+        return True
 
     ca_key = os.path.join(cert_dir, "ca.key")
     ca_crt = os.path.join(cert_dir, "ca.crt")
     if not _run(
-        f"openssl req -x509 -newkey rsa:2048 -keyout {ca_key} -out {ca_crt} "
-        f"-days 1 -nodes -subj '/CN=TestCA' 2>/dev/null"
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            ca_key,
+            "-out",
+            ca_crt,
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=TestCA",
+        ]
     ):
         return False
 
     server_key = os.path.join(cert_dir, "server.key")
     server_csr = os.path.join(cert_dir, "server.csr")
     server_crt = os.path.join(cert_dir, "server.crt")
+    server_ext = os.path.join(cert_dir, "server.ext")
     if not _run(
-        f"openssl req -newkey rsa:2048 -keyout {server_key} -out {server_csr} "
-        f"-nodes -subj '/CN=localhost' 2>/dev/null"
+        [
+            "openssl",
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            server_key,
+            "-out",
+            server_csr,
+            "-nodes",
+            "-subj",
+            "/CN=localhost",
+        ]
     ):
         return False
+    with open(server_ext, "w") as f:
+        f.write("subjectAltName=DNS:localhost,IP:127.0.0.1\n")
     if not _run(
-        f"openssl x509 -req -in {server_csr} -CA {ca_crt} -CAkey {ca_key} "
-        f"-CAcreateserial -out {server_crt} -days 1 2>/dev/null"
+        [
+            "openssl",
+            "x509",
+            "-req",
+            "-in",
+            server_csr,
+            "-CA",
+            ca_crt,
+            "-CAkey",
+            ca_key,
+            "-CAcreateserial",
+            "-out",
+            server_crt,
+            "-days",
+            "1",
+            "-extfile",
+            server_ext,
+        ]
     ):
         return False
 
@@ -125,13 +179,38 @@ def _generate_test_certs(cert_dir):
     client_csr = os.path.join(cert_dir, "client.csr")
     client_crt = os.path.join(cert_dir, "client.crt")
     if not _run(
-        f"openssl req -newkey rsa:2048 -keyout {client_key} -out {client_csr} "
-        f"-nodes -subj '/CN=TestClient' 2>/dev/null"
+        [
+            "openssl",
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            client_key,
+            "-out",
+            client_csr,
+            "-nodes",
+            "-subj",
+            "/CN=TestClient",
+        ]
     ):
         return False
     if not _run(
-        f"openssl x509 -req -in {client_csr} -CA {ca_crt} -CAkey {ca_key} "
-        f"-CAcreateserial -out {client_crt} -days 1 2>/dev/null"
+        [
+            "openssl",
+            "x509",
+            "-req",
+            "-in",
+            client_csr,
+            "-CA",
+            ca_crt,
+            "-CAkey",
+            ca_key,
+            "-CAcreateserial",
+            "-out",
+            client_crt,
+            "-days",
+            "1",
+        ]
     ):
         return False
 
@@ -197,6 +276,13 @@ def _impl_lp_solve_cpu_only():
     obj = solution.get_primal_objective()
     assert obj is not None, "objective is None"
 
+    _AFIRO_OBJ = -464.7531428571
+    rel_err = abs(obj - _AFIRO_OBJ) / max(abs(_AFIRO_OBJ), 1e-12)
+    assert rel_err < 0.01, (
+        f"objective {obj} differs from expected {_AFIRO_OBJ} "
+        f"(rel error {rel_err:.4e})"
+    )
+
 
 def _impl_lp_dual_solution_cpu_only():
     """Dual solution and reduced costs are correctly sized."""
@@ -219,6 +305,14 @@ def _impl_lp_dual_solution_cpu_only():
     rc = solution.get_reduced_cost()
     assert len(rc) == n_vars, f"reduced_cost size {len(rc)} != n_vars {n_vars}"
 
+    obj = solution.get_primal_objective()
+    _AFIRO_OBJ = -464.7531428571
+    rel_err = abs(obj - _AFIRO_OBJ) / max(abs(_AFIRO_OBJ), 1e-12)
+    assert rel_err < 0.01, (
+        f"dual test: objective {obj} differs from expected {_AFIRO_OBJ} "
+        f"(rel error {rel_err:.4e})"
+    )
+
 
 def _impl_mip_solve_cpu_only():
     """MIP solve returns correctly-sized solution vector."""
@@ -239,6 +333,18 @@ def _impl_mip_solve_cpu_only():
     solution = linear_programming.Solve(dm, settings)
     vals = solution.get_primal_solution()
     assert len(vals) == n_vars, f"solution size {len(vals)} != n_vars {n_vars}"
+
+    obj_coeffs = dm.get_objective_coefficients()
+    computed_obj = sum(c * v for c, v in zip(obj_coeffs, vals))
+    reported_obj = solution.get_primal_objective()
+    if abs(reported_obj) > 1e-12:
+        rel_err = abs(computed_obj - reported_obj) / abs(reported_obj)
+    else:
+        rel_err = abs(computed_obj - reported_obj)
+    assert rel_err < 0.01, (
+        f"MIP objective mismatch: computed {computed_obj} vs reported "
+        f"{reported_obj} (rel error {rel_err:.4e})"
+    )
 
 
 def _impl_warmstart_cpu_only():
@@ -272,6 +378,41 @@ def _impl_warmstart_cpu_only():
 
 
 # ---------------------------------------------------------------------------
+# Shared fixture helpers (used by TestCPUOnlyExecution and TestCuoptCliCPUOnly)
+# ---------------------------------------------------------------------------
+
+
+def _start_grpc_server_fixture(port_offset):
+    """Locate the server, start it on BASE + port_offset, return (proc, env)."""
+    server_bin = _find_grpc_server()
+    if server_bin is None:
+        pytest.skip("cuopt_grpc_server not found")
+
+    port = int(os.environ.get("CUOPT_TEST_PORT_BASE", "18000")) + port_offset
+    proc = subprocess.Popen(
+        [server_bin, "--port", str(port), "--workers", "1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if not _wait_for_port(port, timeout=15):
+        proc.kill()
+        proc.wait()
+        pytest.fail("cuopt_grpc_server failed to start within 15s")
+
+    return proc, _cpu_only_env(port)
+
+
+def _stop_grpc_server(proc):
+    """Gracefully shut down a server process."""
+    proc.send_signal(signal.SIGTERM)
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+# ---------------------------------------------------------------------------
 # CPU-only Python tests  (subprocess required)
 # ---------------------------------------------------------------------------
 
@@ -284,30 +425,9 @@ class TestCPUOnlyExecution:
 
     @pytest.fixture(scope="class")
     def cpu_only_env_with_server(self):
-        server_bin = _find_grpc_server()
-        if server_bin is None:
-            pytest.skip("cuopt_grpc_server not found")
-
-        port = int(os.environ.get("CUOPT_TEST_PORT_BASE", "18000")) + 600
-        proc = subprocess.Popen(
-            [server_bin, "--port", str(port), "--workers", "1"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if not _wait_for_port(port, timeout=15):
-            proc.kill()
-            proc.wait()
-            pytest.fail("cuopt_grpc_server failed to start within 15s")
-
-        env = _cpu_only_env(port)
+        proc, env = _start_grpc_server_fixture(port_offset=600)
         yield env
-
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+        _stop_grpc_server(proc)
 
     def test_lp_solve_cpu_only(self, cpu_only_env_with_server):
         """LP solve returns correctly-sized solution vectors."""
@@ -351,30 +471,9 @@ class TestCuoptCliCPUOnly:
 
     @pytest.fixture(scope="class")
     def cpu_only_env_with_server(self):
-        server_bin = _find_grpc_server()
-        if server_bin is None:
-            pytest.skip("cuopt_grpc_server not found")
-
-        port = int(os.environ.get("CUOPT_TEST_PORT_BASE", "18000")) + 700
-        proc = subprocess.Popen(
-            [server_bin, "--port", str(port), "--workers", "1"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if not _wait_for_port(port, timeout=15):
-            proc.kill()
-            proc.wait()
-            pytest.fail("cuopt_grpc_server failed to start within 15s")
-
-        env = _cpu_only_env(port)
+        proc, env = _start_grpc_server_fixture(port_offset=700)
         yield env
-
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+        _stop_grpc_server(proc)
 
     @staticmethod
     def _find_cuopt_cli():
@@ -390,7 +489,7 @@ class TestCuoptCliCPUOnly:
         conda_prefix = os.environ.get("CONDA_PREFIX", "")
         if conda_prefix:
             p = os.path.join(conda_prefix, "bin", "cuopt_cli")
-            if os.path.isfile(p):
+            if os.path.isfile(p) and os.access(p, os.X_OK):
                 return p
         return None
 
@@ -550,12 +649,7 @@ class TestTLSExecution:
         env = _tls_env(port, cert_dir, mtls=False)
         yield env
 
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+        _stop_grpc_server(proc)
 
     def test_lp_solve_tls(self, tls_env_with_server):
         """LP solve succeeds over a TLS channel."""
@@ -654,4 +748,18 @@ class TestMTLSExecution:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    globals()[sys.argv[1]]()
+    _ALLOWED_ENTRIES = {
+        "_impl_lp_solve_cpu_only": _impl_lp_solve_cpu_only,
+        "_impl_lp_dual_solution_cpu_only": _impl_lp_dual_solution_cpu_only,
+        "_impl_mip_solve_cpu_only": _impl_mip_solve_cpu_only,
+        "_impl_warmstart_cpu_only": _impl_warmstart_cpu_only,
+    }
+    name = sys.argv[1] if len(sys.argv) > 1 else ""
+    if name not in _ALLOWED_ENTRIES:
+        print(f"Unknown entry point: {name!r}", file=sys.stderr)
+        print(
+            f"Available: {', '.join(sorted(_ALLOWED_ENTRIES))}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    _ALLOWED_ENTRIES[name]()

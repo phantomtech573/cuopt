@@ -205,6 +205,18 @@ void grpc_client_t::start_log_streaming(const std::string& job_id)
 {
   if (!config_.stream_logs || !config_.log_callback) return;
 
+  if (log_thread_ && log_thread_->joinable()) {
+    stop_logs_.store(true);
+    {
+      std::lock_guard<std::mutex> lk(log_context_mutex_);
+      if (active_log_context_) {
+        static_cast<grpc::ClientContext*>(active_log_context_)->TryCancel();
+      }
+    }
+    log_thread_->join();
+    log_thread_.reset();
+  }
+
   stop_logs_.store(false);
   log_thread_ = std::make_unique<std::thread>([this, job_id]() {
     stream_logs(job_id, 0, [this](const std::string& line, bool /*job_complete*/) {
@@ -217,28 +229,20 @@ void grpc_client_t::start_log_streaming(const std::string& job_id)
 
 void grpc_client_t::stop_log_streaming()
 {
-  constexpr auto kLogJoinTimeout = std::chrono::seconds(5);
-
   stop_logs_.store(true);
-  // Cancel the in-flight streaming RPC from this thread.  reader->Read()
-  // blocks until the server sends a message, so the stop_logs_ flag alone
-  // is not enough — TryCancel makes Read() return false immediately.
+  // Cancel the in-flight streaming RPC so reader->Read() returns false
+  // immediately instead of blocking until the server sends a message.
   {
     std::lock_guard<std::mutex> lk(log_context_mutex_);
     if (active_log_context_) {
       static_cast<grpc::ClientContext*>(active_log_context_)->TryCancel();
     }
   }
-  if (log_thread_ && log_thread_->joinable()) {
-    auto future = std::async(std::launch::async, [this]() { log_thread_->join(); });
-    if (future.wait_for(kLogJoinTimeout) == std::future_status::timeout) {
-      GRPC_CLIENT_DEBUG_LOG(config_,
-                            "[grpc_client] WARNING: log streaming thread did not exit within "
-                              << kLogJoinTimeout.count() << "s; detaching");
-      log_thread_->detach();
-    }
-  }
-  log_thread_.reset();
+  // Move to local so we can join without racing against other callers.
+  // TryCancel above guarantees the thread will unblock promptly.
+  std::unique_ptr<std::thread> t;
+  std::swap(t, log_thread_);
+  if (t && t->joinable()) { t->join(); }
 }
 
 // =============================================================================
@@ -287,7 +291,7 @@ job_status_result_t grpc_client_t::check_status(const std::string& job_id)
 
   // Track server max message size
   if (response.max_message_bytes() > 0) {
-    server_max_message_bytes_ = response.max_message_bytes();
+    server_max_message_bytes_.store(response.max_message_bytes(), std::memory_order_relaxed);
   }
 
   result.status = map_proto_job_status(response.job_status());
@@ -679,8 +683,15 @@ grpc_client_t::poll_result_t grpc_client_t::poll_for_completion(const std::strin
   int poll_ms    = std::max(config_.poll_interval_ms, 1);
   // timeout_seconds <= 0 means "wait indefinitely" — the solver's own
   // time_limit (passed via settings) is the authoritative bound.
-  int max_polls = (config_.timeout_seconds > 0) ? (config_.timeout_seconds * 1000) / poll_ms
-                                                : std::numeric_limits<int>::max();
+  int max_polls;
+  if (config_.timeout_seconds > 0) {
+    int64_t total_ms = static_cast<int64_t>(config_.timeout_seconds) * 1000;
+    int64_t computed = total_ms / poll_ms;
+    max_polls =
+      static_cast<int>(std::min(computed, static_cast<int64_t>(std::numeric_limits<int>::max())));
+  } else {
+    max_polls = std::numeric_limits<int>::max();
+  }
 
   int64_t incumbent_next_index = 0;
   auto last_incumbent_poll     = std::chrono::steady_clock::now();
@@ -840,7 +851,7 @@ bool grpc_client_t::upload_chunked_arrays(const cpu_optimization_problem_t<i_t, 
 
     upload_id = response.upload_id();
     if (response.max_message_bytes() > 0) {
-      server_max_message_bytes_ = response.max_message_bytes();
+      server_max_message_bytes_.store(response.max_message_bytes(), std::memory_order_relaxed);
     }
   }
 
@@ -849,9 +860,8 @@ bool grpc_client_t::upload_chunked_arrays(const cpu_optimization_problem_t<i_t, 
   // --- 2. Build chunk requests directly from problem arrays ---
   int64_t chunk_data_budget = config_.chunk_size_bytes;
   if (chunk_data_budget <= 0) { chunk_data_budget = 1LL * 1024 * 1024; }
-  if (server_max_message_bytes_ > 0 && chunk_data_budget > server_max_message_bytes_ * 9 / 10) {
-    chunk_data_budget = server_max_message_bytes_ * 9 / 10;
-  }
+  int64_t srv_max = server_max_message_bytes_.load(std::memory_order_relaxed);
+  if (srv_max > 0 && chunk_data_budget > srv_max * 9 / 10) { chunk_data_budget = srv_max * 9 / 10; }
 
   auto chunk_requests = build_array_chunk_requests(problem, upload_id, chunk_data_budget);
 
@@ -923,21 +933,19 @@ bool grpc_client_t::get_result_or_download(const std::string& job_id,
     if (status.ok()) {
       result_size_hint = response.result_size_bytes();
       if (response.max_message_bytes() > 0) {
-        server_max_message_bytes_ = response.max_message_bytes();
+        server_max_message_bytes_.store(response.max_message_bytes(), std::memory_order_relaxed);
       }
     }
   }
 
+  int64_t srv_max_msg   = server_max_message_bytes_.load(std::memory_order_relaxed);
   int64_t effective_max = config_.max_message_bytes;
-  if (server_max_message_bytes_ > 0 && server_max_message_bytes_ < effective_max) {
-    effective_max = server_max_message_bytes_;
-  }
+  if (srv_max_msg > 0 && srv_max_msg < effective_max) { effective_max = srv_max_msg; }
 
   GRPC_CLIENT_DEBUG_LOG(config_,
                         "[grpc_client] get_result_or_download: result_size_hint="
                           << result_size_hint << " bytes, client_max=" << config_.max_message_bytes
-                          << ", server_max=" << server_max_message_bytes_
-                          << ", effective_max=" << effective_max);
+                          << ", server_max=" << srv_max_msg << ", effective_max=" << effective_max);
 
   if (result_size_hint > 0 && effective_max > 0 && result_size_hint > effective_max) {
     GRPC_CLIENT_DEBUG_LOG(config_,
@@ -1016,7 +1024,7 @@ bool grpc_client_t::download_chunked_result(const std::string& job_id,
     download_id = response.download_id();
     *header     = response.header();
     if (response.max_message_bytes() > 0) {
-      server_max_message_bytes_ = response.max_message_bytes();
+      server_max_message_bytes_.store(response.max_message_bytes(), std::memory_order_relaxed);
     }
   }
 
@@ -1028,8 +1036,9 @@ bool grpc_client_t::download_chunked_result(const std::string& job_id,
   // --- 2. Fetch each array via GetResultChunk RPCs ---
   int64_t chunk_data_budget = config_.chunk_size_bytes;
   if (chunk_data_budget <= 0) { chunk_data_budget = 1LL * 1024 * 1024; }
-  if (server_max_message_bytes_ > 0 && chunk_data_budget > server_max_message_bytes_ * 9 / 10) {
-    chunk_data_budget = server_max_message_bytes_ * 9 / 10;
+  int64_t dl_srv_max = server_max_message_bytes_.load(std::memory_order_relaxed);
+  if (dl_srv_max > 0 && chunk_data_budget > dl_srv_max * 9 / 10) {
+    chunk_data_budget = dl_srv_max * 9 / 10;
   }
 
   int total_chunks             = 0;
@@ -1082,6 +1091,11 @@ bool grpc_client_t::download_chunked_result(const std::string& job_id,
       int64_t elems_received = chunk_resp.elements_in_chunk();
       const auto& data       = chunk_resp.data();
 
+      if (elems_received < 0 || elems_received > elems_wanted ||
+          elems_received > total_elems - elem_offset) {
+        last_error_ = "GetResultChunk: invalid element count";
+        return false;
+      }
       if (static_cast<int64_t>(data.size()) != elems_received * elem_size) {
         last_error_ = "GetResultChunk: data size mismatch";
         return false;

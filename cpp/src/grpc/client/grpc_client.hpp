@@ -399,8 +399,9 @@ class grpc_client_t {
   grpc_client_config_t config_;
   std::string last_error_;
 
-  // Track server-reported max message size (may differ from our config)
-  int64_t server_max_message_bytes_ = 0;
+  // Track server-reported max message size (may differ from our config).
+  // Accessed from multiple RPC methods; atomic to avoid data races.
+  std::atomic<int64_t> server_max_message_bytes_{0};
 
   // 75% of max_message_bytes — computed at construction time.
   int64_t chunked_array_threshold_bytes_ = 0;
