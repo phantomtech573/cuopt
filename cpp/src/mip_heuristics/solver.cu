@@ -46,7 +46,7 @@ template <typename i_t, typename f_t>
 mip_solver_t<i_t, f_t>::mip_solver_t(const problem_t<i_t, f_t>& op_problem,
                                      const mip_solver_settings_t<i_t, f_t>& solver_settings,
                                      pdlp_initial_scaling_strategy_t<i_t, f_t>& scaling,
-                                     timer_t timer)
+                                     cuopt::termination_checker_t& timer)
   : op_problem_(op_problem),
     solver_settings_(solver_settings),
     context(op_problem.handle_ptr,
@@ -55,6 +55,7 @@ mip_solver_t<i_t, f_t>::mip_solver_t(const problem_t<i_t, f_t>& op_problem,
             scaling),
     timer_(timer)
 {
+  context.termination = &timer_;
   init_handler(op_problem.handle_ptr);
 }
 
@@ -151,7 +152,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   if (deterministic_run)
     cuopt_assert(gpu_heur_work_limit >= 0.0,
                  "Deterministic GPU heuristic work limit must be non-negative");
-  dm.timer                = work_limit_timer_t(context.gpu_heur_loop, gpu_heur_work_limit);
+  dm.timer = cuopt::termination_checker_t(context.gpu_heur_loop, gpu_heur_work_limit, timer_);
   const bool run_presolve = context.settings.presolver != presolver_t::None;
   f_t time_limit =
     deterministic_run ? std::numeric_limits<f_t>::infinity() : timer_.remaining_time();
@@ -276,6 +277,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     branch_and_bound_settings.cut_min_orthogonality = context.settings.cut_min_orthogonality;
     branch_and_bound_settings.mip_batch_pdlp_strong_branching =
       context.settings.mip_batch_pdlp_strong_branching;
+    branch_and_bound_settings.bnb_work_unit_scale = solver_settings_.bnb_work_unit_scale;
 
     if (context.settings.num_cpu_threads < 0) {
       branch_and_bound_settings.num_threads = std::max(1, omp_get_max_threads() - 1);

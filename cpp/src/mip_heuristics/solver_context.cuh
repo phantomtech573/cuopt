@@ -219,6 +219,10 @@ struct mip_solver_context_t {
   work_limit_context_t gpu_heur_loop{"GPUHeur"};
   solution_publication_t<i_t, f_t> solution_publication;
 
+  // Root termination checker — set by mip_solver_t after construction.
+  // All sub-timers should use this as parent for wall-clock safety.
+  cuopt::termination_checker_t* termination{nullptr};
+
   // synchronization every 5 seconds for deterministic mode
   work_unit_scheduler_t work_unit_scheduler_{5.0};
 };

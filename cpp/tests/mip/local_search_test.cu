@@ -110,7 +110,7 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
   auto settings             = mip_solver_settings_t<int, double>{};
   settings.time_limit       = 30.;
   settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
-  auto timer                = cuopt::timer_t(30);
+  auto timer = cuopt::termination_checker_t(30.0, cuopt::termination_checker_t::root_tag_t{});
   detail::mip_solver_t<int, double> solver(problem, settings, scaling, timer);
   problem.tolerances = settings.get_tolerances();
 
@@ -148,7 +148,7 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
   printf("running mode: %d\n", mode);
 
   work_limit_context_t work_limit_context("LocalSearch");
-  local_search.fp.timer = work_limit_timer_t(work_limit_context, 6000);
+  local_search.fp.timer = work_limit_timer_t(work_limit_context, 6000, timer);
 
   detail::ls_config_t<int, double> ls_config{};
 
@@ -158,12 +158,9 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
     while (true) {
       is_feasible = local_search.fp.run_single_fp_descent(solution);
       printf("fp_loop it %d, is_feasible %d\n", iterations, is_feasible);
-      // if feasible return true
       if (is_feasible) {
         break;
-      }
-      // if not feasible, it means it is a cycle
-      else {
+      } else {
         is_feasible = local_search.fp.restart_fp(solution);
         if (is_feasible) { break; }
       }
@@ -171,12 +168,12 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
     }
   } else if (mode == local_search_mode_t::FJ_LINE_SEGMENT) {
     local_search.run_fj_line_segment(
-      solution, work_limit_timer_t(work_limit_context, 6000), ls_config);
+      solution, work_limit_timer_t(work_limit_context, 6000, timer), ls_config);
   } else if (mode == local_search_mode_t::FJ_ON_ZERO) {
-    local_search.run_fj_on_zero(solution, work_limit_timer_t(work_limit_context, 6000));
+    local_search.run_fj_on_zero(solution, work_limit_timer_t(work_limit_context, 6000, timer));
   } else if (mode == local_search_mode_t::FJ_ANNEALING) {
     local_search.run_fj_annealing(
-      solution, work_limit_timer_t(work_limit_context, 6000), ls_config);
+      solution, work_limit_timer_t(work_limit_context, 6000, timer), ls_config);
   }
 
   std::vector<uint32_t> hashes;

@@ -188,6 +188,7 @@ struct simplex_solver_settings_t {
   f_t cut_min_orthogonality;       // minimum orthogonality for cuts
   i_t mip_batch_pdlp_strong_branching{0};  // 0 if not using batch PDLP for strong branching, 1 if
                                            // using batch PDLP for strong branching
+  f_t bnb_work_unit_scale{1.0};
 
   diving_heuristics_settings_t<i_t, f_t> diving_settings;  // Settings for the diving heuristics
 

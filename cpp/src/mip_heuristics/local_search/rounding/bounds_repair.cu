@@ -117,7 +117,8 @@ bounds_repair_t<i_t, f_t>::bounds_repair_t(const problem_t<i_t, f_t>& pb,
     violated_cstr_map(0, pb.handle_ptr->get_stream()),
     total_vio(pb.handle_ptr->get_stream()),
     gen(cuopt::seed_generator::get_seed()),
-    cycle_vector(MAX_CYCLE_SEQUENCE, -1)
+    cycle_vector(MAX_CYCLE_SEQUENCE, -1),
+    timer(0.0, cuopt::termination_checker_t::root_tag_t{})
 {
 }
 

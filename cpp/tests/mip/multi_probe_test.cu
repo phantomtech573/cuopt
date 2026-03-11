@@ -161,7 +161,8 @@ uint32_t test_multi_probe(std::string path, unsigned long seed = std::random_dev
                                                                nullptr,
                                                                hyper_params,
                                                                true);
-  detail::mip_solver_t<int, double> solver(problem, default_settings, scaling, timer_t(0));
+  auto timer = cuopt::termination_checker_t(0.0, cuopt::termination_checker_t::root_tag_t{});
+  detail::mip_solver_t<int, double> solver(problem, default_settings, scaling, timer);
   detail::bound_presolve_t<int, double> bnd_prb_0(solver.context);
   detail::bound_presolve_t<int, double> bnd_prb_1(solver.context);
   detail::multi_probe_t<int, double> multi_probe_prs(solver.context);

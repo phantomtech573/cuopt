@@ -225,7 +225,7 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
   if (time_limit == 0.) return solution.get_feasible();
   const bool deterministic = is_deterministic_mode(context.settings.determinism_mode);
 
-  work_limit_timer_t timer(context.gpu_heur_loop, time_limit);
+  work_limit_timer_t timer(context.gpu_heur_loop, time_limit, *context.termination);
   const auto old_n_cstr_weights      = in_fj.cstr_weights.size();
   const auto expected_n_cstr_weights = static_cast<size_t>(solution.problem_ptr->n_constraints);
   // in case this is the first time run, resize
@@ -349,8 +349,8 @@ void local_search_t<i_t, f_t>::generate_fast_solution(solution_t<i_t, f_t>& solu
   while ((context.diversity_manager_ptr == nullptr ||
           !context.diversity_manager_ptr->check_b_b_preemption()) &&
          !timer.check_time_limit()) {
-    work_limit_timer_t constr_prop_timer =
-      work_limit_timer_t(context.gpu_heur_loop, std::min(timer.remaining_time(), 2.));
+    work_limit_timer_t constr_prop_timer = work_limit_timer_t(
+      context.gpu_heur_loop, std::min(timer.remaining_time(), 2.), *context.termination);
     // do constraint prop on lp optimal solution
     constraint_prop.apply_round(solution, 1., constr_prop_timer);
     if (solution.compute_feasibility()) { return; }
@@ -377,11 +377,10 @@ bool local_search_t<i_t, f_t>::run_local_search(solution_t<i_t, f_t>& solution,
   if (!solution.get_feasible()) {
     if (ls_config.at_least_one_parent_feasible) {
       fj_settings.time_limit = 0.5;
-      timer                  = work_limit_timer_t(context.gpu_heur_loop, fj_settings.time_limit);
     } else {
       fj_settings.time_limit = 0.25;
-      timer                  = work_limit_timer_t(context.gpu_heur_loop, fj_settings.time_limit);
     }
+    timer = work_limit_timer_t(context.gpu_heur_loop, fj_settings.time_limit, *context.termination);
   } else {
     fj_settings.time_limit = std::min(1., timer.remaining_time());
   }
@@ -499,9 +498,9 @@ bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solu
     solution.assign_random_within_bounds(perturbation_ratio);
   }
   cuopt_func_call(solution.test_variable_bounds(false));
-  f_t lp_run_time_after_feasible = std::min(1., timer.remaining_time());
-  work_limit_timer_t bounds_prop_timer =
-    work_limit_timer_t(context.gpu_heur_loop, std::min(timer.remaining_time(), 10.));
+  f_t lp_run_time_after_feasible       = std::min(1., timer.remaining_time());
+  work_limit_timer_t bounds_prop_timer = work_limit_timer_t(
+    context.gpu_heur_loop, std::min(timer.remaining_time(), 10.), *context.termination);
   bool is_feasible =
     constraint_prop.apply_round(solution, lp_run_time_after_feasible, bounds_prop_timer);
   if (!is_feasible) {
@@ -578,7 +577,8 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
       }
       CUOPT_LOG_DEBUG("Running staged FP from beginning it %d", i);
       fp.relax_general_integers(solution);
-      work_limit_timer_t binary_timer(context.gpu_heur_loop, timer.remaining_time() / 3);
+      work_limit_timer_t binary_timer(
+        context.gpu_heur_loop, timer.remaining_time() / 3, *context.termination);
       i_t binary_it_counter = 0;
       for (; binary_it_counter < 100; ++binary_it_counter) {
         population_ptr->add_external_solutions_to_population();
@@ -756,7 +756,8 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
     is_feasible ? solution.get_objective() : std::numeric_limits<double>::max();
   rmm::device_uvector<f_t> best_solution(solution.assignment, solution.handle_ptr->get_stream());
   problem_t<i_t, f_t>* old_problem_ptr = solution.problem_ptr;
-  fp.timer = work_limit_timer_t(context.gpu_heur_loop, timer.remaining_time());
+  fp.timer =
+    work_limit_timer_t(context.gpu_heur_loop, timer.remaining_time(), *context.termination);
   // if it has not been initialized yet, create a new problem and move it to the cut problem
   if (!problem_with_objective_cut.cutting_plane_added) {
     problem_with_objective_cut = std::move(problem_t<i_t, f_t>(*old_problem_ptr));
@@ -857,7 +858,7 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
 {
   raft::common::nvtx::range fun_scope("generate_solution");
   cuopt_assert(population_ptr != nullptr, "Population pointer must not be null");
-  work_limit_timer_t timer(context.gpu_heur_loop, time_limit);
+  work_limit_timer_t timer(context.gpu_heur_loop, time_limit, *context.termination);
   auto n_vars         = solution.problem_ptr->n_variables;
   auto n_binary_vars  = solution.problem_ptr->get_n_binary_variables();
   auto n_integer_vars = solution.problem_ptr->n_integer_vars;

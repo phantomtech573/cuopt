@@ -104,6 +104,9 @@ class mip_solver_settings_t {
   f_t cpufj_work_unit_scale = 1.0;
   // Scales deterministic GPU heuristic producer work units/timestamps exposed to B&B replay/sync.
   f_t gpu_heur_work_unit_scale = 1.0;
+  // Scales deterministic B&B work units (LP iterations) exposed to the shared deterministic
+  // timeline.
+  f_t bnb_work_unit_scale = 1.0;
 
   std::string log_file;
   std::string sol_file;

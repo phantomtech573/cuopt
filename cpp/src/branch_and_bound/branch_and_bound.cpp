@@ -2296,6 +2296,9 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   work_unit_scheduler_t* saved_scheduler = work_unit_context_.scheduler;
   if (settings_.deterministic) {
     work_unit_context_.deterministic = true;
+    cuopt_assert(settings_.bnb_work_unit_scale > 0.0, "B&B work-unit scale must be positive");
+    // TODO: support bnb work unit scale...
+
     // Detach the scheduler during the serial root/cuts/SB phase.
     // record_work_sync_on_horizon still accumulates global_work_units_elapsed,
     // but avoids scheduler->on_work_recorded whose OMP directives

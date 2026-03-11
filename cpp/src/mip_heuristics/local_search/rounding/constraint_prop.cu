@@ -41,7 +41,8 @@ constraint_prop_t<i_t, f_t>::constraint_prop_t(mip_solver_context_t<i_t, f_t>& c
     ub_restore(context.problem_ptr->n_variables, context.problem_ptr->handle_ptr->get_stream()),
     assignment_restore(context.problem_ptr->n_variables,
                        context.problem_ptr->handle_ptr->get_stream()),
-    rng(cuopt::seed_generator::get_seed(), 0, 0)
+    rng(cuopt::seed_generator::get_seed(), 0, 0),
+    max_timer(0.0, cuopt::termination_checker_t::root_tag_t{})
 {
 }
 
@@ -1006,7 +1007,8 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
     if (!(n_failed_repair_iterations >= max_n_failed_repair_iterations) && rounding_ii &&
         !timeout_happened) {
       // timer_t repair_timer{std::min(timer.remaining_time() / 5, timer.elapsed_time() / 3)};
-      work_limit_timer_t repair_timer(context.gpu_heur_loop, timer.remaining_time() / 5);
+      work_limit_timer_t repair_timer(
+        context.gpu_heur_loop, timer.remaining_time() / 5, *context.termination);
       save_bounds(sol);
       auto remaining_unset = make_span(unset_integer_vars, set_count, unset_integer_vars.size());
       const auto orig_pb_fingerprint = orig_sol.problem_ptr->get_fingerprint();
@@ -1212,7 +1214,8 @@ bool constraint_prop_t<i_t, f_t>::apply_round(
   //                lp_run_time_after_feasible);
   // === CONSTRAINT PROP PREDICTOR FEATURES - END ===
 
-  max_timer = work_limit_timer_t{context.gpu_heur_loop, max_time_for_bounds_prop};
+  max_timer =
+    work_limit_timer_t{context.gpu_heur_loop, max_time_for_bounds_prop, *context.termination};
   if (check_brute_force_rounding(sol)) {
     auto cp_end_time = std::chrono::high_resolution_clock::now();
     auto cp_elapsed_ms =

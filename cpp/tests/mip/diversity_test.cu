@@ -105,13 +105,14 @@ static uint32_t test_full_run_determinism(std::string path,
   settings.work_limit       = work_limit;
   settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS;
   settings.heuristics_only  = true;
-  auto timer                = cuopt::timer_t(3000);
+  auto timer = cuopt::termination_checker_t(3000.0, cuopt::termination_checker_t::root_tag_t{});
   detail::mip_solver_t<int, double> solver(problem, settings, scaling, timer);
   problem.tolerances = settings.get_tolerances();
 
   detail::diversity_manager_t<int, double> diversity_manager(solver.context);
   solver.context.gpu_heur_loop.deterministic = true;
-  diversity_manager.timer = work_limit_timer_t(solver.context.gpu_heur_loop, settings.work_limit);
+  diversity_manager.timer =
+    work_limit_timer_t(solver.context.gpu_heur_loop, settings.work_limit, timer);
   diversity_manager.run_solver();
 
   std::vector<uint32_t> hashes;
@@ -163,14 +164,14 @@ static uint32_t test_initial_solution_determinism(std::string path,
   settings.time_limit       = 3000.;
   settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS;
   settings.heuristics_only  = true;
-  auto timer                = cuopt::timer_t(3000);
+  auto timer = cuopt::termination_checker_t(3000.0, cuopt::termination_checker_t::root_tag_t{});
   detail::mip_solver_t<int, double> solver(problem, settings, scaling, timer);
   problem.tolerances = settings.get_tolerances();
 
   detail::diversity_manager_t<int, double> diversity_manager(solver.context);
   work_limit_context_t work_limit_context("DiversityManager");
   work_limit_context.deterministic = true;
-  diversity_manager.timer          = work_limit_timer_t(work_limit_context, 60000);
+  diversity_manager.timer          = work_limit_timer_t(work_limit_context, 60000, timer);
   diversity_manager.diversity_config.initial_solution_only = true;
   diversity_manager.run_solver();
 
@@ -223,14 +224,14 @@ static uint32_t test_recombiners_determinism(std::string path,
   settings.time_limit       = 3000.;
   settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS;
   settings.heuristics_only  = true;
-  auto timer                = cuopt::timer_t(3000);
+  auto timer = cuopt::termination_checker_t(3000.0, cuopt::termination_checker_t::root_tag_t{});
   detail::mip_solver_t<int, double> solver(problem, settings, scaling, timer);
   problem.tolerances = settings.get_tolerances();
 
   detail::diversity_manager_t<int, double> diversity_manager(solver.context);
   work_limit_context_t work_limit_context("DiversityManager");
   work_limit_context.deterministic           = true;
-  diversity_manager.timer                    = work_limit_timer_t(work_limit_context, 60000);
+  diversity_manager.timer                    = work_limit_timer_t(work_limit_context, 60000, timer);
   diversity_manager.diversity_config.dry_run = true;
   diversity_manager.run_solver();
 

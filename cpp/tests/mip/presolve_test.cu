@@ -118,13 +118,16 @@ uint32_t test_probing_cache_determinism(std::string path,
                                                                nullptr,
                                                                hyper_params,
                                                                true);
-  detail::mip_solver_t<int, double> solver(problem, default_settings, scaling, cuopt::timer_t(0));
+  auto timer = cuopt::termination_checker_t(0.0, cuopt::termination_checker_t::root_tag_t{});
+  detail::mip_solver_t<int, double> solver(problem, default_settings, scaling, timer);
   detail::bound_presolve_t<int, double> bnd_prb(solver.context);
 
   work_limit_context_t work_limit_context("ProbingCache");
   // rely on the iteration limit
   compute_probing_cache(
-    bnd_prb, problem, work_limit_timer_t(work_limit_context, std::numeric_limits<double>::max()));
+    bnd_prb,
+    problem,
+    work_limit_timer_t(work_limit_context, std::numeric_limits<double>::max(), timer));
   std::vector<std::pair<int, std::array<detail::cache_entry_t<int, double>, 2>>> cached_values(
     bnd_prb.probing_cache.probing_cache.begin(), bnd_prb.probing_cache.probing_cache.end());
   std::sort(cached_values.begin(), cached_values.end(), [](const auto& a, const auto& b) {

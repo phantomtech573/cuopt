@@ -141,7 +141,8 @@ void test_multi_probe(std::string path)
                                                                nullptr,
                                                                hyper_params,
                                                                true);
-  detail::mip_solver_t<int, double> solver(problem, default_settings, scaling, cuopt::timer_t(0));
+  auto timer = cuopt::termination_checker_t(0.0, cuopt::termination_checker_t::root_tag_t{});
+  detail::mip_solver_t<int, double> solver(problem, default_settings, scaling, timer);
   detail::load_balanced_problem_t<int, double> lb_problem(problem);
   detail::load_balanced_bounds_presolve_t<int, double> lb_prs(lb_problem, solver.context);
 

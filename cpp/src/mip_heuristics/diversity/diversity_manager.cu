@@ -56,7 +56,7 @@ diversity_manager_t<i_t, f_t>::diversity_manager_t(mip_solver_context_t<i_t, f_t
                              context.problem_ptr->handle_ptr->get_stream()),
     ls(context, lp_optimal_solution),
     rins(context, *this),
-    timer(context.gpu_heur_loop, diversity_config.default_time_limit),
+    timer(0.0, cuopt::termination_checker_t::root_tag_t{}),
     bound_prop_recombiner(context,
                           context.problem_ptr->n_variables,
                           ls.constraint_prop,
@@ -205,12 +205,13 @@ void diversity_manager_t<i_t, f_t>::add_user_given_solutions(
 }
 
 template <typename i_t, typename f_t>
-bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_timer)
+bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit,
+                                                 cuopt::termination_checker_t& global_timer)
 {
   raft::common::nvtx::range fun_scope("run_presolve");
   CUOPT_LOG_INFO("Running presolve!");
   CUOPT_LOG_INFO("Problem fingerprint before DM presolve: 0x%x", problem_ptr->get_fingerprint());
-  work_limit_timer_t presolve_timer(context.gpu_heur_loop, time_limit);
+  work_limit_timer_t presolve_timer(context.gpu_heur_loop, time_limit, *context.termination);
   auto term_crit = ls.constraint_prop.bounds_update.solve(*problem_ptr);
   if (ls.constraint_prop.bounds_update.infeas_constraints_count > 0) {
     stats.presolve_time = timer.elapsed_time();
@@ -224,7 +225,8 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
     // Run probing cache before trivial presolve to discover variable implications
     const f_t max_time_on_probing = diversity_config.max_time_on_probing;
     f_t time_for_probing_cache    = std::min(max_time_on_probing, time_limit);
-    work_limit_timer_t probing_timer(context.gpu_heur_loop, time_for_probing_cache);
+    work_limit_timer_t probing_timer(
+      context.gpu_heur_loop, time_for_probing_cache, *context.termination);
     // this function computes probing cache, finds singletons, substitutions and changes the problem
     bool problem_is_infeasible =
       compute_probing_cache(ls.constraint_prop.bounds_update, *problem_ptr, probing_timer);
@@ -292,7 +294,8 @@ void diversity_manager_t<i_t, f_t>::generate_quick_feasible_solution()
   // min 1 second, max 10 seconds
   const f_t generate_fast_solution_time =
     std::min(diversity_config.max_fast_sol_time, std::max(1., timer.remaining_time() / 20.));
-  work_limit_timer_t sol_timer(context.gpu_heur_loop, generate_fast_solution_time);
+  work_limit_timer_t sol_timer(
+    context.gpu_heur_loop, generate_fast_solution_time, *context.termination);
   // do very short LP run to get somewhere close to the optimal point
   ls.generate_fast_solution(solution, sol_timer);
   if (solution.get_feasible()) {

@@ -63,7 +63,7 @@ static void init_handler(const raft::handle_t* handle_ptr)
 template <typename i_t, typename f_t>
 mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
                                  mip_solver_settings_t<i_t, f_t> const& settings,
-                                 timer_t& timer)
+                                 cuopt::termination_checker_t& timer)
 {
   raft::common::nvtx::range fun_scope("run_mip");
   auto constexpr const running_mip = true;
@@ -260,7 +260,8 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
                                       op_problem.get_handle_ptr()->get_stream());
     }
 
-    auto timer                   = timer_t(time_limit);
+    auto timer =
+      cuopt::termination_checker_t(time_limit, cuopt::termination_checker_t::root_tag_t{});
     const bool deterministic_run = detail::is_deterministic_mode(settings.determinism_mode);
 
     double presolve_time = 0.0;
