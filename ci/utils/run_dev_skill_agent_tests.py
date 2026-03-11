@@ -1,0 +1,422 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Run developer-skill agent tests: send prompts to an agent (Claude CLI) with the
+cuOpt developer skill as context, then validate that the response follows the
+skill (required phrases present, forbidden phrases absent).
+
+Usage (from repo root):
+  python ci/utils/run_dev_skill_agent_tests.py              # live: main test set (pass@1)
+  python ci/utils/run_dev_skill_agent_tests.py --replay D    # replay: validate saved responses
+  python ci/utils/run_dev_skill_agent_tests.py --pass-at 5   # pass@5: run each request 5x, pass if any passes
+  python ci/utils/run_dev_skill_agent_tests.py --runtimes-file out/runtimes.json  # write median runtimes to JSON
+  python ci/utils/run_dev_skill_agent_tests.py --report out   # write results to out/YYYY-MM-DD_HH-MM-SS/
+  python ci/utils/run_dev_skill_agent_tests.py --dataset      # main + issue-style (SWE-bench-like) set
+
+Requires: Claude CLI installed and authenticated (`claude auth login`) for live runs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import statistics
+import subprocess
+import sys
+import time
+from datetime import datetime
+
+
+def repo_root() -> str:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.dirname(os.path.dirname(script_dir))
+
+
+def load_config(root: str, path: str) -> dict:
+    """Load a test config JSON. path can be absolute or relative to root."""
+    if not os.path.isabs(path):
+        path = os.path.join(root, path)
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def config_suite_name(path: str) -> str:
+    """Return a short name for save/replay subdir (e.g. dev_skill_agent_tests_issue_style)."""
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def run_claude(root: str, skill_path: str, prompt: str, timeout: int) -> tuple[str, float]:
+    """Run Claude CLI with skill as system context; return (combined stdout+stderr, elapsed_seconds)."""
+    abs_skill = os.path.join(root, skill_path)
+    if not os.path.isfile(abs_skill):
+        raise FileNotFoundError(f"Skill file not found: {abs_skill}")
+    cmd = [
+        "claude",
+        "-p",
+        "--no-session-persistence",
+        "--append-system-prompt-file", abs_skill,
+        prompt,
+    ]
+    start = time.perf_counter()
+    result = subprocess.run(
+        cmd,
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    elapsed = time.perf_counter() - start
+    out = (result.stdout or "") + (result.stderr or "")
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Claude CLI exited {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    return (out, elapsed)
+
+
+def check_response(response: str, must_include: list[str], must_not_include: list[str]) -> tuple[bool, list[str]]:
+    """Validate response. Return (passed, list of failure reasons)."""
+    failures = []
+    lower = response.lower()
+    for phrase in must_include:
+        if phrase.lower() not in lower:
+            failures.append(f"Response must include: {phrase!r}")
+    for phrase in must_not_include:
+        if phrase.lower() in lower:
+            failures.append(f"Response must NOT include: {phrase!r}")
+    return (len(failures) == 0, failures)
+
+
+def claude_available() -> bool:
+    """Return True if Claude CLI is installed and authenticated."""
+    try:
+        r = subprocess.run(
+            ["claude", "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return r.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run developer skill agent tests (Claude CLI + validation)")
+    parser.add_argument(
+        "--replay",
+        metavar="DIR",
+        help="Replay mode: validate saved responses from DIR (one file per test id, or per suite/test_id). No CLI call.",
+    )
+    parser.add_argument(
+        "--save",
+        metavar="DIR",
+        help="After running Claude, save each response to DIR/<suite>/<test_id>.txt (for replay later).",
+    )
+    parser.add_argument(
+        "--tests-file",
+        metavar="PATH",
+        action="append",
+        dest="tests_files",
+        help="Additional test config JSON (same schema). Can be repeated. Default: ci/utils/dev_skill_agent_tests.json only.",
+    )
+    parser.add_argument(
+        "--dataset",
+        action="store_true",
+        help="Also run issue-style (SWE-bench-like) tests from ci/utils/dev_skill_agent_tests_issue_style.json.",
+    )
+    parser.add_argument(
+        "--pass-at",
+        type=int,
+        metavar="K",
+        default=1,
+        help="pass@K: run each request K times; pass if at least one response passes (default: 1). Only applies to live runs; replay is always pass@1.",
+    )
+    parser.add_argument(
+        "--runtimes-file",
+        metavar="PATH",
+        help="Write per-test runtimes and median to JSON (and print median runtime summary).",
+    )
+    parser.add_argument(
+        "--report",
+        metavar="DIR",
+        help="Write results.csv (question, runtime, pass/fail, failure details) and report.md (Markdown summary + failure log) to DIR.",
+    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Print full response on failure")
+    args = parser.parse_args()
+
+    pass_at = max(1, args.pass_at)
+
+    # Date-time folder for this run when writing report/save/runtimes
+    run_ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_results_dir: str | None = None  # actual path used for --report/--save (with timestamp)
+
+    root = repo_root()
+    if not args.replay and not claude_available():
+        print("Claude CLI is not available or not authenticated. Run: claude auth login", file=sys.stderr)
+        print("Use --replay DIR to validate saved responses without the CLI.", file=sys.stderr)
+        return 2
+    os.chdir(root)
+
+    # Build list of (suite_name, config) to run
+    default_path = "ci/utils/dev_skill_agent_tests.json"
+    configs_to_run: list[tuple[str, dict]] = []
+    if args.tests_files:
+        for p in args.tests_files:
+            cfg = load_config(root, p)
+            configs_to_run.append((config_suite_name(p), cfg))
+    else:
+        configs_to_run.append((config_suite_name(default_path), load_config(root, default_path)))
+    if args.dataset:
+        issue_path = "ci/utils/dev_skill_agent_tests_issue_style.json"
+        if not any(s == config_suite_name(issue_path) for s, _ in configs_to_run):
+            configs_to_run.append((config_suite_name(issue_path), load_config(root, issue_path)))
+
+    # Resolve timestamped output dirs for report, save, runtimes (YYYY-MM-DD_HH-MM-SS)
+    save_dir_actual: str | None = None
+    runtimes_path_actual: str | None = None
+    if args.report:
+        report_base = os.path.join(root, args.report) if not os.path.isabs(args.report) else args.report
+        run_results_dir = os.path.join(report_base, run_ts)
+        os.makedirs(run_results_dir, exist_ok=True)
+        print(f"Run results (report) will be written to: {run_results_dir}")
+    if args.save:
+        save_base = os.path.join(root, args.save) if not os.path.isabs(args.save) else args.save
+        save_dir_actual = os.path.join(save_base, run_ts)
+        if run_results_dir is None:
+            run_results_dir = save_dir_actual
+        os.makedirs(save_dir_actual, exist_ok=True)
+        if save_dir_actual != run_results_dir:
+            print(f"Saved responses will be written to: {save_dir_actual}")
+    if args.runtimes_file:
+        rft_base = os.path.join(root, args.runtimes_file) if not os.path.isabs(args.runtimes_file) else args.runtimes_file
+        if not args.runtimes_file.strip().endswith(".json"):
+            runtimes_dir_actual = os.path.join(rft_base, run_ts)
+            os.makedirs(runtimes_dir_actual, exist_ok=True)
+            runtimes_path_actual = os.path.join(runtimes_dir_actual, "runtimes.json")
+            if run_results_dir is None:
+                run_results_dir = runtimes_dir_actual
+            print(f"Runtimes will be written to: {runtimes_path_actual}")
+        else:
+            runtimes_path_actual = rft_base
+            os.makedirs(os.path.dirname(runtimes_path_actual) or ".", exist_ok=True)
+
+    passed = 0
+    failed = 0
+    skipped = 0
+    runtimes_report: dict[str, dict] = {}  # label -> { runtimes: [], median: float, passed: bool }
+    report_rows: list[dict] = []  # for --report: { label, test_id, prompt, passed, median_seconds, failure_reasons, response_preview }
+
+    for suite_name, config in configs_to_run:
+        skill_file = config["skill_file"]
+        timeout = config.get("timeout_seconds", 120)
+        tests = config["tests"]
+        default_inc = config.get("default_assertions", {}).get("must_include", [])
+        default_not = config.get("default_assertions", {}).get("must_not_include", [])
+
+        for test in tests:
+            test_id = test["id"]
+            prompt = test["prompt"]
+            must_include = test.get("must_include", default_inc)
+            must_not_include = test.get("must_not_include", default_not)
+            # Replay/save path: if single suite, DIR/<id>.txt; else DIR/<suite>/<id>.txt
+            if len(configs_to_run) == 1:
+                replay_file = f"{test_id}.txt"
+            else:
+                replay_file = os.path.join(suite_name, f"{test_id}.txt")
+
+            label = f"{suite_name}/{test_id}" if len(configs_to_run) > 1 else test_id
+            runtimes: list[float] = []
+            responses: list[str] = []
+            test_passed = False
+
+            if args.replay:
+                replay_path = os.path.join(args.replay, replay_file)
+                if not os.path.isfile(replay_path):
+                    print(f"SKIP {label}: no replay file {replay_path}")
+                    skipped += 1
+                    if args.report:
+                        report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "SKIP", "median_seconds": "", "failure_reasons": [], "response_preview": ""})
+                    continue
+                t0 = time.perf_counter()
+                with open(replay_path, encoding="utf-8") as f:
+                    response = f.read()
+                runtimes.append(time.perf_counter() - t0)
+                responses.append(response)
+            else:
+                # Live: run pass_at times (pass@1 or pass@5, etc.)
+                for attempt in range(pass_at):
+                    try:
+                        response, elapsed = run_claude(root, skill_file, prompt, timeout)
+                        runtimes.append(elapsed)
+                        responses.append(response)
+                    except Exception as e:
+                        print(f"FAIL {label} (attempt {attempt + 1}/{pass_at}): {e}")
+                        runtimes.clear()
+                        responses.clear()
+                        failed += 1
+                        if args.report:
+                            report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "FAIL", "median_seconds": "", "failure_reasons": [str(e)], "response_preview": ""})
+                        break
+                else:
+                    if args.save and responses and save_dir_actual:
+                        save_path = os.path.join(save_dir_actual, replay_file)
+                        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+                        with open(save_path, "w", encoding="utf-8") as f:
+                            f.write(responses[0])
+
+            if not responses:
+                continue
+
+            for response in responses:
+                ok, failures_list = check_response(response, must_include, must_not_include)
+                if ok:
+                    test_passed = True
+                    break
+
+            failures_list: list[str] = []
+            if not test_passed and responses:
+                _, failures_list = check_response(responses[0], must_include, must_not_include)
+
+            if test_passed:
+                print(f"PASS {label}" + (f" (pass@{pass_at})" if pass_at > 1 else ""))
+                passed += 1
+                if args.report and runtimes:
+                    report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "PASS", "median_seconds": round(statistics.median(runtimes), 3), "failure_reasons": [], "response_preview": ""})
+            else:
+                print(f"FAIL {label}" + (f" (0/{pass_at} passed)" if pass_at > 1 else ""))
+                if pass_at == 1 and responses:
+                    for f in failures_list:
+                        print(f"  - {f}")
+                    if args.verbose and responses:
+                        print("  Response (first 1500 chars):")
+                        print(responses[0][:1500])
+                failed += 1
+                if args.report:
+                    preview = (responses[0][:800] + "..." if len(responses[0]) > 800 else responses[0]) if responses else ""
+                    report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "FAIL", "median_seconds": round(statistics.median(runtimes), 3) if runtimes else "", "failure_reasons": failures_list, "response_preview": preview})
+
+            if runtimes:
+                median_sec = statistics.median(runtimes)
+                runtimes_report[label] = {
+                    "runtimes_seconds": runtimes,
+                    "median_seconds": round(median_sec, 3),
+                    "passed": test_passed,
+                }
+                if pass_at > 1:
+                    print(f"  median runtime: {median_sec:.2f}s")
+
+    # Summary
+    total_run = passed + failed
+    exit_code = 0 if failed == 0 else 1
+    print(f"\nResult: {passed} passed, {failed} failed" + (f", {skipped} skipped" if skipped else ""))
+    if pass_at > 1 and total_run:
+        print(f"pass@{pass_at}: {passed}/{total_run} tests passed")
+
+    # Median runtime table
+    if runtimes_report:
+        print("\nMedian runtime per request (seconds):")
+        for label, data in sorted(runtimes_report.items()):
+            status = "PASS" if data["passed"] else "FAIL"
+            print(f"  {label}: {data['median_seconds']:.2f}s  [{status}]")
+
+    # Shareable status block at end of run
+    status_summary = {
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+        "total_run": total_run,
+        "total_tests": passed + failed + skipped,
+        "pass_at": pass_at,
+        "replay": args.replay is not None,
+        "exit_code": exit_code,
+    }
+    print("\n" + "=" * 60)
+    print("STATUS (shareable)")
+    print("=" * 60)
+    print(f"  passed:     {passed}")
+    print(f"  failed:     {failed}")
+    print(f"  skipped:    {skipped}")
+    print(f"  total run:  {total_run}")
+    if pass_at > 1:
+        print(f"  pass@{pass_at}:  {passed}/{total_run}")
+    print(f"  replay:     {status_summary['replay']}")
+    print(f"  exit_code: {exit_code}")
+    print("=" * 60)
+
+    if args.runtimes_file and runtimes_report:
+        out_path = runtimes_path_actual if runtimes_path_actual else (os.path.join(root, args.runtimes_file) if not os.path.isabs(args.runtimes_file) else args.runtimes_file)
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        payload = {
+            "pass_at": pass_at,
+            "replay": args.replay is not None,
+            "status": status_summary,
+            "tests": runtimes_report,
+        }
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        print(f"\nRuntimes and status written to {out_path}")
+
+    # CSV + Markdown report (in timestamped folder)
+    if args.report and report_rows and run_results_dir:
+        report_dir = run_results_dir
+        csv_path = os.path.join(report_dir, "results.csv")
+        md_path = os.path.join(report_dir, "report.md")
+
+        # CSV: test_id, label, prompt, passed, median_seconds, failure_reasons
+        with open(csv_path, "w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["test_id", "label", "prompt", "passed", "median_seconds", "failure_reasons"])
+            for r in report_rows:
+                reasons = " | ".join(r["failure_reasons"]) if r["failure_reasons"] else ""
+                med = r["median_seconds"] if r["median_seconds"] != "" else ""
+                w.writerow([r["test_id"], r["label"], r["prompt"], r["passed"], med, reasons])
+
+        # Markdown report
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write("# Dev skill agent test report\n\n")
+            f.write(f"**Generated:** {datetime.now().isoformat(timespec='seconds')}  \n")
+            f.write(f"**pass@:** {pass_at}  **replay:** {status_summary['replay']}  \n\n")
+            f.write("## Summary\n\n")
+            f.write(f"- **Passed:** {passed}  \n")
+            f.write(f"- **Failed:** {failed}  \n")
+            f.write(f"- **Skipped:** {skipped}  \n")
+            f.write(f"- **Exit code:** {exit_code}  \n\n")
+            f.write("## Results\n\n")
+            f.write("| test_id | prompt | median_seconds | pass/fail |\n")
+            f.write("|---------|--------|----------------|----------|\n")
+            for r in report_rows:
+                prompt_short = (r["prompt"][:60] + "…") if len(r["prompt"]) > 60 else r["prompt"]
+                prompt_short = prompt_short.replace("|", "\\|").replace("\n", " ")
+                med = r["median_seconds"] if r["median_seconds"] != "" else "—"
+                f.write(f"| {r['test_id']} | {prompt_short} | {med} | {r['passed']} |\n")
+            failed_rows = [r for r in report_rows if r["passed"] == "FAIL"]
+            if failed_rows:
+                f.write("\n## Failed tests (details)\n\n")
+                for r in failed_rows:
+                    f.write(f"### {r['label']}\n\n")
+                    f.write("**Prompt:**  \n")
+                    f.write(f"> {r['prompt']}\n\n")
+                    f.write("**Failure reasons:**  \n")
+                    for reason in r["failure_reasons"]:
+                        f.write(f"- {reason}\n")
+                    f.write("\n")
+                    if r.get("response_preview"):
+                        f.write("**Response preview:**  \n\n")
+                        f.write("```\n")
+                        f.write(r["response_preview"].replace("```", "` ` `"))
+                        f.write("\n```\n\n")
+            f.write("---\n")
+            f.write(f"*Report written to {report_dir}*\n")
+
+        print(f"\nReport written to {report_dir}: results.csv, report.md")
+
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
