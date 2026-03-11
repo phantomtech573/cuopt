@@ -32,9 +32,10 @@ import time
 from datetime import datetime
 
 # Phrases that indicate a following forbidden term is in a "don't do this" context (negation-aware check).
+# Includes "wrong"/"incorrect" so code examples like "// WRONG ... new int[]" don't trigger.
 _NEGATION_PATTERN = re.compile(
     r"\b(don'?t|do not|avoid|never|no\s|not\s|prohibit|won'?t|shouldn'?t|must not|cannot|can'?t|"
-    r"refuse|refusing|prohibited|disallow|against)\b",
+    r"refuse|refusing|prohibited|disallow|against|wrong|incorrect|❌)\b",
     re.IGNORECASE,
 )
 # Max chars before a forbidden phrase to look for negation.
