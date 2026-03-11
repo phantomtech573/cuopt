@@ -941,7 +941,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   while (set_count < unset_integer_vars.size()) {
     auto iter_start_time = std::chrono::high_resolution_clock::now();
     CUOPT_LOG_TRACE("n_set_vars %d vars to set %lu", set_count, unset_integer_vars.size());
-    CUOPT_LOG_DEBUG("unset_integer_vars size %lu", unset_integer_vars.size());
+    CUOPT_LOG_TRACE("unset_integer_vars size %lu", unset_integer_vars.size());
     const size_t set_count_before = set_count;
     update_host_assignment(sol);
     auto after_update_host_assignment = std::chrono::high_resolution_clock::now();
@@ -1000,9 +1000,9 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
       (int)set_count,
       detail::compute_hash(make_span(unset_integer_vars), sol.handle_ptr->get_stream()),
       unset_integer_vars.size());
-    bool repair_attempted = false;
-    bool bounds_repaired  = false;
-    i_t n_fixed_vars      = 0;
+    [[maybe_unused]] bool repair_attempted = false;
+    bool bounds_repaired                   = false;
+    i_t n_fixed_vars                       = 0;
     if (!(n_failed_repair_iterations >= max_n_failed_repair_iterations) && rounding_ii &&
         !timeout_happened) {
       // timer_t repair_timer{std::min(timer.remaining_time() / 5, timer.elapsed_time() / 3)};
@@ -1099,7 +1099,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
       std::chrono::duration<double, std::milli>(after_repair - after_probe).count();
     const double iter_total_ms =
       std::chrono::duration<double, std::milli>(after_repair - iter_start_time).count();
-    CUOPT_LOG_DEBUG(
+    CUOPT_DETERMINISM_LOG(
       "CP iter: set_count=%lu->%lu unset=%d interval=%d n_vars_to_set=%d sort=%d recovery=%d "
       "rounding_ii=%d probe_ii=%d timeout=%d repair_attempted=%d repair_success=%d "
       "repair_fixed=%d t_ms(update=%.3f sort=%.3f gen=%.3f probe=%.3f repair=%.3f total=%.3f)",

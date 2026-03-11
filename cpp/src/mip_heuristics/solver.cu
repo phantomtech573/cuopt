@@ -19,6 +19,9 @@
 #include <dual_simplex/solve.hpp>
 #include <utilities/determinism_log.hpp>
 
+#undef CUOPT_DETERMINISM_LOG_INFO
+#define CUOPT_DETERMINISM_LOG_INFO(...) CUOPT_LOG_INFO(__VA_ARGS__)
+
 #include <raft/sparse/detail/cusparse_wrappers.h>
 #include <raft/core/cusparse_macros.hpp>
 
@@ -388,18 +391,74 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
         std::isfinite(branch_and_bound_solution.objective)) {
       CUOPT_DETERMINISM_LOG_INFO(
         "Deterministic solver B&B overwrite: bb_status=%d bb_obj=%.16e bb_lower=%.16e "
+        "bb_x_size=%zu bb_has_incumbent=%d "
         "bb_hash=0x%x dm_hash=0x%x nodes=%d simplex_iterations=%d",
         (int)bb_status,
         branch_and_bound_solution.objective,
         branch_and_bound_solution.lower_bound,
+        branch_and_bound_solution.x.size(),
+        (int)branch_and_bound_solution.has_incumbent,
         detail::compute_hash(branch_and_bound_solution.x),
         sol.get_hash(),
         branch_and_bound_solution.nodes_explored,
         branch_and_bound_solution.simplex_iterations);
       solution_t<i_t, f_t> bb_sol(*context.problem_ptr);
       bb_sol.copy_new_assignment(branch_and_bound_solution.x);
-      bb_sol.compute_feasibility();
+      bool bb_feasible = bb_sol.compute_feasibility();
+      f_t max_cstr_vio = bb_sol.compute_max_constraint_violation();
+      f_t max_int_vio  = bb_sol.compute_max_int_violation();
+      f_t max_bnd_vio  = bb_sol.compute_max_variable_violation();
+      CUOPT_DETERMINISM_LOG_INFO(
+        "Deterministic B&B overwrite feasibility: feasible=%d obj=%.16e user_obj=%.16e "
+        "max_cstr_vio=%.6e max_int_vio=%.6e max_bnd_vio=%.6e "
+        "n_integers=%d n_int_vars=%d n_feas_cstr=%d n_cstr=%d hash=0x%x",
+        (int)bb_feasible,
+        bb_sol.get_objective(),
+        bb_sol.get_user_objective(),
+        max_cstr_vio,
+        max_int_vio,
+        max_bnd_vio,
+        bb_sol.n_assigned_integers,
+        context.problem_ptr->n_integer_vars,
+        bb_sol.n_feasible_constraints.value(bb_sol.handle_ptr->get_stream()),
+        context.problem_ptr->n_constraints,
+        bb_sol.get_hash());
+      if (!bb_feasible) {
+        auto stream   = context.problem_ptr->handle_ptr->get_stream();
+        auto h_clb    = cuopt::host_copy(context.problem_ptr->constraint_lower_bounds, stream);
+        auto h_cub    = cuopt::host_copy(context.problem_ptr->constraint_upper_bounds, stream);
+        auto h_coef   = cuopt::host_copy(context.problem_ptr->coefficients, stream);
+        auto h_vars   = cuopt::host_copy(context.problem_ptr->variables, stream);
+        auto h_offs   = cuopt::host_copy(context.problem_ptr->offsets, stream);
+        const auto& x = branch_and_bound_solution.x;
+        for (i_t row = 0; row < context.problem_ptr->n_constraints; ++row) {
+          f_t ax = 0;
+          for (i_t p = h_offs[row]; p < h_offs[row + 1]; ++p) {
+            ax += h_coef[p] * x[h_vars[p]];
+          }
+          f_t lo_vio = std::max(0.0, (double)(h_clb[row] - ax));
+          f_t hi_vio = std::max(0.0, (double)(ax - h_cub[row]));
+          if (lo_vio > 1e-6 || hi_vio > 1e-6) {
+            CUOPT_DETERMINISM_LOG_INFO(
+              "  Constraint %d violated: Ax=%.16e lb=%.16e ub=%.16e lo_vio=%.6e hi_vio=%.6e "
+              "nnz=%d",
+              row,
+              ax,
+              h_clb[row],
+              h_cub[row],
+              lo_vio,
+              hi_vio,
+              h_offs[row + 1] - h_offs[row]);
+          }
+        }
+      }
       sol = std::move(bb_sol);
+    } else if (is_deterministic_mode(context.settings.determinism_mode)) {
+      CUOPT_DETERMINISM_LOG_INFO(
+        "Deterministic B&B overwrite skipped: bb_obj=%.16e bb_obj_finite=%d bb_has_incumbent=%d",
+        branch_and_bound_solution.objective,
+        (int)std::isfinite(branch_and_bound_solution.objective),
+        (int)branch_and_bound_solution.has_incumbent);
     }
     context.stats.num_nodes              = branch_and_bound_solution.nodes_explored;
     context.stats.num_simplex_iterations = branch_and_bound_solution.simplex_iterations;

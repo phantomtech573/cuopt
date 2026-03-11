@@ -75,7 +75,7 @@ void log_lp_state_summary(const simplex_solver_settings_t<i_t, f_t>& settings,
 {
   assert(new_slacks.size() == static_cast<size_t>(lp.num_rows));
 
-  CUOPT_DETERMINISM_LOG_PRINTF(
+  CUOPT_DETERMINISM_LOG(
     settings.log,
     "%s: cuts_delta=%d rows=%d cols=%d nnz=%zu slacks=%zu slack_hash=0x%x rhs_hash=0x%x "
     "lower_hash=0x%x upper_hash=0x%x Acol_hash=0x%x Arow_hash=0x%x Aval_hash=0x%x\n",
@@ -217,24 +217,24 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
 
     const uint32_t candidate_order_hash = compute_index_order_hash(candidate_order);
     const uint32_t candidate_cut_hash   = compute_ordered_hash_list_hash(candidate_cut_hashes);
-    CUOPT_DETERMINISM_LOG_PRINTF(settings_.log,
-                                 "Deterministic cut candidate ranking: cuts=%zu order_hash=0x%x "
-                                 "cut_hash=0x%x top=",
-                                 candidate_order.size(),
-                                 candidate_order_hash,
-                                 candidate_cut_hash);
+    CUOPT_DETERMINISM_LOG(settings_.log,
+                          "Deterministic cut candidate ranking: cuts=%zu order_hash=0x%x "
+                          "cut_hash=0x%x top=",
+                          candidate_order.size(),
+                          candidate_order_hash,
+                          candidate_cut_hash);
     const size_t max_top_cuts = std::min((size_t)8, candidate_order.size());
     for (size_t k = 0; k < max_top_cuts; ++k) {
       const i_t cut_idx = candidate_order[k];
-      CUOPT_DETERMINISM_LOG_PRINTF(settings_.log,
-                                   "%s[%d type=%d dist=%.16e hash=0x%x]",
-                                   k == 0 ? "" : " ",
-                                   cut_idx,
-                                   static_cast<int>(cut_type_[cut_idx]),
-                                   cut_distances_[cut_idx],
-                                   candidate_cut_hashes[k]);
+      CUOPT_DETERMINISM_LOG(settings_.log,
+                            "%s[%d type=%d dist=%.16e hash=0x%x]",
+                            k == 0 ? "" : " ",
+                            cut_idx,
+                            static_cast<int>(cut_type_[cut_idx]),
+                            cut_distances_[cut_idx],
+                            candidate_cut_hashes[k]);
     }
-    CUOPT_DETERMINISM_LOG_PRINTF(settings_.log, "\n");
+    CUOPT_DETERMINISM_LOG(settings_.log, "\n");
   }
 
   const i_t max_cuts          = 2000;
@@ -276,23 +276,22 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
         compute_stored_cut_hash(cut_storage_, rhs_storage_, cut_type_, cut_idx));
     }
     const uint32_t selected_cut_hash = compute_ordered_hash_list_hash(selected_cut_hashes);
-    CUOPT_DETERMINISM_LOG_PRINTF(
-      settings_.log,
-      "Deterministic cut selection summary: selected=%zu order_hash=0x%x top=",
-      best_cuts_.size(),
-      selected_cut_hash);
+    CUOPT_DETERMINISM_LOG(settings_.log,
+                          "Deterministic cut selection summary: selected=%zu order_hash=0x%x top=",
+                          best_cuts_.size(),
+                          selected_cut_hash);
     const size_t max_selected_cuts = std::min((size_t)8, best_cuts_.size());
     for (size_t k = 0; k < max_selected_cuts; ++k) {
       const i_t cut_idx = best_cuts_[k];
-      CUOPT_DETERMINISM_LOG_PRINTF(settings_.log,
-                                   "%s[%d type=%d dist=%.16e hash=0x%x]",
-                                   k == 0 ? "" : " ",
-                                   cut_idx,
-                                   static_cast<int>(cut_type_[cut_idx]),
-                                   cut_distances_[cut_idx],
-                                   selected_cut_hashes[k]);
+      CUOPT_DETERMINISM_LOG(settings_.log,
+                            "%s[%d type=%d dist=%.16e hash=0x%x]",
+                            k == 0 ? "" : " ",
+                            cut_idx,
+                            static_cast<int>(cut_type_[cut_idx]),
+                            cut_distances_[cut_idx],
+                            selected_cut_hashes[k]);
     }
-    CUOPT_DETERMINISM_LOG_PRINTF(settings_.log, "\n");
+    CUOPT_DETERMINISM_LOG(settings_.log, "\n");
   }
 }
 
@@ -1058,7 +1057,7 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
               work_estimate += 10 * std::log2(10);
 
               const uint32_t potential_row_hash = compute_index_order_hash(potential_rows);
-              CUOPT_DETERMINISM_LOG_PRINTF(
+              CUOPT_DETERMINISM_LOG(
                 settings.log,
                 "Deterministic cut potential row ranking: pivot_var=%d rows=%zu "
                 "order_hash=0x%x top=",
@@ -1068,10 +1067,10 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
               const size_t max_logged_rows = std::min((size_t)8, potential_rows.size());
               for (size_t k = 0; k < max_logged_rows; ++k) {
                 const i_t row = potential_rows[k];
-                CUOPT_DETERMINISM_LOG_PRINTF(
+                CUOPT_DETERMINISM_LOG(
                   settings.log, "%s[%d score=%.16e]", k == 0 ? "" : " ", row, score[row]);
               }
-              CUOPT_DETERMINISM_LOG_PRINTF(settings.log, "\n");
+              CUOPT_DETERMINISM_LOG(settings.log, "\n");
 
               const i_t pivot_row = potential_rows[0];
 

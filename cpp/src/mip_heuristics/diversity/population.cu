@@ -339,7 +339,7 @@ void population_t<i_t, f_t>::run_solution_callbacks(
       cuopt_assert(std::isfinite(work_timestamp),
                    "Deterministic heuristic work timestamp must be finite");
       context.branch_and_bound_ptr->queue_external_solution_deterministic(
-        sol.get_host_assignment(), sol.get_objective(), work_timestamp, callback_origin);
+        sol.get_host_assignment(), sol.get_user_objective(), work_timestamp, callback_origin);
       // In deterministic mode, B&B replay is the single owner of GET_SOLUTION callback ordering.
       best_feasible_objective = sol.get_objective();
     } else {

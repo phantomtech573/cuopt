@@ -523,7 +523,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
                     best_violation,
                     curr_violation);
     if (timer.deterministic) {
-      CUOPT_LOG_DEBUG(
+      CUOPT_DETERMINISM_LOG(
         "Repair iter entry: iter=%d pb_hash=0x%x bounds_hash=0x%x violated_hash=0x%x "
         "n_violated=%d best_violation=%.6f curr_violation=%.6f timer_rem=%.6f total_work=%.6f",
         repair_iterations,
@@ -548,7 +548,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
     if (timer.deterministic) {
       shift_work = estimate_bounds_repair_shift_work(problem, curr_cstr, n_candidates, is_cycle);
       record_estimated_work(timer, &total_estimated_work, shift_work);
-      CUOPT_LOG_DEBUG(
+      CUOPT_DETERMINISM_LOG(
         "Repair iter shift: iter=%d curr_cstr=%d cycle=%d n_candidates=%d cand_var_hash=0x%x "
         "cand_shift_hash=0x%x shift_work=%.6f timer_rem=%.6f total_work=%.6f",
         repair_iterations,
@@ -581,7 +581,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
     if (timer.deterministic) {
       damage_work = estimate_bounds_repair_damage_work(problem, n_candidates);
       record_estimated_work(timer, &total_estimated_work, damage_work);
-      CUOPT_LOG_DEBUG(
+      CUOPT_DETERMINISM_LOG(
         "Repair iter damage: iter=%d curr_cstr=%d cand_cdelta_hash=0x%x cand_damage_hash=0x%x "
         "damage_work=%.6f timer_rem=%.6f total_work=%.6f",
         repair_iterations,
@@ -617,7 +617,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
       best_move_idx = get_random_idx(n_of_eligible_candidates);
     }
     if (timer.deterministic) {
-      CUOPT_LOG_DEBUG(
+      CUOPT_DETERMINISM_LOG(
         "Repair iter choice: iter=%d curr_cstr=%d best_cstr_delta=%d best_damage=%.6f "
         "choose_random=%d random_draw=%.6f eligible=%d best_move_idx=%d move_var=%d "
         "move_shift=%.6f move_cdelta=%d move_damage=%.6f",
@@ -650,7 +650,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
       refresh_work = bounds_repair_move_base_work +
                      estimate_bounds_repair_violation_refresh_work(problem, improved_violation);
       record_estimated_work(timer, &total_estimated_work, refresh_work);
-      CUOPT_LOG_DEBUG(
+      CUOPT_DETERMINISM_LOG(
         "Repair iter post: iter=%d pb_hash=0x%x bounds_hash=0x%x violated_hash=0x%x "
         "n_violated=%d curr_violation=%.6f improved=%d refresh_work=%.6f total_work=%.6f "
         "timer_rem=%.6f",
@@ -665,12 +665,13 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
         refresh_work,
         total_estimated_work,
         timer.remaining_time());
-      CUOPT_LOG_DEBUG("Repair iter work: cstr=%d candidates=%d cycle=%d improved=%d total=%.6f",
-                      curr_cstr,
-                      n_candidates,
-                      (int)is_cycle,
-                      (int)improved_violation,
-                      total_estimated_work);
+      CUOPT_DETERMINISM_LOG(
+        "Repair iter work: cstr=%d candidates=%d cycle=%d improved=%d total=%.6f",
+        curr_cstr,
+        n_candidates,
+        (int)is_cycle,
+        (int)improved_violation,
+        total_estimated_work);
     }
 
     if (improved_violation) {

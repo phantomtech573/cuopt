@@ -857,6 +857,12 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
   bound_presolve.settings.iteration_limit = 50;
   bound_presolve.settings.time_limit      = timer.remaining_time();
 
+  // TODO: proper work unit accounting in deterministic mode for the probing cache
+  if (is_deterministic_mode(bound_presolve.context.settings.determinism_mode)) {
+    bound_presolve.settings.iteration_limit = 1;
+    priority_indices.resize(std::min<size_t>(priority_indices.size(), 2048));
+  }
+
   size_t num_threads = bound_presolve.settings.num_threads < 0
                          ? 0.2 * omp_get_max_threads()
                          : bound_presolve.settings.num_threads;

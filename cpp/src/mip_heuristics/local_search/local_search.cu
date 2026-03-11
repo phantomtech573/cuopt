@@ -191,9 +191,11 @@ void local_search_t<i_t, f_t>::start_cpufj_deterministic(
 
   // Set up callback to send solutions to B&B with work unit timestamps
   deterministic_cpu_fj.fj_cpu->improvement_callback =
-    [&bb](f_t obj, const std::vector<f_t>& h_vec, double work_units) {
+    [&bb, problem_ptr = context.problem_ptr](
+      f_t obj, const std::vector<f_t>& h_vec, double work_units) {
+      f_t user_obj = problem_ptr->get_user_obj_from_solver_obj(obj);
       bb.queue_external_solution_deterministic(
-        h_vec, obj, work_units, cuopt::internals::mip_solution_origin_t::CPU_FEASIBILITY_JUMP);
+        h_vec, user_obj, work_units, cuopt::internals::mip_solution_origin_t::CPU_FEASIBILITY_JUMP);
     };
 
   deterministic_cpu_fj.start_cpu_solver();
