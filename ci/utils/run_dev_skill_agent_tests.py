@@ -91,6 +91,10 @@ def check_response(response: str, must_include: list[str], must_not_include: lis
     return (len(failures) == 0, failures)
 
 
+# Default folder for report and runtimes when --report / --runtimes-file are not specified (relative to repo root)
+DEFAULT_RESULTS_DIR = "out/dev_skill_agent_tests"
+
+
 def claude_available() -> bool:
     """Return True if Claude CLI is installed and authenticated."""
     try:
@@ -113,11 +117,6 @@ def main() -> int:
         help="Replay mode: validate saved responses from DIR (one file per test id, or per suite/test_id). No CLI call.",
     )
     parser.add_argument(
-        "--save",
-        metavar="DIR",
-        help="After running Claude, save each response to DIR/<suite>/<test_id>.txt (for replay later).",
-    )
-    parser.add_argument(
         "--tests-file",
         metavar="PATH",
         action="append",
@@ -137,17 +136,44 @@ def main() -> int:
         help="pass@K: run each request K times; pass if at least one response passes (default: 1). Only applies to live runs; replay is always pass@1.",
     )
     parser.add_argument(
-        "--runtimes-file",
-        metavar="PATH",
-        help="Write per-test runtimes and median to JSON (and print median runtime summary).",
-    )
-    parser.add_argument(
         "--report",
         metavar="DIR",
-        help="Write results.csv (question, runtime, pass/fail, failure details) and report.md (Markdown summary + failure log) to DIR.",
+        nargs="?",
+        const=DEFAULT_RESULTS_DIR,
+        default=None,
+        help=f"Write results.csv and report.md to DIR/YYYY-MM-DD_HH-MM-SS/. Omit DIR to use {DEFAULT_RESULTS_DIR}. By default report is written; use --no-report to disable.",
+    )
+    parser.add_argument(
+        "--no-report",
+        action="store_true",
+        help="Do not write report or runtimes to disk.",
+    )
+    parser.add_argument(
+        "--runtimes-file",
+        metavar="PATH",
+        nargs="?",
+        const=None,
+        default=None,
+        help=f"Write runtimes JSON. Dir or omitted => PATH/YYYY-MM-DD_HH-MM-SS/runtimes.json (.json file => write there). Default: same as report dir ({DEFAULT_RESULTS_DIR}).",
+    )
+    parser.add_argument(
+        "--save",
+        metavar="DIR",
+        nargs="?",
+        const=DEFAULT_RESULTS_DIR,
+        default=None,
+        help=f"Save each response for replay. DIR defaults to {DEFAULT_RESULTS_DIR}. Writes to DIR/YYYY-MM-DD_HH-MM-SS/.",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Print full response on failure")
     args = parser.parse_args()
+
+    # Apply default results dir when report/runtimes not explicitly set and not disabled
+    if not getattr(args, "no_report", False):
+        args.report = args.report if args.report is not None else DEFAULT_RESULTS_DIR
+        args.runtimes_file = args.runtimes_file if args.runtimes_file is not None else DEFAULT_RESULTS_DIR
+    else:
+        args.report = None
+        args.runtimes_file = None
 
     pass_at = max(1, args.pass_at)
 
@@ -183,7 +209,10 @@ def main() -> int:
         report_base = os.path.join(root, args.report) if not os.path.isabs(args.report) else args.report
         run_results_dir = os.path.join(report_base, run_ts)
         os.makedirs(run_results_dir, exist_ok=True)
-        print(f"Run results (report) will be written to: {run_results_dir}")
+        if args.report == DEFAULT_RESULTS_DIR:
+            print(f"Run results (report) will be written to: {run_results_dir} (default: {DEFAULT_RESULTS_DIR})")
+        else:
+            print(f"Run results (report) will be written to: {run_results_dir}")
     if args.save:
         save_base = os.path.join(root, args.save) if not os.path.isabs(args.save) else args.save
         save_dir_actual = os.path.join(save_base, run_ts)
@@ -324,6 +353,12 @@ def main() -> int:
             status = "PASS" if data["passed"] else "FAIL"
             print(f"  {label}: {data['median_seconds']:.2f}s  [{status}]")
 
+    # Overall median runtime (median of per-test median runtimes)
+    median_runtime_overall: float | None = None
+    if runtimes_report:
+        per_test_medians = [d["median_seconds"] for d in runtimes_report.values()]
+        median_runtime_overall = round(statistics.median(per_test_medians), 3)
+
     # Shareable status block at end of run
     status_summary = {
         "passed": passed,
@@ -334,6 +369,7 @@ def main() -> int:
         "pass_at": pass_at,
         "replay": args.replay is not None,
         "exit_code": exit_code,
+        "median_runtime_seconds": median_runtime_overall,
     }
     print("\n" + "=" * 60)
     print("STATUS (shareable)")
@@ -344,6 +380,8 @@ def main() -> int:
     print(f"  total run:  {total_run}")
     if pass_at > 1:
         print(f"  pass@{pass_at}:  {passed}/{total_run}")
+    if median_runtime_overall is not None:
+        print(f"  median_runtime: {median_runtime_overall:.2f}s")
     print(f"  replay:     {status_summary['replay']}")
     print(f"  exit_code: {exit_code}")
     print("=" * 60)
@@ -385,8 +423,10 @@ def main() -> int:
             f.write(f"- **Passed:** {passed}  \n")
             f.write(f"- **Failed:** {failed}  \n")
             f.write(f"- **Skipped:** {skipped}  \n")
-            f.write(f"- **Exit code:** {exit_code}  \n\n")
-            f.write("## Results\n\n")
+            f.write(f"- **Exit code:** {exit_code}  \n")
+            if median_runtime_overall is not None:
+                f.write(f"- **Median runtime (overall):** {median_runtime_overall:.2f}s  \n")
+            f.write("\n## Results\n\n")
             f.write("| test_id | prompt | median_seconds | pass/fail |\n")
             f.write("|---------|--------|----------------|----------|\n")
             for r in report_rows:
