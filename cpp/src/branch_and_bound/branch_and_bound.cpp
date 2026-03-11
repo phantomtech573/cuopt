@@ -2407,10 +2407,10 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   pc_.resize(original_lp_.num_cols);
   {
     raft::common::nvtx::range scope_sb("BB::strong_branching");
-    strong_branching<i_t, f_t>(original_problem_,
-                               original_lp_,
+    strong_branching<i_t, f_t>(original_lp_,
                                settings_,
                                exploration_stats_.start_time,
+                               new_slacks_,
                                var_types_,
                                root_relax_soln_.x,
                                fractional,
