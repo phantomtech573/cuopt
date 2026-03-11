@@ -133,10 +133,6 @@ class branch_and_bound_t {
                                     std::vector<i_t>& nonbasic_list,
                                     std::vector<f_t>& edge_norms);
 
-  i_t find_reduced_cost_fixings(f_t upper_bound,
-                                std::vector<f_t>& lower_bounds,
-                                std::vector<f_t>& upper_bounds);
-
   // The main entry routine. Returns the solver status and populates solution with the incumbent.
   mip_status_t solve(mip_solution_t<i_t, f_t>& solution);
 
@@ -175,6 +171,10 @@ class branch_and_bound_t {
   // this mutex when accessing the original LP. The main thread should lock this mutex
   // when modifying the original LP.
   omp_mutex_t mutex_original_lp_;
+
+  // If the reduced cost strengthening modified the bounds of the root LP problem,,
+  // then all workers must also update its local bounds.
+  omp_atomic_t<bool> was_bounds_at_root_updated;
 
   // Mutex for upper bound
   omp_mutex_t mutex_upper_;
@@ -306,6 +306,16 @@ class branch_and_bound_t {
     branch_and_bound_worker_t<i_t, f_t>* worker,
     dual::status_t lp_status,
     logger_t& log);
+
+  i_t find_reduced_cost_fixings(f_t upper_bound,
+                                std::vector<f_t>& lower_bounds,
+                                std::vector<f_t>& upper_bounds,
+                                std::vector<bool>& bounds_changed);
+ bool update_root_bounds(const std::vector<f_t>& lower_bounds,
+                          const std::vector<f_t>& upper_bounds,
+                          const std::vector<bool>& bounds_changed);
+
+  i_t apply_reduced_cost_fixings();
 
   // ============================================================================
   // Deterministic BSP (Bulk Synchronous Parallel) methods for deterministic parallel B&B

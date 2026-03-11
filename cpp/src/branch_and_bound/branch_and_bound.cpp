@@ -43,7 +43,6 @@
 #include <vector>
 
 namespace cuopt::linear_programming::dual_simplex {
-
 namespace {
 
 template <typename f_t>
@@ -383,13 +382,14 @@ void branch_and_bound_t<i_t, f_t>::report(
 template <typename i_t, typename f_t>
 i_t branch_and_bound_t<i_t, f_t>::find_reduced_cost_fixings(f_t upper_bound,
                                                             std::vector<f_t>& lower_bounds,
-                                                            std::vector<f_t>& upper_bounds)
+                                                            std::vector<f_t>& upper_bounds,
+                                                            std::vector<bool>& bounds_changed)
 {
-  std::vector<f_t> reduced_costs = root_relax_soln_.z;
-  lower_bounds                   = original_lp_.lower;
-  upper_bounds                   = original_lp_.upper;
-  std::vector<bool> bounds_changed(original_lp_.num_cols, false);
-  const f_t root_obj    = compute_objective(original_lp_, root_relax_soln_.x);
+  std::vector<f_t>& reduced_costs = root_relax_soln_.z;
+  lower_bounds                    = original_lp_.lower;
+  upper_bounds                    = original_lp_.upper;
+  bounds_changed.assign(original_lp_.num_cols, false);
+
   const f_t threshold   = 100.0 * settings_.integer_tol;
   const f_t weaken      = settings_.integer_tol;
   const f_t fixed_tol   = settings_.fixed_tol;
@@ -401,7 +401,7 @@ i_t branch_and_bound_t<i_t, f_t>::find_reduced_cost_fixings(f_t upper_bound,
     if (std::isfinite(reduced_costs[j]) && std::abs(reduced_costs[j]) > threshold) {
       const f_t lower_j            = original_lp_.lower[j];
       const f_t upper_j            = original_lp_.upper[j];
-      const f_t abs_gap            = upper_bound - root_obj;
+      const f_t abs_gap            = upper_bound - root_objective_;
       f_t reduced_cost_upper_bound = upper_j;
       f_t reduced_cost_lower_bound = lower_j;
       if (lower_j > -inf && reduced_costs[j] > 0) {
@@ -439,6 +439,25 @@ i_t branch_and_bound_t<i_t, f_t>::find_reduced_cost_fixings(f_t upper_bound,
   }
   return num_fixed;
 }
+template <typename i_t, typename f_t>
+bool branch_and_bound_t<i_t, f_t>::update_root_bounds(const std::vector<f_t>& lower_bounds,
+                                                      const std::vector<f_t>& upper_bounds,
+                                                      const std::vector<bool>& bounds_changed)
+{
+  std::vector<char> row_sense;
+  bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
+
+  mutex_original_lp_.lock();
+  original_lp_.lower = lower_bounds;
+  original_lp_.upper = upper_bounds;
+  bool feasible      = node_presolve.bounds_strengthening(
+    settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
+  mutex_original_lp_.unlock();
+
+  was_bounds_at_root_updated = true;
+
+  return feasible;
+}
 
 template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::update_user_bound(f_t lower_bound)
@@ -457,15 +476,18 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
       "Solution size mismatch %ld %d\n", solution.size(), original_problem_.num_cols);
   }
   std::vector<f_t> crushed_solution;
+  std::vector<f_t> lower_bound;
+  std::vector<f_t> upper_bound;
+  std::vector<bool> bounds_changed;
   crush_primal_solution<i_t, f_t>(
     original_problem_, original_lp_, solution, new_slacks_, crushed_solution);
   f_t obj = compute_objective(original_lp_, crushed_solution);
   mutex_original_lp_.unlock();
-  bool is_feasible    = false;
-  bool attempt_repair = false;
-  mutex_upper_.lock();
+  bool is_feasible        = false;
+  bool attempt_repair     = false;
   f_t current_upper_bound = upper_bound_;
-  mutex_upper_.unlock();
+  i_t num_fixed           = 0;
+
   if (obj < current_upper_bound) {
     f_t primal_err;
     f_t bound_err;
@@ -484,6 +506,14 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
     if (is_feasible && obj < upper_bound_) {
       upper_bound_ = obj;
       incumbent_.set_incumbent_solution(obj, crushed_solution);
+
+      if (settings_.reduced_cost_strengthening >= 3) {
+        num_fixed = find_reduced_cost_fixings(obj, lower_bound, upper_bound, bounds_changed);
+        settings_.log.printf("H: Applied reduced cost fixing. obj=%.10e. num_fixed=%d.\n",
+                             compute_user_objective(original_lp_, obj),
+                             num_fixed);
+      }
+
     } else {
       attempt_repair         = true;
       constexpr bool verbose = false;
@@ -506,6 +536,14 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
     mutex_repair_.lock();
     repair_queue_.push_back(solution);
     mutex_repair_.unlock();
+  }
+
+  if (num_fixed > 0) {
+    bool feasible = update_root_bounds(lower_bound, upper_bound, bounds_changed);
+    if (!feasible) {
+      settings_.log.printf("Bound strenghtening failed when updating the bounds at the root node!");
+      solver_status_ = mip_status_t::NUMERICAL;
+    }
   }
 }
 
@@ -635,7 +673,12 @@ void branch_and_bound_t<i_t, f_t>::repair_heuristic_solutions()
       crush_primal_solution<i_t, f_t>(
         original_problem_, original_lp_, uncrushed_solution, new_slacks_, crushed_solution);
       std::vector<f_t> repaired_solution;
+      std::vector<f_t> lower_bound;
+      std::vector<f_t> upper_bound;
+      std::vector<bool> bounds_changed;
+      i_t num_fixed = 0;
       f_t repaired_obj;
+
       bool is_feasible =
         repair_solution(edge_norms_, crushed_solution, repaired_obj, repaired_solution);
       if (is_feasible) {
@@ -651,9 +694,27 @@ void branch_and_bound_t<i_t, f_t>::repair_heuristic_solutions()
             uncrush_primal_solution(original_problem_, original_lp_, repaired_solution, original_x);
             settings_.solution_callback(original_x, repaired_obj);
           }
+
+          if (settings_.reduced_cost_strengthening >= 3) {
+            num_fixed = find_reduced_cost_fixings(
+              upper_bound_.load(), lower_bound, upper_bound, bounds_changed);
+            settings_.log.printf(
+              "Repair H: Applied reduced cost fixing. obj=%.10e. num_fixed=%d.\n",
+              compute_user_objective(original_lp_, repaired_obj),
+              num_fixed);
+          }
         }
 
         mutex_upper_.unlock();
+
+        if (num_fixed > 0) {
+          bool feasible = update_root_bounds(lower_bound, upper_bound, bounds_changed);
+          if (!feasible) {
+            settings_.log.printf(
+              "Bound strenghtening failed when updating the bounds at the root node!");
+            solver_status_ = mip_status_t::NUMERICAL;
+          }
+        }
       }
     }
   }
@@ -778,6 +839,11 @@ void branch_and_bound_t<i_t, f_t>::add_feasible_solution(f_t leaf_objective,
                                                          search_strategy_t thread_type)
 {
   bool send_solution = false;
+  i_t num_fixed      = 0;
+
+  std::vector<f_t> lower_bound;
+  std::vector<f_t> upper_bound;
+  std::vector<bool> bounds_changed;
 
   settings_.log.debug("%c found a feasible solution with obj=%.10e.\n",
                       feasible_solution_symbol(thread_type),
@@ -789,6 +855,15 @@ void branch_and_bound_t<i_t, f_t>::add_feasible_solution(f_t leaf_objective,
     upper_bound_ = leaf_objective;
     report(feasible_solution_symbol(thread_type), leaf_objective, get_lower_bound(), leaf_depth, 0);
     send_solution = true;
+
+    if (settings_.reduced_cost_strengthening >= 3) {
+      num_fixed =
+        find_reduced_cost_fixings(leaf_objective, lower_bound, upper_bound, bounds_changed);
+      settings_.log.printf("%c: Applying reduced cost fixing. obj=%.10e. num_fixed=%d.\n",
+                           feasible_solution_symbol(thread_type),
+                           compute_user_objective(original_lp_, leaf_objective),
+                           num_fixed);
+    }
   }
 
   if (send_solution && settings_.solution_callback != nullptr) {
@@ -797,6 +872,14 @@ void branch_and_bound_t<i_t, f_t>::add_feasible_solution(f_t leaf_objective,
     settings_.solution_callback(original_x, upper_bound_);
   }
   mutex_upper_.unlock();
+
+  if (num_fixed > 0) {
+    bool feasible = update_root_bounds(lower_bound, upper_bound, bounds_changed);
+    if (!feasible) {
+      settings_.log.printf("Bound strenghtening failed when updating the bounds at the root node!");
+      solver_status_ = mip_status_t::NUMERICAL;
+    }
+  }
 }
 
 // Martin's criteria for the preferred rounding direction (see [1])
@@ -1175,7 +1258,6 @@ std::pair<node_status_t, rounding_direction_t> branch_and_bound_t<i_t, f_t>::upd
   dual::status_t lp_status,
   Policy& policy)
 {
-  constexpr f_t inf                      = std::numeric_limits<f_t>::infinity();
   const f_t abs_fathom_tol               = settings_.absolute_mip_gap_tol / 10;
   lp_problem_t<i_t, f_t>& leaf_problem   = worker->leaf_problem;
   lp_solution_t<i_t, f_t>& leaf_solution = worker->leaf_solution;
@@ -2275,32 +2357,35 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         return mip_status_t::NUMERICAL;
       }
 
+      std::vector<bool> bounds_changed;
+      std::vector<f_t> new_lower;
+      std::vector<f_t> new_upper;
+
       if (settings_.reduced_cost_strengthening >= 1 && upper_bound_.load() < last_upper_bound) {
         mutex_upper_.lock();
         last_upper_bound = upper_bound_.load();
-        std::vector<f_t> lower_bounds;
-        std::vector<f_t> upper_bounds;
-        find_reduced_cost_fixings(upper_bound_.load(), lower_bounds, upper_bounds);
+        find_reduced_cost_fixings(upper_bound_.load(), new_lower, new_upper, bounds_changed);
         mutex_upper_.unlock();
         mutex_original_lp_.lock();
-        original_lp_.lower = lower_bounds;
-        original_lp_.upper = upper_bounds;
+        original_lp_.lower = new_lower;
+        original_lp_.upper = new_upper;
         mutex_original_lp_.unlock();
       }
 
-      // Try to do bound strengthening
-      std::vector<bool> bounds_changed(original_lp_.num_cols, true);
-      std::vector<char> row_sense;
 #ifdef CHECK_MATRICES
       settings_.log.printf("Before A check\n");
       original_lp_.A.check_matrix();
 #endif
       original_lp_.A.to_compressed_row(Arow_);
 
+      // Try to do bound strengthening
+      std::vector<char> row_sense;
       f_t node_presolve_start_time = tic();
       bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
-      std::vector<f_t> new_lower = original_lp_.lower;
-      std::vector<f_t> new_upper = original_lp_.upper;
+      bounds_changed.assign(original_lp_.num_cols, true);
+      new_lower = original_lp_.lower;
+      new_upper = original_lp_.upper;
+
       bool feasible =
         node_presolve.bounds_strengthening(settings_, bounds_changed, new_lower, new_upper);
       mutex_original_lp_.lock();
@@ -2470,19 +2555,15 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   if (settings_.reduced_cost_strengthening >= 2 && upper_bound_.load() < last_upper_bound) {
     std::vector<f_t> lower_bounds;
     std::vector<f_t> upper_bounds;
-    i_t num_fixed = find_reduced_cost_fixings(upper_bound_.load(), lower_bounds, upper_bounds);
+    std::vector<bool> bounds_changed;
+
+    mutex_upper_.lock();
+    i_t num_fixed =
+      find_reduced_cost_fixings(upper_bound_.load(), lower_bounds, upper_bounds, bounds_changed);
+    mutex_upper_.unlock();
+
     if (num_fixed > 0) {
-      std::vector<bool> bounds_changed(original_lp_.num_cols, true);
-      std::vector<char> row_sense;
-
-      bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
-
-      mutex_original_lp_.lock();
-      original_lp_.lower = lower_bounds;
-      original_lp_.upper = upper_bounds;
-      bool feasible      = node_presolve.bounds_strengthening(
-        settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
-      mutex_original_lp_.unlock();
+      bool feasible = update_root_bounds(lower_bounds, upper_bounds, bounds_changed);
       if (!feasible) {
         settings_.log.printf("Bound strengthening failed\n");
         return mip_status_t::NUMERICAL;  // We had a feasible integer solution, but bound
