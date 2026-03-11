@@ -59,6 +59,7 @@ struct work_limit_context_t {
     std::make_unique<std::atomic<double>>(0.0)};
   double producer_progress_scale{
     read_work_unit_scale_env_or_default("CUOPT_GPU_HEUR_WORK_UNIT_SCALE", 1.0)};
+  double work_unit_scale{1.0};
 
   work_limit_context_t(const std::string& name) : name(name) {}
 
@@ -71,7 +72,8 @@ struct work_limit_context_t {
       name(other.name),
       producer_work_units_elapsed(std::make_unique<std::atomic<double>>(
         other.producer_work_units_elapsed->load(std::memory_order_acquire))),
-      producer_progress_scale(other.producer_progress_scale)
+      producer_progress_scale(other.producer_progress_scale),
+      work_unit_scale(other.work_unit_scale)
   {
   }
 
@@ -84,7 +86,8 @@ struct work_limit_context_t {
       name(std::move(other.name)),
       producer_work_units_elapsed(std::make_unique<std::atomic<double>>(
         other.producer_work_units_elapsed->load(std::memory_order_acquire))),
-      producer_progress_scale(other.producer_progress_scale)
+      producer_progress_scale(other.producer_progress_scale),
+      work_unit_scale(other.work_unit_scale)
   {
   }
 
@@ -100,6 +103,7 @@ struct work_limit_context_t {
     producer_work_units_elapsed = std::make_unique<std::atomic<double>>(
       other.producer_work_units_elapsed->load(std::memory_order_acquire));
     producer_progress_scale = other.producer_progress_scale;
+    work_unit_scale         = other.work_unit_scale;
     return *this;
   }
 
@@ -115,6 +119,7 @@ struct work_limit_context_t {
     producer_work_units_elapsed = std::make_unique<std::atomic<double>>(
       other.producer_work_units_elapsed->load(std::memory_order_acquire));
     producer_progress_scale = other.producer_progress_scale;
+    work_unit_scale         = other.work_unit_scale;
     return *this;
   }
 
@@ -131,9 +136,8 @@ struct work_limit_context_t {
   {
     producer_sync = producer_sync_;
     producer_work_units_elapsed->store(current_producer_work(), std::memory_order_release);
-    if (producer_progress_scale != 1.0) {
-      CUOPT_DETERMINISM_LOG_DEBUG(
-        "[%s] Using producer work-unit scale %f", name.c_str(), producer_progress_scale);
+    if (work_unit_scale != 1.0) {
+      CUOPT_DETERMINISM_LOG_DEBUG("[%s] Using work-unit scale %f", name.c_str(), work_unit_scale);
     }
   }
 
@@ -154,7 +158,8 @@ struct work_limit_context_t {
     if (!deterministic) return;
     cuopt_assert(std::isfinite(work), "Recorded work must be finite");
     cuopt_assert(work >= 0.0, "Recorded work must be non-negative");
-    const double total_work = global_work_units_elapsed + work;
+    const double scaled_work = work * work_unit_scale;
+    const double total_work  = global_work_units_elapsed + scaled_work;
     set_current_work(total_work, false);
     if (scheduler) { scheduler->on_work_recorded(*this, total_work); }
     if (producer_sync != nullptr) { producer_sync->notify_progress(); }
