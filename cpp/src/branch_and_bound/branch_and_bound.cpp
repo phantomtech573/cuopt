@@ -1330,9 +1330,12 @@ struct deterministic_bfs_policy_t
         }
         break;
       case node_status_t::NUMERICAL: this->worker.record_numerical(node); break;
+      case node_status_t::PENDING: this->worker.plunge_stack.push_back(node); break;
       default: break;
     }
-    if (status != node_status_t::HAS_CHILDREN) { this->worker.recompute_bounds_and_basis = true; }
+    if (status != node_status_t::HAS_CHILDREN && status != node_status_t::PENDING) {
+      this->worker.recompute_bounds_and_basis = true;
+    }
   }
 
   void on_numerical_issue(mip_node_t<i_t, f_t>* node) override
@@ -3448,25 +3451,16 @@ void branch_and_bound_t<i_t, f_t>::run_deterministic_bfs_loop(
       bool is_child                     = (node->parent == worker.last_solved_node);
       worker.recompute_bounds_and_basis = !is_child;
 
-      node_status_t status    = solve_node_deterministic(worker, node, search_tree);
-      worker.last_solved_node = node;
-      /*
-      settings_.log.printf(
-        "Deterministic BFS solved: worker=%d node_id=%d creation_seq=%d depth=%d status=%d "
-        "worker_clock=%.6f local_upper=%.16e global_upper=%.16e nodes_processed_h=%d\n",
-        worker.worker_id,
-        node->node_id,
-        node->creation_seq,
-        node->depth,
-        (int)status,
-        worker.clock,
-        worker.local_upper_bound,
-        upper_bound_.load(),
-        worker.nodes_processed_this_horizon);
-      */
+      node_status_t status = solve_node_deterministic(worker, node, search_tree);
+      worker.current_node  = nullptr;
 
-      worker.current_node = nullptr;
-      continue;
+      if (status == node_status_t::PENDING) {
+        // LP didn't finish (TIME_LIMIT/WORK_LIMIT). Node was re-enqueued by on_node_completed.
+        // Fall through to sync barrier instead of immediately retrying.
+      } else {
+        worker.last_solved_node = node;
+        continue;
+      }
     }
 
     // No work - advance to sync point to participate in barrier
@@ -3785,8 +3779,13 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
 
   exploration_stats_.total_lp_solve_time += toc(lp_start_time);
   exploration_stats_.total_lp_iters += node_iter;
-  ++exploration_stats_.nodes_explored;
-  --exploration_stats_.nodes_unexplored;
+
+  bool lp_conclusive =
+    (lp_status != dual::status_t::TIME_LIMIT && lp_status != dual::status_t::WORK_LIMIT);
+  if (lp_conclusive) {
+    ++exploration_stats_.nodes_explored;
+    --exploration_stats_.nodes_unexplored;
+  }
 
   deterministic_bfs_policy_t<i_t, f_t> policy{*this, worker};
   auto [status, round_dir] = update_tree_impl(node_ptr, search_tree, &worker, lp_status, policy);
@@ -4482,16 +4481,16 @@ void branch_and_bound_t<i_t, f_t>::deterministic_dive(
       lp_status                 = convert_lp_status_to_dual_status(second_status);
     }
 
-    ++nodes_this_dive;
-    ++worker.total_nodes_explored;
     worker.lp_iters_this_dive += node_iter;
-
     worker.clock = worker.work_context.global_work_units_elapsed;
 
     if (lp_status == dual::status_t::TIME_LIMIT || lp_status == dual::status_t::WORK_LIMIT ||
         lp_status == dual::status_t::ITERATION_LIMIT) {
       break;
     }
+
+    ++nodes_this_dive;
+    ++worker.total_nodes_explored;
 
     deterministic_diving_policy_t<i_t, f_t> policy{*this, worker, stack, max_backtrack_depth};
     update_tree_impl(node_ptr, dive_tree, &worker, lp_status, policy);
