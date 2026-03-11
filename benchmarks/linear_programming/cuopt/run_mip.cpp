@@ -12,6 +12,7 @@
 #include <cuopt/linear_programming/mip/solver_solution.hpp>
 #include <cuopt/linear_programming/optimization_problem_interface.hpp>
 #include <cuopt/linear_programming/solve.hpp>
+#include <cuopt/linear_programming/utilities/internals.hpp>
 #include <mps_parser/parser.hpp>
 #include <utilities/logger.hpp>
 
@@ -137,6 +138,58 @@ std::vector<std::vector<double>> read_solution_from_dir(const std::string file_p
   return initial_solutions;
 }
 
+struct incumbent_record_t {
+  double objective;
+  double work_timestamp;
+  double wall_time;
+  cuopt::internals::mip_solution_origin_t origin;
+};
+
+class incumbent_tracker_t : public cuopt::internals::get_solution_callback_ext_t {
+ public:
+  incumbent_tracker_t(std::chrono::high_resolution_clock::time_point start_time)
+    : start_time_(start_time)
+  {
+  }
+
+  void get_solution(void* data,
+                    void* cost,
+                    void* solution_bound,
+                    const cuopt::internals::mip_solution_callback_info_t* info,
+                    void* user_data) override
+  {
+    double obj = *static_cast<double*>(cost);
+    double wt  = (info != nullptr) ? info->work_timestamp : -1.0;
+    auto origin =
+      (info != nullptr) ? info->origin : cuopt::internals::mip_solution_origin_t::UNKNOWN;
+    auto now      = std::chrono::high_resolution_clock::now();
+    double wall_s = std::chrono::duration<double>(now - start_time_).count();
+    records_.push_back({obj, wt, wall_s, origin});
+  }
+
+  void write_csv(const std::string& path) const
+  {
+    std::ofstream f(path);
+    if (!f.is_open()) {
+      fprintf(stderr, "Failed to open incumbent CSV: %s\n", path.c_str());
+      return;
+    }
+    f << "index,objective,work_timestamp,wall_time_s,origin\n";
+    for (size_t i = 0; i < records_.size(); ++i) {
+      auto& r = records_[i];
+      f << i << "," << std::setprecision(15) << r.objective << "," << r.work_timestamp << ","
+        << std::setprecision(6) << r.wall_time << ","
+        << cuopt::internals::mip_solution_origin_to_string(r.origin) << "\n";
+    }
+  }
+
+  size_t size() const { return records_.size(); }
+
+ private:
+  std::chrono::high_resolution_clock::time_point start_time_;
+  std::vector<incumbent_record_t> records_;
+};
+
 int run_single_file(std::string file_path,
                     int device,
                     int batch_id,
@@ -223,12 +276,14 @@ int run_single_file(std::string file_path,
   settings.presolver                     = cuopt::linear_programming::presolver_t::Default;
   settings.reliability_branching         = reliability_branching;
   settings.seed                          = 42;
-  settings.bnb_work_unit_scale           = 0.1;
+  settings.bnb_work_unit_scale           = 1;
   settings.gpu_heur_work_unit_scale      = 0.4;
   settings.mip_scaling                   = false;
   cuopt::linear_programming::benchmark_info_t benchmark_info;
   settings.benchmark_info_ptr = &benchmark_info;
   auto start_run_solver       = std::chrono::high_resolution_clock::now();
+  incumbent_tracker_t incumbent_tracker(start_run_solver);
+  settings.set_mip_callback(&incumbent_tracker);
   auto solution = cuopt::linear_programming::solve_mip(&handle_, mps_data_model, settings);
   CUOPT_LOG_INFO(
     "first obj: %f last improvement of best feasible: %f last improvement after recombination: %f",
@@ -264,7 +319,13 @@ int run_single_file(std::string file_path,
      << benchmark_info.last_improvement_after_recombination << "," << mip_gap << "," << is_optimal
      << "\n";
   write_to_output_file(out_dir, base_filename, device, n_gpus, batch_id, ss.str());
-  CUOPT_LOG_INFO("Results written to the file %s", base_filename.c_str());
+  if (!out_dir.empty() && incumbent_tracker.size() > 0) {
+    std::string mps_stem = base_filename.substr(0, base_filename.find(".mps"));
+    std::string csv_path = out_dir + "/" + mps_stem + "_incumbents.csv";
+    incumbent_tracker.write_csv(csv_path);
+    CUOPT_LOG_INFO(
+      "Incumbent trace (%zu entries) written to %s", incumbent_tracker.size(), csv_path.c_str());
+  }
   return sol_found;
 }
 
