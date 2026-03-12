@@ -869,7 +869,7 @@ void fj_t<i_t, f_t>::refresh_lhs_and_violation(const rmm::cuda_stream_view& stre
     thrust::plus<f_t>());
   data.violation_score.set_value_async(violation, stream);
   data.weighted_violation_score.set_value_async(weighted_violation, stream);
-  if (is_deterministic_mode(context.settings.determinism_mode)) {
+  if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
     data.violated_constraints.sort(stream);
   }
 #if FJ_SINGLE_STEP
@@ -1064,7 +1064,7 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
   auto& data                       = *climbers[climber_idx];
   auto v                           = data.view();  // == climber_views[climber_idx]
   const double work_units_at_start = context.gpu_heur_loop.current_work();
-  const bool publish_progress      = is_deterministic_mode(context.settings.determinism_mode) &&
+  const bool publish_progress      = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
                                 context.branch_and_bound_ptr != nullptr &&
                                 std::isfinite(settings.work_limit) && settings.work_limit > 0.0 &&
                                 settings.iteration_limit > 0 &&
@@ -1293,7 +1293,7 @@ template <typename i_t, typename f_t>
 i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range scope("fj_solve");
-  bool deterministic = is_deterministic_mode(context.settings.determinism_mode);
+  bool deterministic = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB);
   if (deterministic) {
     settings.time_limit = std::max((f_t)0.0, settings.time_limit);
     settings.work_limit = settings.time_limit;
@@ -1429,7 +1429,7 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
       // Compute the work unit corresponding to the number of iterations elapsed
       // by incrementally guessing work units until the model predicts >= actual iterations
       // TODO: awfully ugly, change
-      if (is_deterministic_mode(context.settings.determinism_mode) && iterations > 0) {
+      if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB) && iterations > 0) {
         double guessed_work         = 0.0;
         const double work_increment = 0.1;
         const double max_work       = settings.work_limit * 2.0;  // Safety limit

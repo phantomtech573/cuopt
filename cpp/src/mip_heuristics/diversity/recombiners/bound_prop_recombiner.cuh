@@ -164,24 +164,24 @@ class bound_prop_recombiner_t : public recombiner_t<i_t, f_t> {
       "n_vars_from_guiding %d n_vars_from_other %d", n_vars_from_guiding, n_vars_from_other);
 
     // DETERMINISM DEBUG: Log everything that could affect divergence
-    CUOPT_LOG_TRACE("BP_DET: sol_a_hash=0x%x sol_b_hash=0x%x offspring_hash=0x%x, seed %x",
-                    a.get_hash(),
-                    b.get_hash(),
-                    offspring.get_hash(),
-                    seed);
-    CUOPT_LOG_TRACE("BP_DET: n_different_vars=%d n_vars_from_other=%d n_vars_from_guiding=%d",
-                    n_different_vars,
-                    n_vars_from_other,
-                    n_vars_from_guiding);
-    CUOPT_LOG_TRACE(
+    CUOPT_DETERMINISM_LOG("BP_DET: sol_a_hash=0x%x sol_b_hash=0x%x offspring_hash=0x%x, seed %x",
+                          a.get_hash(),
+                          b.get_hash(),
+                          offspring.get_hash(),
+                          seed);
+    CUOPT_DETERMINISM_LOG("BP_DET: n_different_vars=%d n_vars_from_other=%d n_vars_from_guiding=%d",
+                          n_different_vars,
+                          n_vars_from_other,
+                          n_vars_from_guiding);
+    CUOPT_DETERMINISM_LOG(
       "BP_DET: remaining_indices_hash=0x%x (first %d elements)",
       detail::compute_hash(make_span(this->remaining_indices), a.handle_ptr->get_stream()),
       std::min((i_t)10, n_vars_from_other));
-    CUOPT_LOG_TRACE("BP_DET: guiding_feasible=%d other_feasible=%d expensive_to_fix=%d",
-                    guiding_solution.get_feasible(),
-                    other_solution.get_feasible(),
-                    a.problem_ptr->expensive_to_fix_vars);
-    CUOPT_LOG_TRACE(
+    CUOPT_DETERMINISM_LOG("BP_DET: guiding_feasible=%d other_feasible=%d expensive_to_fix=%d",
+                          guiding_solution.get_feasible(),
+                          other_solution.get_feasible(),
+                          a.problem_ptr->expensive_to_fix_vars);
+    CUOPT_DETERMINISM_LOG(
       "BP_DET: fixed_from_guiding=%d fixed_from_other=%d", fixed_from_guiding, fixed_from_other);
 
     // if either all integers are from A(meaning all are common) or all integers are from B(meaning
@@ -200,13 +200,13 @@ class bound_prop_recombiner_t : public recombiner_t<i_t, f_t> {
                                                                a.handle_ptr->get_stream());
     probing_config_t<i_t, f_t> probing_config(a.problem_ptr->n_variables, a.handle_ptr);
     if (guiding_solution.get_feasible() && !a.problem_ptr->expensive_to_fix_vars) {
-      CUOPT_LOG_DEBUG("BP_DET: Taking FEASIBLE path (with variable fixing)");
+      CUOPT_DETERMINISM_LOG("BP_DET: Taking FEASIBLE path (with variable fixing)");
       this->compute_vars_to_fix(offspring, vars_to_fix, n_vars_from_other, n_vars_from_guiding);
-      CUOPT_LOG_DEBUG("BP_DET: vars_to_fix_size=%lu", vars_to_fix.size());
+      CUOPT_DETERMINISM_LOG("BP_DET: vars_to_fix_size=%lu", vars_to_fix.size());
       auto [fixed_problem, fixed_assignment, variable_map] = offspring.fix_variables(vars_to_fix);
-      CUOPT_LOG_DEBUG("BP_DET: fixed_problem_fingerprint=0x%x variable_map_size=%lu",
-                      fixed_problem.get_fingerprint(),
-                      variable_map.size());
+      CUOPT_DETERMINISM_LOG("BP_DET: fixed_problem_fingerprint=0x%x variable_map_size=%lu",
+                            fixed_problem.get_fingerprint(),
+                            variable_map.size());
       work_limit_timer_t timer(this->context.gpu_heur_loop,
                                bp_recombiner_config_t::bounds_prop_time_limit,
                                *this->context.termination);
@@ -252,20 +252,21 @@ class bound_prop_recombiner_t : public recombiner_t<i_t, f_t> {
       }
       a.handle_ptr->sync_stream();
     } else {
-      CUOPT_LOG_TRACE("BP_DET: Taking INFEASIBLE path (no variable fixing)");
+      CUOPT_DETERMINISM_LOG("BP_DET: Taking INFEASIBLE path (no variable fixing)");
       work_limit_timer_t timer(this->context.gpu_heur_loop,
                                bp_recombiner_config_t::bounds_prop_time_limit,
                                *this->context.termination);
       get_probing_values_for_infeasible(
         guiding_solution, other_solution, offspring, probing_values, n_vars_from_other);
       probing_config.probing_values = host_copy(probing_values, offspring.handle_ptr->get_stream());
-      CUOPT_LOG_TRACE("BP_DET: probing_values_hash=0x%x",
-                      detail::compute_hash(make_span(probing_values), a.handle_ptr->get_stream()));
+      CUOPT_DETERMINISM_LOG(
+        "BP_DET: probing_values_hash=0x%x",
+        detail::compute_hash(make_span(probing_values), a.handle_ptr->get_stream()));
       constraint_prop.apply_round(offspring, lp_run_time_after_feasible, timer, probing_config);
     }
-    CUOPT_LOG_TRACE("BP_DET: After apply_round: offspring_hash=0x%x feasible=%d",
-                    offspring.get_hash(),
-                    offspring.get_feasible());
+    CUOPT_DETERMINISM_LOG("BP_DET: After apply_round: offspring_hash=0x%x feasible=%d",
+                          offspring.get_hash(),
+                          offspring.get_feasible());
     constraint_prop.max_n_failed_repair_iterations = 1;
     cuopt_func_call(offspring.test_number_all_integer());
     bool better_cost_than_parents =
@@ -285,7 +286,7 @@ class bound_prop_recombiner_t : public recombiner_t<i_t, f_t> {
         bp_recombiner_config_t::decrease_max_n_of_vars_from_other();
       }
     }
-    CUOPT_LOG_TRACE(
+    CUOPT_DETERMINISM_LOG(
       "BP_DET: Final offspring_hash=0x%x same_as_parents=%d better_cost=%d better_feas=%d",
       offspring.get_hash(),
       same_as_parents,

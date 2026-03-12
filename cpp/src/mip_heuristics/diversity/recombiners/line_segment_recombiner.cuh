@@ -71,7 +71,7 @@ class line_segment_recombiner_t : public recombiner_t<i_t, f_t> {
                                                            const weight_t<i_t, f_t>& weights)
   {
     raft::common::nvtx::range fun_scope("line_segment_recombiner");
-    CUOPT_LOG_TRACE("LS rec: a %d b %d", a.get_hash(), b.get_hash());
+    CUOPT_DETERMINISM_LOG("LS rec: a %d b %d", a.get_hash(), b.get_hash());
     auto& guiding_solution = a.get_feasible() ? a : b;
     auto& other_solution   = a.get_feasible() ? b : a;
     // copy the solution from A

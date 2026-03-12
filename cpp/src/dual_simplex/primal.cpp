@@ -14,8 +14,6 @@
 #include <dual_simplex/solve.hpp>
 #include <dual_simplex/tic_toc.hpp>
 
-#include <raft/core/nvtx.hpp>
-
 namespace cuopt::linear_programming::dual_simplex {
 
 namespace {
@@ -256,7 +254,6 @@ primal::status_t primal_phase2(i_t phase,
                                lp_solution_t<i_t, f_t>& sol,
                                i_t& iter)
 {
-  raft::common::nvtx::range scope("PrimalSimplex::phase2");
   const i_t m = lp.num_rows;
   const i_t n = lp.num_cols;
   assert(m <= n);

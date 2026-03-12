@@ -127,7 +127,7 @@ diversity_manager_t<i_t, f_t>::diversity_manager_t(mip_solver_context_t<i_t, f_t
     }
   }
 
-  context.gpu_heur_loop.deterministic = is_deterministic_mode(context.settings.determinism_mode);
+  context.gpu_heur_loop.deterministic = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB);
 }
 
 // this function is to specialize the local search with config from diversity manager
@@ -237,7 +237,7 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit,
   if (!problem_ptr->empty && !check_bounds_sanity(*problem_ptr)) { return false; }
   const bool run_clique_table = !presolve_timer.check_time_limit() &&
                                 !context.settings.heuristics_only && !problem_ptr->empty &&
-                                !is_deterministic_mode(context.settings.determinism_mode);
+                                !(context.settings.determinism_mode & CUOPT_DETERMINISM_BB);
   if (run_clique_table) {
     f_t time_limit_for_clique_table = std::min(3., presolve_timer.remaining_time() / 5);
     timer_t clique_timer(time_limit_for_clique_table);
@@ -393,7 +393,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
 
   CUOPT_LOG_DEBUG(
     "Determinism mode: %s",
-    is_deterministic_mode(context.settings.determinism_mode) ? "deterministic" : "opportunistic");
+    (context.settings.determinism_mode & CUOPT_DETERMINISM_BB) ? "deterministic" : "opportunistic");
 
   // to automatically compute the solving time on scope exit
   auto timer_raii_guard =
@@ -414,7 +414,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   const char* disable_heuristics_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
   if (disable_heuristics_env != nullptr && std::string(disable_heuristics_env) == "1") {
     CUOPT_LOG_INFO("GPU heuristics disabled via CUOPT_DISABLE_GPU_HEURISTICS=1");
-    if (is_deterministic_mode(context.settings.determinism_mode) &&
+    if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
         context.branch_and_bound_ptr != nullptr) {
       auto& producer_sync = context.branch_and_bound_ptr->get_producer_sync();
       producer_sync.registration_complete();
@@ -437,7 +437,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     producer_sync.deregister_producer(context.gpu_heur_loop.producer_progress_ptr());
     context.gpu_heur_loop.detach_producer_sync();
   });
-  if (is_deterministic_mode(context.settings.determinism_mode) &&
+  if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
       context.branch_and_bound_ptr != nullptr) {
     if (context.settings.gpu_heur_wait_for_exploration) {
       CUOPT_LOG_INFO("GPU heuristics waiting for B&B tree exploration to start...");
@@ -488,7 +488,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   // Run CPUFJ early to find quick initial solutions
   ls_cpufj_raii_guard_t ls_cpufj_raii_guard(ls);  // RAII to stop cpufj threads on solve stop
 
-  if (!diversity_config.dry_run && context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
+  if (!diversity_config.dry_run && !(context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
     ls.start_cpufj_scratch_threads(population);
   }
 
@@ -665,8 +665,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
                     lp_rounded_sol.get_user_objective());
     population.add_solution(std::move(lp_rounded_sol),
                             internals::mip_solution_origin_t::LP_ROUNDING);
-    if (!diversity_config.dry_run &&
-        context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
+    if (!diversity_config.dry_run && !(context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       ls.start_cpufj_lptopt_scratch_threads(population);
     }
   }
@@ -703,7 +702,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     log_return_solution("fj_only_run", sol);
     return sol;
   }
-  if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) { rins.enable(); }
+  if (!(context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) { rins.enable(); }
 
   generate_solution(timer.remaining_time(), false);
   if (diversity_config.initial_solution_only) {
@@ -877,7 +876,7 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
                   sol1.get_feasible(),
                   sol2.get_quality(population.weights),
                   sol2.get_feasible());
-  bool deterministic                = is_deterministic_mode(context.settings.determinism_mode);
+  bool deterministic                = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB);
   double best_objective_of_parents  = std::min(sol1.get_objective(), sol2.get_objective());
   bool at_least_one_parent_feasible = sol1.get_feasible() || sol2.get_feasible();
   // randomly choose among 3 recombiners

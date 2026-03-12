@@ -110,7 +110,7 @@ class recombiner_t {
                  this->remaining_indices.data(),
                  this->remaining_indices.data() + remaining_variables);
 
-    CUOPT_LOG_TRACE(
+    CUOPT_DETERMINISM_LOG(
       "remaining indices hash 0x%x, size %d",
       detail::compute_hash(make_span(this->remaining_indices), a.handle_ptr->get_stream()),
       remaining_variables);
@@ -195,12 +195,12 @@ class recombiner_t {
                            i_t n_vars_from_guiding)
   {
     vars_to_fix.resize(n_vars_from_guiding, offspring.handle_ptr->get_stream());
-    CUOPT_LOG_TRACE(
+    CUOPT_DETERMINISM_LOG(
       "remaining indices hash 0x%x",
       detail::compute_hash(make_span(this->remaining_indices), offspring.handle_ptr->get_stream()));
-    CUOPT_LOG_TRACE("integer_indices hash 0x%x",
-                    detail::compute_hash(make_span(offspring.problem_ptr->integer_indices),
-                                         offspring.handle_ptr->get_stream()));
+    CUOPT_DETERMINISM_LOG("integer_indices hash 0x%x",
+                          detail::compute_hash(make_span(offspring.problem_ptr->integer_indices),
+                                               offspring.handle_ptr->get_stream()));
     // set difference needs two sorted arrays
     thrust::sort(offspring.handle_ptr->get_thrust_policy(),
                  this->remaining_indices.data(),
@@ -232,8 +232,7 @@ class recombiner_t {
     const bool disable_submip_for_continuous_limit =
       n_continuous_vars > (i_t)sub_mip_recombiner_config_t::max_continuous_vars;
     const bool disable_submip_for_determinism =
-      context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC ||
-      context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS;
+      (context.settings.determinism_mode & CUOPT_DETERMINISM_BB) != 0;
     for (auto recombiner : recombiner_types) {
       enabled_recombiners.insert(recombiner);
     }

@@ -858,7 +858,7 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
   bound_presolve.settings.time_limit      = timer.remaining_time();
 
   // TODO: proper work unit accounting in deterministic mode for the probing cache
-  if (is_deterministic_mode(bound_presolve.context.settings.determinism_mode)) {
+  if ((bound_presolve.context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
     bound_presolve.settings.iteration_limit = 1;
     priority_indices.resize(std::min<size_t>(priority_indices.size(), 2048));
   }

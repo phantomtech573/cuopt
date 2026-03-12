@@ -144,45 +144,47 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
     lp_solver.set_initial_primal_solution(assignment);
     lp_solver.set_initial_dual_solution(lp_state.prev_dual);
   }
-  // CUOPT_LOG_DEBUG(
-  //   "running LP with n_vars %d n_cstr %d", op_problem.n_variables, op_problem.n_constraints);
+  CUOPT_LOG_TRACE(
+    "running LP with n_vars %d n_cstr %d", op_problem.n_variables, op_problem.n_constraints);
   // before LP flush the logs as it takes quite some time
   cuopt::default_logger().flush();
   // temporarily add timer
   auto start_time = timer_t(pdlp_settings.time_limit);
   lp_solver.set_inside_mip(true);
-  CUOPT_LOG_DEBUG(
+  CUOPT_DETERMINISM_LOG_INFO(
     "prev solution sizes primal=%lu dual=%lu", assignment.size(), lp_state.prev_dual.size());
   auto solver_response = lp_solver.run_solver(start_time);
-  CUOPT_LOG_DEBUG("post LP primal size %lu", solver_response.get_primal_solution().size());
+  CUOPT_DETERMINISM_LOG_INFO("post LP primal size %lu",
+                             solver_response.get_primal_solution().size());
   const int actual_iters =
     solver_response.get_additional_termination_information().number_of_steps_taken;
-  CUOPT_LOG_DEBUG("LP call %lu result: status=%d iters=%d primal_hash=0x%x",
-                  lp_call_id,
-                  (int)solver_response.get_termination_status(),
-                  actual_iters,
-                  solver_response.get_primal_solution().size() != 0
-                    ? detail::compute_hash(solver_response.get_primal_solution(),
-                                           op_problem.handle_ptr->get_stream())
-                    : 0u);
+  CUOPT_DETERMINISM_LOG_INFO("LP call %lu result: status=%d iters=%d primal_hash=0x%x",
+                             lp_call_id,
+                             (int)solver_response.get_termination_status(),
+                             actual_iters,
+                             solver_response.get_primal_solution().size() != 0
+                               ? detail::compute_hash(solver_response.get_primal_solution(),
+                                                      op_problem.handle_ptr->get_stream())
+                               : 0u);
   if (determinism_mode && settings.work_context != nullptr) {
     double work_to_record = settings.work_limit;
     if (estim_iters > 0) {
       work_to_record =
         settings.work_limit * std::clamp((double)actual_iters / (double)estim_iters, 0.0, 1.0);
     }
-    CUOPT_LOG_DEBUG("LP call %lu recording %.6fwu (actual_iters=%d estim_iters=%d requested=%.6f)",
-                    lp_call_id,
-                    work_to_record,
-                    actual_iters,
-                    estim_iters,
-                    settings.work_limit);
+    CUOPT_DETERMINISM_LOG_INFO(
+      "LP call %lu recording %.6fwu (actual_iters=%d estim_iters=%d requested=%.6f)",
+      lp_call_id,
+      work_to_record,
+      actual_iters,
+      estim_iters,
+      settings.work_limit);
     settings.work_context->record_work_sync_on_horizon(work_to_record);
   }
 
   if (solver_response.get_primal_solution().size() != 0 &&
       solver_response.get_dual_solution().size() != 0 && settings.save_state) {
-    // CUOPT_LOG_DEBUG("saving initial primal solution of size %d", lp_state.prev_primal.size());
+    CUOPT_LOG_TRACE("saving initial primal solution of size %d", lp_state.prev_primal.size());
     lp_state.set_state(solver_response.get_primal_solution(), solver_response.get_dual_solution());
   }
   if (solver_response.get_primal_solution().size() != 0) {
@@ -192,83 +194,18 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
                solver_response.get_primal_solution().size(),
                op_problem.handle_ptr->get_stream());
   }
-  CUOPT_LOG_DEBUG("LP call %lu assignment_after_copy hash=0x%x",
-                  lp_call_id,
-                  detail::compute_hash(assignment, op_problem.handle_ptr->get_stream()));
+  CUOPT_DETERMINISM_LOG_INFO("LP call %lu assignment_after_copy hash=0x%x",
+                             lp_call_id,
+                             detail::compute_hash(assignment, op_problem.handle_ptr->get_stream()));
   if (solver_response.get_termination_status() == pdlp_termination_status_t::Optimal) {
-    // CUOPT_LOG_DEBUG("feasible solution found with LP objective %f",
-    //                 solver_response.get_objective_value());
+    CUOPT_LOG_TRACE("feasible solution found with LP objective %f",
+                    solver_response.get_objective_value());
   } else {
-    CUOPT_LOG_DEBUG("LP returned with reason %d, %d iterations",
-                    solver_response.get_termination_status(),
-                    solver_response.get_additional_termination_information().number_of_steps_taken);
+    CUOPT_DETERMINISM_LOG_INFO(
+      "LP returned with reason %d, %d iterations",
+      solver_response.get_termination_status(),
+      solver_response.get_additional_termination_information().number_of_steps_taken);
   }
-
-  // auto function_end_time = std::chrono::high_resolution_clock::now();
-  // auto elapsed_ms =
-  //   std::chrono::duration_cast<std::chrono::milliseconds>(function_end_time -
-  //   function_start_time)
-  //     .count();
-  // CUOPT_LOG_DEBUG("get_relaxed_lp_solution took %lld ms for %d iterations",
-  //                 elapsed_ms,
-  //                 solver_response.get_additional_termination_information().number_of_steps_taken);
-
-  // // === PDLP PREDICTOR RESULTS - START ===
-  // auto term_info           = solver_response.get_additional_termination_information();
-  // const i_t n_vars         = op_problem.n_variables;
-  // const i_t n_cstrs        = op_problem.n_constraints;
-  // const int64_t nnz        = op_problem.nnz;
-  // const int64_t total_spmv = lp_solver.get_total_spmv_ops();
-  // const int64_t total_nnz  = total_spmv * nnz;
-  // const double nnz_per_sec =
-  //   (elapsed_ms > 0) ? static_cast<double>(total_nnz) / (elapsed_ms / 1000.0) : 0.0;
-  // const double nnz_per_iter = (term_info.number_of_steps_taken > 0)
-  //                               ? static_cast<double>(total_nnz) /
-  //                               term_info.number_of_steps_taken : 0.0;
-
-  // // Compute sparsity metrics
-  // const double sparsity                  = (n_cstrs > 0 && n_vars > 0)
-  //                                            ? static_cast<double>(nnz) /
-  //                                            (static_cast<double>(n_cstrs) * n_vars) : 0.0;
-  // double nnz_stddev                      = 0.0;
-  // [[maybe_unused]] double unbalancedness = 0.0;
-  // if (op_problem.offsets.size() == static_cast<size_t>(n_cstrs + 1) && n_cstrs > 0) {
-  //   std::vector<i_t> h_offsets(n_cstrs + 1);
-  //   raft::copy(h_offsets.data(),
-  //              op_problem.offsets.data(),
-  //              n_cstrs + 1,
-  //              op_problem.handle_ptr->get_stream());
-  //   op_problem.handle_ptr->sync_stream();
-
-  //   const double mean_nnz = static_cast<double>(nnz) / n_cstrs;
-  //   double variance_sum   = 0.0;
-  //   for (i_t row = 0; row < n_cstrs; ++row) {
-  //     const double row_nnz = static_cast<double>(h_offsets[row + 1] - h_offsets[row]);
-  //     const double diff    = row_nnz - mean_nnz;
-  //     variance_sum += diff * diff;
-  //   }
-  //   const double variance = variance_sum / n_cstrs;
-  //   nnz_stddev            = std::sqrt(variance);
-  //   unbalancedness        = (mean_nnz > 0) ? nnz_stddev / mean_nnz : 0.0;
-  // }
-
-  // CUOPT_LOG_INFO(
-  //   "PDLP_RESULT: n_vars=%d n_cstrs=%d nnz=%ld sparsity=%.6f nnz_stddev=%.6f unbalancedness=%.6f
-  //   " "iters=%d time_ms=%lld term=%d spmv_ops=%ld total_nnz=%.2e nnz/s=%.2e nnz/iter=%.2e",
-  //   n_vars,
-  //   n_cstrs,
-  //   nnz,
-  //   sparsity,
-  //   nnz_stddev,
-  //   unbalancedness,
-  //   term_info.number_of_steps_taken,
-  //   elapsed_ms,
-  //   static_cast<int>(solver_response.get_termination_status()),
-  //   total_spmv,
-  //   static_cast<double>(total_nnz),
-  //   nnz_per_sec,
-  //   nnz_per_iter);
-  // === PDLP PREDICTOR RESULTS - END ===
 
   return solver_response;
 }

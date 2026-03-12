@@ -23,18 +23,19 @@ class Callback {
 };
 
 enum class mip_solution_origin_t : uint32_t {
-  UNKNOWN                 = 0,
-  BRANCH_AND_BOUND_NODE   = 1,
-  BRANCH_AND_BOUND        = BRANCH_AND_BOUND_NODE,
-  FEASIBILITY_JUMP        = 2,
-  LOCAL_SEARCH            = 3,
-  QUICK_FEASIBLE          = 4,
-  USER_INITIAL            = 5,
-  LP_ROUNDING             = 6,
-  RECOMBINATION           = 7,
-  SUB_MIP                 = 8,
-  CPU_FEASIBILITY_JUMP    = 9,
-  BRANCH_AND_BOUND_DIVING = 10,
+  UNKNOWN = 0,
+  BRANCH_AND_BOUND_NODE,
+  BRANCH_AND_BOUND = BRANCH_AND_BOUND_NODE,
+  FEASIBILITY_JUMP,
+  LOCAL_SEARCH,
+  QUICK_FEASIBLE,
+  USER_INITIAL,
+  LP_ROUNDING,
+  RECOMBINATION,
+  SUB_MIP,
+  CPU_FEASIBILITY_JUMP,
+  BRANCH_AND_BOUND_DIVING,
+  RINS,
 };
 
 constexpr const char* mip_solution_origin_to_string(mip_solution_origin_t origin)

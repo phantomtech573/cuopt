@@ -75,10 +75,16 @@
 #define CUOPT_USER_PROBLEM_FILE               "user_problem_file"
 #define CUOPT_RANDOM_SEED                     "random_seed"
 
-/* @brief MIP determinism mode constants */
-#define CUOPT_MODE_OPPORTUNISTIC                0
-#define CUOPT_MODE_DETERMINISTIC                1
-#define CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS 2
+/* @brief MIP determinism mode flags (bitset) */
+#define CUOPT_DETERMINISM_NONE           0x0
+#define CUOPT_DETERMINISM_BB             0x1
+#define CUOPT_DETERMINISM_GPU_HEURISTICS 0x2
+#define CUOPT_DETERMINISM_FULL           (CUOPT_DETERMINISM_BB | CUOPT_DETERMINISM_GPU_HEURISTICS)
+
+/* Backward compatibility aliases */
+#define CUOPT_MODE_OPPORTUNISTIC                CUOPT_DETERMINISM_NONE
+#define CUOPT_MODE_DETERMINISTIC                CUOPT_DETERMINISM_FULL
+#define CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS CUOPT_DETERMINISM_GPU_HEURISTICS
 
 /* @brief LP/MIP termination status constants */
 #define CUOPT_TERIMINATION_STATUS_NO_TERMINATION   0

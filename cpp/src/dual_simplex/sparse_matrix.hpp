@@ -185,8 +185,8 @@ class csr_matrix_t {
   static_assert(std::is_signed_v<i_t>);
 };
 
-template <typename i_t, typename OutputVector>
-void cumulative_sum(std::vector<i_t>& inout, OutputVector& output);
+template <typename i_t>
+void cumulative_sum(std::vector<i_t>& inout, std::vector<i_t>& output);
 
 template <typename i_t, typename f_t>
 i_t coo_to_csc(const std::vector<i_t>& Ai,

@@ -500,7 +500,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
   if (timer.deterministic) {
     const double setup_work = estimate_bounds_repair_setup_work(problem);
     record_estimated_work(timer, &total_estimated_work, setup_work);
-    CUOPT_LOG_DEBUG(
+    CUOPT_DETERMINISM_LOG_INFO(
       "Repair entry: pb_hash=0x%x bounds_hash=0x%x violated_hash=0x%x n_violated=%d "
       "best_violation=%.6f timer_rem=%.6f total_work=%.6f setup_work=%.6f",
       problem.get_fingerprint(),
@@ -686,11 +686,12 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
   // copy best bounds into problem
   best_bounds.update_to(problem, handle_ptr);
   if (timer.deterministic) {
-    CUOPT_LOG_DEBUG("Repair work estimate: loops=%d total=%.6f best_violation=%.6f feasible=%d",
-                    repair_iterations,
-                    total_estimated_work,
-                    best_violation,
-                    (int)feasible);
+    CUOPT_DETERMINISM_LOG(
+      "Repair work estimate: loops=%d total=%.6f best_violation=%.6f feasible=%d",
+      repair_iterations,
+      total_estimated_work,
+      best_violation,
+      (int)feasible);
   }
   CUOPT_LOG_DEBUG("Repair: returning with feas: %d vio %f", feasible, best_violation);
   return feasible;

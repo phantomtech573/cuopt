@@ -68,7 +68,7 @@ local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context
 template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::start_cpufj_scratch_threads(population_t<i_t, f_t>& population)
 {
-  cuopt_assert(context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC,
+  cuopt_assert(!(context.settings.determinism_mode & CUOPT_DETERMINISM_BB),
                "Scratch CPUFJ must remain opportunistic-only");
   pop_ptr = &population;
 
@@ -119,7 +119,7 @@ template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::start_cpufj_lptopt_scratch_threads(
   population_t<i_t, f_t>& population)
 {
-  cuopt_assert(context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC,
+  cuopt_assert(!(context.settings.determinism_mode & CUOPT_DETERMINISM_BB),
                "LP-opt CPUFJ scratch must remain opportunistic-only");
   pop_ptr = &population;
 
@@ -223,7 +223,7 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
                                            const std::string& source)
 {
   if (time_limit == 0.) return solution.get_feasible();
-  const bool deterministic = is_deterministic_mode(context.settings.determinism_mode);
+  const bool deterministic = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB);
 
   work_limit_timer_t timer(context.gpu_heur_loop, time_limit, *context.termination);
   const auto old_n_cstr_weights      = in_fj.cstr_weights.size();

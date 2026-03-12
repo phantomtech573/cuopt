@@ -344,7 +344,7 @@ void rins_t<i_t, f_t>::run_rins()
                    "Assignment size mismatch");
       dm.population.add_external_solution(best_sol.get_host_assignment(),
                                           best_sol.get_objective(),
-                                          internals::mip_solution_origin_t::LOCAL_SEARCH);
+                                          internals::mip_solution_origin_t::RINS);
     }
   }
 

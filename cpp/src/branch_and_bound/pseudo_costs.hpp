@@ -523,7 +523,8 @@ class pseudo_costs_t {
 // Core reliability branching loop usable by both opportunistic and deterministic paths.
 // When num_tasks == 1, runs serially with no locking (deterministic).
 // When num_tasks > 1 with mutexes/rng, uses OMP taskloop (opportunistic).
-template <typename i_t, typename f_t>
+// SumT/CountT can be f_t/i_t (deterministic snapshot) or omp_atomic_t<f_t>/omp_atomic_t<i_t>.
+template <typename i_t, typename f_t, typename SumT, typename CountT, typename SBIterT>
 i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
                                      const std::vector<i_t>& fractional,
                                      const std::vector<f_t>& solution,
@@ -534,12 +535,12 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
                                      const basis_update_mpf_t<i_t, f_t>& basis_factors,
                                      const std::vector<i_t>& basic_list,
                                      const std::vector<i_t>& nonbasic_list,
-                                     f_t* sum_down,
-                                     f_t* sum_up,
-                                     i_t* num_down,
-                                     i_t* num_up,
+                                     SumT* sum_down,
+                                     SumT* sum_up,
+                                     CountT* num_down,
+                                     CountT* num_up,
                                      i_t n_vars,
-                                     int64_t& strong_branching_lp_iter,
+                                     SBIterT& strong_branching_lp_iter,
                                      f_t upper_bound,
                                      int64_t bnb_lp_iters,
                                      int64_t bnb_nodes_explored,

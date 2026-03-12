@@ -194,7 +194,6 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
 
   int hidesol =
     std::getenv("CUOPT_MIP_HIDE_SOLUTION") ? atoi(std::getenv("CUOPT_MIP_HIDE_SOLUTION")) : 0;
-  hidesol = 0;
   if (!hidesol) { detail::print_solution(scaled_problem.handle_ptr, sol.get_solution()); }
   return sol;
 }
@@ -262,7 +261,7 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
 
     auto timer =
       cuopt::termination_checker_t(time_limit, cuopt::termination_checker_t::root_tag_t{});
-    const bool deterministic_run = detail::is_deterministic_mode(settings.determinism_mode);
+    const bool deterministic_run = (settings.determinism_mode & CUOPT_DETERMINISM_BB);
 
     double presolve_time = 0.0;
     std::unique_ptr<detail::third_party_presolve_t<i_t, f_t>> presolver;

@@ -146,7 +146,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     context.problem_ptr->post_process_solution(sol);
     return sol;
   }
-  const bool deterministic_run = is_deterministic_mode(context.settings.determinism_mode);
+  const bool deterministic_run = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB);
   const f_t gpu_heur_work_limit =
     deterministic_run ? context.settings.work_limit : timer_.get_time_limit();
   if (deterministic_run)
@@ -259,9 +259,9 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     branch_and_bound_settings.max_cut_passes        = context.settings.max_cut_passes;
     branch_and_bound_settings.mir_cuts              = context.settings.mir_cuts;
     branch_and_bound_settings.deterministic =
-      is_deterministic_mode(context.settings.determinism_mode);
+      (context.settings.determinism_mode & CUOPT_DETERMINISM_BB);
 
-    if (is_deterministic_mode(context.settings.determinism_mode)) {
+    if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       branch_and_bound_settings.work_limit = context.settings.work_limit;
     } else {
       branch_and_bound_settings.work_limit = std::numeric_limits<f_t>::infinity();
@@ -302,7 +302,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     // heuristic_preemption_callback is needed in both modes to properly stop the heuristic thread
     branch_and_bound_settings.heuristic_preemption_callback = std::bind(
       &branch_and_bound_solution_helper_t<i_t, f_t>::preempt_heuristic_solver, &solution_helper);
-    if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
+    if (!(context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       branch_and_bound_settings.set_simplex_solution_callback =
         std::bind(&branch_and_bound_solution_helper_t<i_t, f_t>::set_simplex_solution,
                   &solution_helper,
@@ -326,14 +326,14 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       [stats_ptr](f_t user_bound) { stats_ptr->set_solution_bound(user_bound); });
 
     // Set the primal heuristics -> branch and bound callback
-    if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
+    if (!(context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       branch_and_bound->set_concurrent_lp_root_solve(true);
 
       context.problem_ptr->branch_and_bound_callback =
         std::bind(&dual_simplex::branch_and_bound_t<i_t, f_t>::set_new_solution,
                   branch_and_bound.get(),
                   std::placeholders::_1);
-    } else if (is_deterministic_mode(context.settings.determinism_mode)) {
+    } else if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       branch_and_bound->set_concurrent_lp_root_solve(false);
       // TODO once deterministic GPU heuristics are integrated
       // context.problem_ptr->branch_and_bound_callback =
@@ -344,7 +344,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 
     context.work_unit_scheduler_.register_context(branch_and_bound->get_work_unit_context());
 
-    if (is_deterministic_mode(context.settings.determinism_mode)) {
+    if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       context.problem_ptr->set_root_relaxation_solution_callback = nullptr;
     } else {
       context.problem_ptr->set_root_relaxation_solution_callback =
@@ -389,7 +389,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
         context.problem_ptr->get_user_obj_from_solver_obj(branch_and_bound_solution.lower_bound));
     }
     if (bb_status == dual_simplex::mip_status_t::INFEASIBLE) { sol.set_problem_fully_reduced(); }
-    if (is_deterministic_mode(context.settings.determinism_mode) &&
+    if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
         std::isfinite(branch_and_bound_solution.objective)) {
       CUOPT_DETERMINISM_LOG_INFO(
         "Deterministic solver B&B overwrite: bb_status=%d bb_obj=%.16e bb_lower=%.16e "
@@ -455,7 +455,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
         }
       }
       sol = std::move(bb_sol);
-    } else if (is_deterministic_mode(context.settings.determinism_mode)) {
+    } else if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       CUOPT_DETERMINISM_LOG_INFO(
         "Deterministic B&B overwrite skipped: bb_obj=%.16e bb_obj_finite=%d bb_has_incumbent=%d",
         branch_and_bound_solution.objective,
@@ -468,7 +468,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     context.stats.num_nodes              = branch_and_bound_solution.nodes_explored;
     context.stats.num_simplex_iterations = branch_and_bound_solution.simplex_iterations;
 
-    if (is_deterministic_mode(context.settings.determinism_mode)) {
+    if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       double bnb_work  = branch_and_bound->get_work_unit_context().current_work();
       double gpu_work  = context.gpu_heur_loop.current_work();
       double bnb_scale = solver_settings_.bnb_work_unit_scale;

@@ -119,17 +119,15 @@ class mip_solver_settings_t {
   bool mip_scaling = false;
   presolver_t presolver{presolver_t::Default};
   /**
-   * @brief Determinism mode for MIP solver.
+   * @brief Determinism mode for MIP solver (bitset).
    *
-   * Controls the determinism behavior of the MIP solver:
-   * - CUOPT_MODE_OPPORTUNISTIC (0): Default mode, allows non-deterministic
-   *   parallelism for better performance
-   * - CUOPT_MODE_DETERMINISTIC (1): Ensures deterministic results across runs
-   *   at potential cost of performance. Runs deterministic B&B path without GPU heuristics.
-   * - CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS (2): Enables deterministic work-limit mode while
-   *   still running GPU heuristics.
+   * Bitwise OR of CUOPT_DETERMINISM_* flags:
+   * - CUOPT_DETERMINISM_NONE (0x0): Opportunistic, non-deterministic.
+   * - CUOPT_DETERMINISM_BB (0x1): Deterministic B&B tree exploration.
+   * - CUOPT_DETERMINISM_GPU_HEURISTICS (0x2): Deterministic GPU heuristic pipeline.
+   * - CUOPT_DETERMINISM_FULL (0x3): Both B&B and GPU heuristics deterministic.
    */
-  int determinism_mode = CUOPT_MODE_OPPORTUNISTIC;
+  int determinism_mode = CUOPT_DETERMINISM_NONE;
   /**
    * @brief Random seed for the MIP solver.
    *

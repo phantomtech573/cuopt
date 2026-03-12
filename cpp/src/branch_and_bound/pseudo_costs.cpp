@@ -218,25 +218,62 @@ f_t trial_branching(const lp_problem_t<i_t, f_t>& original_lp,
   }
 }
 
-// Overload of trial_branching that takes a plain int64_t& counter (for deterministic/serial use).
 template <typename i_t, typename f_t>
-f_t trial_branching_plain(const lp_problem_t<i_t, f_t>& original_lp,
-                          const simplex_solver_settings_t<i_t, f_t>& settings,
-                          const std::vector<variable_type_t>& var_types,
-                          const std::vector<variable_status_t>& vstatus,
-                          const std::vector<f_t>& edge_norms,
-                          const basis_update_mpf_t<i_t, f_t>& basis_factors,
-                          const std::vector<i_t>& basic_list,
-                          const std::vector<i_t>& nonbasic_list,
-                          i_t branch_var,
-                          f_t branch_var_lower,
-                          f_t branch_var_upper,
-                          f_t upper_bound,
-                          i_t bnb_lp_iter_per_node,
-                          f_t start_time,
-                          i_t upper_max_lp_iter,
-                          i_t lower_max_lp_iter,
-                          int64_t& total_lp_iter)
+f_t trial_branching_generic(const lp_problem_t<i_t, f_t>& original_lp,
+                            const simplex_solver_settings_t<i_t, f_t>& settings,
+                            const std::vector<variable_type_t>& var_types,
+                            const std::vector<variable_status_t>& vstatus,
+                            const std::vector<f_t>& edge_norms,
+                            const basis_update_mpf_t<i_t, f_t>& basis_factors,
+                            const std::vector<i_t>& basic_list,
+                            const std::vector<i_t>& nonbasic_list,
+                            i_t branch_var,
+                            f_t branch_var_lower,
+                            f_t branch_var_upper,
+                            f_t upper_bound,
+                            i_t bnb_lp_iter_per_node,
+                            f_t start_time,
+                            i_t upper_max_lp_iter,
+                            i_t lower_max_lp_iter,
+                            omp_atomic_t<int64_t>& total_lp_iter)
+{
+  return trial_branching(original_lp,
+                         settings,
+                         var_types,
+                         vstatus,
+                         edge_norms,
+                         basis_factors,
+                         basic_list,
+                         nonbasic_list,
+                         branch_var,
+                         branch_var_lower,
+                         branch_var_upper,
+                         upper_bound,
+                         bnb_lp_iter_per_node,
+                         start_time,
+                         upper_max_lp_iter,
+                         lower_max_lp_iter,
+                         total_lp_iter);
+}
+
+template <typename i_t, typename f_t>
+f_t trial_branching_generic(const lp_problem_t<i_t, f_t>& original_lp,
+                            const simplex_solver_settings_t<i_t, f_t>& settings,
+                            const std::vector<variable_type_t>& var_types,
+                            const std::vector<variable_status_t>& vstatus,
+                            const std::vector<f_t>& edge_norms,
+                            const basis_update_mpf_t<i_t, f_t>& basis_factors,
+                            const std::vector<i_t>& basic_list,
+                            const std::vector<i_t>& nonbasic_list,
+                            i_t branch_var,
+                            f_t branch_var_lower,
+                            f_t branch_var_upper,
+                            f_t upper_bound,
+                            i_t bnb_lp_iter_per_node,
+                            f_t start_time,
+                            i_t upper_max_lp_iter,
+                            i_t lower_max_lp_iter,
+                            int64_t& total_lp_iter)
 {
   omp_atomic_t<int64_t> atomic_iter{0};
   f_t result = trial_branching(original_lp,
@@ -262,7 +299,7 @@ f_t trial_branching_plain(const lp_problem_t<i_t, f_t>& original_lp,
 
 }  // namespace
 
-template <typename i_t, typename f_t>
+template <typename i_t, typename f_t, typename SumT, typename CountT, typename SBIterT>
 i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
                                      const std::vector<i_t>& fractional,
                                      const std::vector<f_t>& solution,
@@ -273,12 +310,12 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
                                      const basis_update_mpf_t<i_t, f_t>& basis_factors,
                                      const std::vector<i_t>& basic_list,
                                      const std::vector<i_t>& nonbasic_list,
-                                     f_t* sum_down,
-                                     f_t* sum_up,
-                                     i_t* num_down,
-                                     i_t* num_up,
+                                     SumT* sum_down,
+                                     SumT* sum_up,
+                                     CountT* num_down,
+                                     CountT* num_up,
                                      i_t n_vars,
-                                     int64_t& strong_branching_lp_iter,
+                                     SBIterT& strong_branching_lp_iter,
                                      f_t upper_bound,
                                      int64_t bnb_lp_iters,
                                      int64_t bnb_nodes_explored,
@@ -370,23 +407,23 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
 
     if (var_mutex_down) { var_mutex_down[j].lock(); }
     if (num_down[j] < reliable_threshold) {
-      f_t obj = trial_branching_plain(leaf_problem,
-                                      settings,
-                                      var_types,
-                                      node_ptr->vstatus,
-                                      edge_norms,
-                                      basis_factors,
-                                      basic_list,
-                                      nonbasic_list,
-                                      j,
-                                      leaf_problem.lower[j],
-                                      std::floor(solution[j]),
-                                      upper_bound,
-                                      bnb_lp_iter_per_node,
-                                      start_time,
-                                      rb_settings.upper_max_lp_iter,
-                                      rb_settings.lower_max_lp_iter,
-                                      strong_branching_lp_iter);
+      f_t obj = trial_branching_generic(leaf_problem,
+                                        settings,
+                                        var_types,
+                                        node_ptr->vstatus,
+                                        edge_norms,
+                                        basis_factors,
+                                        basic_list,
+                                        nonbasic_list,
+                                        j,
+                                        leaf_problem.lower[j],
+                                        std::floor(solution[j]),
+                                        upper_bound,
+                                        bnb_lp_iter_per_node,
+                                        start_time,
+                                        rb_settings.upper_max_lp_iter,
+                                        rb_settings.lower_max_lp_iter,
+                                        strong_branching_lp_iter);
       if (!std::isnan(obj)) {
         f_t change_in_obj = std::max(obj - node_ptr->lower_bound, eps);
         f_t change_in_x   = solution[j] - std::floor(solution[j]);
@@ -400,23 +437,23 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
 
     if (var_mutex_up) { var_mutex_up[j].lock(); }
     if (num_up[j] < reliable_threshold) {
-      f_t obj = trial_branching_plain(leaf_problem,
-                                      settings,
-                                      var_types,
-                                      node_ptr->vstatus,
-                                      edge_norms,
-                                      basis_factors,
-                                      basic_list,
-                                      nonbasic_list,
-                                      j,
-                                      std::ceil(solution[j]),
-                                      leaf_problem.upper[j],
-                                      upper_bound,
-                                      bnb_lp_iter_per_node,
-                                      start_time,
-                                      rb_settings.upper_max_lp_iter,
-                                      rb_settings.lower_max_lp_iter,
-                                      strong_branching_lp_iter);
+      f_t obj = trial_branching_generic(leaf_problem,
+                                        settings,
+                                        var_types,
+                                        node_ptr->vstatus,
+                                        edge_norms,
+                                        basis_factors,
+                                        basic_list,
+                                        nonbasic_list,
+                                        j,
+                                        std::ceil(solution[j]),
+                                        leaf_problem.upper[j],
+                                        upper_bound,
+                                        bnb_lp_iter_per_node,
+                                        start_time,
+                                        rb_settings.upper_max_lp_iter,
+                                        rb_settings.lower_max_lp_iter,
+                                        strong_branching_lp_iter);
       if (!std::isnan(obj)) {
         f_t change_in_obj = std::max(obj - node_ptr->lower_bound, eps);
         f_t change_in_x   = std::ceil(solution[j]) - solution[j];
@@ -648,9 +685,10 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
     {
       i_t n = std::min<i_t>(4 * settings.num_threads, fractional.size());
 
+      // Here we are creating more tasks than the number of threads
+      // such that they can be scheduled dynamically to the threads.
       cuopt::work_limit_context_t* thread_ctx =
         use_work_accounting ? &thread_work_contexts[omp_get_thread_num()] : nullptr;
-
 #pragma omp for schedule(dynamic, 1)
       for (i_t k = 0; k < n; k++) {
         i_t start = std::floor(k * fractional.size() / n);
@@ -795,52 +833,31 @@ i_t pseudo_costs_t<i_t, f_t>::reliable_variable_selection(
   int max_num_tasks,
   logger_t& log)
 {
-  const i_t n = (i_t)pseudo_cost_sum_down.size();
-  std::vector<f_t> sd(n), su(n);
-  std::vector<i_t> nd(n), nu(n);
-  for (i_t j = 0; j < n; ++j) {
-    sd[j] = pseudo_cost_sum_down[j];
-    su[j] = pseudo_cost_sum_up[j];
-    nd[j] = pseudo_cost_num_down[j];
-    nu[j] = pseudo_cost_num_up[j];
-  }
-  int64_t sb_iter = strong_branching_lp_iter.load();
-
-  i_t result = reliable_variable_selection_core(node_ptr,
-                                                fractional,
-                                                solution,
-                                                settings,
-                                                var_types,
-                                                worker->leaf_problem,
-                                                worker->leaf_edge_norms,
-                                                worker->basis_factors,
-                                                worker->basic_list,
-                                                worker->nonbasic_list,
-                                                sd.data(),
-                                                su.data(),
-                                                nd.data(),
-                                                nu.data(),
-                                                n,
-                                                sb_iter,
-                                                upper_bound,
-                                                bnb_stats.total_lp_iters,
-                                                bnb_stats.nodes_explored,
-                                                bnb_stats.start_time,
-                                                reliability_branching_settings,
-                                                std::max(max_num_tasks, 1),
-                                                pseudo_cost_mutex_down.data(),
-                                                pseudo_cost_mutex_up.data(),
-                                                &worker->rng);
-
-  for (i_t j = 0; j < n; ++j) {
-    pseudo_cost_sum_down[j] = sd[j];
-    pseudo_cost_sum_up[j]   = su[j];
-    pseudo_cost_num_down[j] = nd[j];
-    pseudo_cost_num_up[j]   = nu[j];
-  }
-  strong_branching_lp_iter = sb_iter;
-
-  return result;
+  return reliable_variable_selection_core(node_ptr,
+                                          fractional,
+                                          solution,
+                                          settings,
+                                          var_types,
+                                          worker->leaf_problem,
+                                          worker->leaf_edge_norms,
+                                          worker->basis_factors,
+                                          worker->basic_list,
+                                          worker->nonbasic_list,
+                                          pseudo_cost_sum_down.data(),
+                                          pseudo_cost_sum_up.data(),
+                                          pseudo_cost_num_down.data(),
+                                          pseudo_cost_num_up.data(),
+                                          (i_t)pseudo_cost_sum_down.size(),
+                                          strong_branching_lp_iter,
+                                          upper_bound,
+                                          bnb_stats.total_lp_iters,
+                                          bnb_stats.nodes_explored,
+                                          bnb_stats.start_time,
+                                          reliability_branching_settings,
+                                          std::max(max_num_tasks, 1),
+                                          pseudo_cost_mutex_down.data(),
+                                          pseudo_cost_mutex_up.data(),
+                                          &worker->rng);
 }
 
 template <typename i_t, typename f_t>
@@ -902,7 +919,40 @@ void pseudo_costs_t<i_t, f_t>::update_pseudo_costs_from_strong_branching(
 
 template class pseudo_costs_t<int, double>;
 
-template int reliable_variable_selection_core<int, double>(
+// Opportunistic: omp_atomic_t arrays, omp_atomic_t<int64_t> sb_iter
+template int reliable_variable_selection_core<int,
+                                              double,
+                                              omp_atomic_t<double>,
+                                              omp_atomic_t<int>,
+                                              omp_atomic_t<int64_t>>(
+  mip_node_t<int, double>*,
+  const std::vector<int>&,
+  const std::vector<double>&,
+  const simplex_solver_settings_t<int, double>&,
+  const std::vector<variable_type_t>&,
+  const lp_problem_t<int, double>&,
+  const std::vector<double>&,
+  const basis_update_mpf_t<int, double>&,
+  const std::vector<int>&,
+  const std::vector<int>&,
+  omp_atomic_t<double>*,
+  omp_atomic_t<double>*,
+  omp_atomic_t<int>*,
+  omp_atomic_t<int>*,
+  int,
+  omp_atomic_t<int64_t>&,
+  double,
+  int64_t,
+  int64_t,
+  double,
+  const reliability_branching_settings_t<int, double>&,
+  int,
+  omp_mutex_t*,
+  omp_mutex_t*,
+  pcgenerator_t*);
+
+// Deterministic: plain arrays, plain int64_t sb_iter
+template int reliable_variable_selection_core<int, double, double, int, int64_t>(
   mip_node_t<int, double>*,
   const std::vector<int>&,
   const std::vector<double>&,

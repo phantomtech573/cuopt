@@ -62,7 +62,7 @@ solution_callback_payload_t<i_t, f_t> make_solution_callback_payload_from_soluti
   double work_timestamp)
 {
   cuopt_assert(problem_ptr != nullptr, "Callback payload problem pointer must not be null");
-  if (work_timestamp < 0.0 && is_deterministic_mode(settings.determinism_mode)) {
+  if (work_timestamp < 0.0 && (settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
     work_timestamp = gpu_heur_loop.current_work();
   }
   solution_callback_payload_t<i_t, f_t> payload{};
@@ -94,7 +94,7 @@ solution_callback_payload_t<i_t, f_t> make_solution_callback_payload_from_host_s
   double work_timestamp)
 {
   cuopt_assert(problem_ptr != nullptr, "Callback payload problem pointer must not be null");
-  if (work_timestamp < 0.0 && is_deterministic_mode(settings.determinism_mode)) {
+  if (work_timestamp < 0.0 && (settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
     work_timestamp = gpu_heur_loop.current_work();
   }
   solution_callback_payload_t<i_t, f_t> payload{};
@@ -192,7 +192,7 @@ struct mip_solver_context_t {
     cuopt_assert(problem_ptr != nullptr, "problem_ptr is nullptr");
     stats.set_solution_bound(problem_ptr->maximize ? std::numeric_limits<f_t>::infinity()
                                                    : -std::numeric_limits<f_t>::infinity());
-    gpu_heur_loop.deterministic = is_deterministic_mode(settings.determinism_mode);
+    gpu_heur_loop.deterministic = (settings.determinism_mode & CUOPT_DETERMINISM_BB);
     cuopt_assert(settings.cpufj_work_unit_scale > 0.0, "CPUFJ work-unit scale must be positive");
     cuopt_assert(settings.gpu_heur_work_unit_scale > 0.0,
                  "GPU heuristic work-unit scale must be positive");

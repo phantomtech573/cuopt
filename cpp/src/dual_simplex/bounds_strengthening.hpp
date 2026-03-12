@@ -35,12 +35,12 @@ class bounds_strengthening_t {
   const csr_matrix_t<i_t, f_t>& Arow;
   const std::vector<variable_type_t>& var_types;
 
-  // Instrumented vectors for memory tracking
-  cuopt::ins_vector<f_t> lower;
-  cuopt::ins_vector<f_t> upper;
-  cuopt::ins_vector<f_t> delta_min_activity;
-  cuopt::ins_vector<f_t> delta_max_activity;
-  cuopt::ins_vector<f_t> constraint_lb;
-  cuopt::ins_vector<f_t> constraint_ub;
+  std::vector<f_t> lower;
+  std::vector<f_t> upper;
+
+  std::vector<f_t> delta_min_activity;
+  std::vector<f_t> delta_max_activity;
+  std::vector<f_t> constraint_lb;
+  std::vector<f_t> constraint_ub;
 };
 }  // namespace cuopt::linear_programming::dual_simplex
