@@ -461,9 +461,29 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
         branch_and_bound_solution.objective,
         (int)std::isfinite(branch_and_bound_solution.objective),
         (int)branch_and_bound_solution.has_incumbent);
+      // In deterministic mode, only solutions formally retired by B&B are valid output.
+      // Discard the GPU heuristic incumbent that B&B never processed.
+      sol = solution_t<i_t, f_t>(*context.problem_ptr);
     }
     context.stats.num_nodes              = branch_and_bound_solution.nodes_explored;
     context.stats.num_simplex_iterations = branch_and_bound_solution.simplex_iterations;
+
+    if (is_deterministic_mode(context.settings.determinism_mode)) {
+      double bnb_work  = branch_and_bound->get_work_unit_context().current_work();
+      double gpu_work  = context.gpu_heur_loop.current_work();
+      double bnb_scale = solver_settings_.bnb_work_unit_scale;
+      double gpu_scale = solver_settings_.gpu_heur_work_unit_scale;
+      CUOPT_LOG_INFO(
+        "Work unit summary: B&B=%.2f (scale=%.3f, raw=%.2f) GPU_heur=%.2f (scale=%.3f, raw=%.2f) "
+        "ratio=%.2fx",
+        bnb_work,
+        bnb_scale,
+        bnb_scale > 0 ? bnb_work / bnb_scale : 0.0,
+        gpu_work,
+        gpu_scale,
+        gpu_scale > 0 ? gpu_work / gpu_scale : 0.0,
+        gpu_work > 0 ? bnb_work / gpu_work : 0.0);
+    }
   }
   sol.compute_feasibility();
   rmm::device_scalar<i_t> is_feasible(sol.handle_ptr->get_stream());

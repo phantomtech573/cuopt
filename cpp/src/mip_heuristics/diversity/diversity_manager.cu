@@ -439,6 +439,15 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   });
   if (is_deterministic_mode(context.settings.determinism_mode) &&
       context.branch_and_bound_ptr != nullptr) {
+    if (context.settings.gpu_heur_wait_for_exploration) {
+      CUOPT_LOG_INFO("GPU heuristics waiting for B&B tree exploration to start...");
+      auto wait_start = std::chrono::high_resolution_clock::now();
+      context.branch_and_bound_ptr->wait_for_exploration_start();
+      double wait_elapsed =
+        std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - wait_start)
+          .count();
+      CUOPT_LOG_INFO("GPU heuristics resumed after %.2fs (B&B exploration started)", wait_elapsed);
+    }
     auto& producer_sync = context.branch_and_bound_ptr->get_producer_sync();
     context.gpu_heur_loop.attach_producer_sync(&producer_sync);
     producer_sync.register_producer(context.gpu_heur_loop.producer_progress_ptr());

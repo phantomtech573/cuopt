@@ -33,7 +33,9 @@
 
 #include <omp.h>
 
+#include <condition_variable>
 #include <functional>
+#include <mutex>
 #include <vector>
 
 namespace cuopt::linear_programming::dual_simplex {
@@ -176,12 +178,21 @@ class branch_and_bound_t {
   // Get producer sync for external heuristics (e.g., CPUFJ) to register
   producer_sync_t& get_producer_sync() { return producer_sync_; }
 
+  void wait_for_exploration_start()
+  {
+    std::unique_lock<std::mutex> lock(exploration_started_mutex_);
+    exploration_started_cv_.wait(lock, [this] { return exploration_started_.load(); });
+  }
+
  private:
   const user_problem_t<i_t, f_t>& original_problem_;
   const simplex_solver_settings_t<i_t, f_t> settings_;
 
   work_limit_context_t work_unit_context_{"B&B"};
   double pre_exploration_work_{0.0};
+  std::atomic<bool> exploration_started_{false};
+  std::mutex exploration_started_mutex_;
+  std::condition_variable exploration_started_cv_;
 
   // Initial guess.
   std::vector<f_t> guess_;

@@ -107,6 +107,8 @@ class mip_solver_settings_t {
   // Scales deterministic B&B work units (LP iterations) exposed to the shared deterministic
   // timeline.
   f_t bnb_work_unit_scale = 1.0;
+  // When true, GPU heuristics wait for B&B to finish root solve before starting.
+  bool gpu_heur_wait_for_exploration = true;
 
   std::string log_file;
   std::string sol_file;

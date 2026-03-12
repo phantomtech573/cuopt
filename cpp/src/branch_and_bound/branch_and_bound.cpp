@@ -600,7 +600,7 @@ void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
   const double bnb_work_total = work_unit_context_.current_work();
   const uint32_t host_hash    = detail::compute_hash(solution);
   settings_.log.printf(
-    "Queueing deterministic external incumbent: obj=%g wut=%.3f (bnb_wut=%.3f) origin=%s "
+    "Queueing deterministic external incumbent: obj=%g heur_wut=%.3f bnb_wut=%.3f origin=%s "
     "hash=0x%x\n",
     user_objective,
     work_unit_ts,
@@ -640,14 +640,14 @@ void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
   mutex_original_lp_.unlock();
 
   mutex_heuristic_queue_.lock();
-  heuristic_solution_queue_.push_back({solution, user_objective, work_unit_ts, origin});
+  heuristic_solution_queue_.push_back({solution, user_objective, bnb_work_total, origin});
   const size_t heuristic_queue_size = heuristic_solution_queue_.size();
   mutex_heuristic_queue_.unlock();
   CUOPT_DETERMINISM_LOG(
     settings_.log,
-    "Deterministic external queued_for_retirement: wut=%.6f user_obj=%.16e host_hash=0x%x "
+    "Deterministic external queued_for_retirement: bnb_wut=%.6f user_obj=%.16e host_hash=0x%x "
     "heur_q=%zu\n",
-    work_unit_ts,
+    bnb_work_total,
     user_objective,
     host_hash,
     heuristic_queue_size);
@@ -2281,6 +2281,13 @@ template <typename i_t, typename f_t>
 mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range scope("BB::solve");
+  auto exploration_signal_guard   = cuopt::scope_guard([this]() {
+    if (!exploration_started_.load()) {
+      std::lock_guard<std::mutex> lock(exploration_started_mutex_);
+      exploration_started_ = true;
+      exploration_started_cv_.notify_all();
+    }
+  });
   auto heuristic_preemption_guard = cuopt::scope_guard([this]() {
     if (settings_.heuristic_preemption_callback != nullptr) {
       settings_.heuristic_preemption_callback();
@@ -2300,7 +2307,9 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   if (settings_.deterministic) {
     work_unit_context_.deterministic = true;
     cuopt_assert(settings_.bnb_work_unit_scale > 0.0, "B&B work-unit scale must be positive");
-    work_unit_context_.work_unit_scale = settings_.bnb_work_unit_scale;
+    // Scale=0 during pre-exploration: root LP/cuts/SB don't advance the deterministic timeline.
+    // Restored to bnb_work_unit_scale when exploration begins.
+    work_unit_context_.work_unit_scale = 0.0;
 
     // Detach the scheduler during the serial root/cuts/SB phase.
     // record_work_sync_on_horizon still accumulates global_work_units_elapsed,
@@ -3042,9 +3051,9 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     calculate_variable_locks(original_lp_, var_up_locks_, var_down_locks_);
   }
   if (settings_.deterministic) {
-    pre_exploration_work_        = work_unit_context_.current_work();
-    work_unit_context_.scheduler = saved_scheduler;
-    settings_.log.printf("Pre-exploration work: %.2f work units\n", pre_exploration_work_);
+    pre_exploration_work_              = work_unit_context_.current_work();
+    work_unit_context_.scheduler       = saved_scheduler;
+    work_unit_context_.work_unit_scale = settings_.bnb_work_unit_scale;
     settings_.log.printf(
       " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node "
       "|   Gap    |  Work |  Time  |\n");
@@ -3053,6 +3062,12 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node "
       "|   Gap    |  Time  |\n");
   }
+
+  {
+    std::lock_guard<std::mutex> lock(exploration_started_mutex_);
+    exploration_started_ = true;
+  }
+  exploration_started_cv_.notify_all();
 
   if (settings_.deterministic) {
     run_deterministic_coordinator(Arow_);
@@ -3484,6 +3499,14 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sync_callback()
   total_producer_wait_time_ += wait_time;
   max_producer_wait_time_ = std::max(max_producer_wait_time_, wait_time);
   ++producer_wait_count_;
+  if (wait_time > 0.01) {
+    settings_.log.printf(
+      "Producer sync wait: %.3fs at horizon %.2f (cumulative: %.3fs, count: %d)\n",
+      wait_time,
+      horizon_end,
+      total_producer_wait_time_,
+      producer_wait_count_);
+  }
 
   work_unit_context_.set_current_work(horizon_end, false);
 
