@@ -60,23 +60,25 @@ def config_suite_name(path: str) -> str:
     return os.path.splitext(os.path.basename(path))[0]
 
 
-def run_claude(root: str, skill_path: str, prompt: str, timeout: int) -> tuple[str, float, dict]:
-    """Run Claude CLI with skill as system context.
+def run_claude(root: str, skill_path: str | None, prompt: str, timeout: int) -> tuple[str, float, dict]:
+    """Run Claude CLI with optional skill as system context.
 
     Returns (response_text, elapsed_seconds, metadata) where metadata
     contains token counts and turn/step information when available.
+    When skill_path is None the skill file is omitted (baseline / no-skill mode).
     """
-    abs_skill = os.path.join(root, skill_path)
-    if not os.path.isfile(abs_skill):
-        raise FileNotFoundError(f"Skill file not found: {abs_skill}")
     cmd = [
         "claude",
         "-p",
         "--no-session-persistence",
         "--output-format", "json",
-        "--append-system-prompt-file", abs_skill,
-        prompt,
     ]
+    if skill_path is not None:
+        abs_skill = os.path.join(root, skill_path)
+        if not os.path.isfile(abs_skill):
+            raise FileNotFoundError(f"Skill file not found: {abs_skill}")
+        cmd += ["--append-system-prompt-file", abs_skill]
+    cmd.append(prompt)
     start = time.perf_counter()
     result = subprocess.run(
         cmd,
@@ -94,11 +96,13 @@ def run_claude(root: str, skill_path: str, prompt: str, timeout: int) -> tuple[s
     try:
         data = json.loads(result.stdout)
         response_text = data.get("result", "")
+        usage = data.get("usage", {})
         metadata = {
-            "input_tokens": data.get("input_tokens", 0),
-            "output_tokens": data.get("output_tokens", 0),
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+            "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
             "num_turns": data.get("num_turns", 0),
-            "cost_usd": data.get("cost_usd", 0.0),
+            "cost_usd": data.get("total_cost_usd", 0.0),
             "duration_ms": data.get("duration_ms", 0),
             "duration_api_ms": data.get("duration_api_ms", 0),
         }
@@ -233,6 +237,11 @@ def main() -> int:
         help=f"Save each response for replay. DIR defaults to {DEFAULT_RESULTS_DIR}. Writes to DIR/YYYY-MM-DD_HH-MM-SS/.",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Print full response on failure")
+    parser.add_argument(
+        "--no-skill",
+        action="store_true",
+        help="Baseline mode: run prompts without injecting the skill file (omits --append-system-prompt-file).",
+    )
     args = parser.parse_args()
 
     # Apply default results dir when report/runtimes not explicitly set and not disabled
@@ -308,8 +317,10 @@ def main() -> int:
     runtimes_report: dict[str, dict] = {}  # label -> { runtimes: [], median: float, passed: bool, tokens/turns }
     report_rows: list[dict] = []  # for --report: { label, test_id, prompt, passed, median_seconds, tokens, turns, ... }
 
+    no_skill = getattr(args, "no_skill", False)
+
     for suite_name, config in configs_to_run:
-        skill_file = config["skill_file"]
+        skill_file = None if no_skill else config["skill_file"]
         timeout = config.get("timeout_seconds", 120)
         tests = config["tests"]
         default_inc = config.get("default_assertions", {}).get("must_include", [])
@@ -472,6 +483,7 @@ def main() -> int:
         "total_tests": passed + failed + skipped,
         "pass_at": pass_at,
         "replay": args.replay is not None,
+        "no_skill": no_skill,
         "exit_code": exit_code,
         "median_runtime_seconds": median_runtime_overall,
         "median_input_tokens": median_input_tokens_overall,
@@ -498,6 +510,7 @@ def main() -> int:
     print(f"  median_output_tokens: {_ot}")
     print(f"  median_num_turns:     {_nt}")
     print(f"  total_cost_usd:       {_cost}")
+    print(f"  no_skill:             {no_skill}")
     print(f"  replay:               {status_summary['replay']}")
     print(f"  exit_code:            {exit_code}")
     print("=" * 60)
@@ -537,7 +550,7 @@ def main() -> int:
         with open(md_path, "w", encoding="utf-8") as f:
             f.write("# Dev skill agent test report\n\n")
             f.write(f"**Generated:** {datetime.now().isoformat(timespec='seconds')}  \n")
-            f.write(f"**pass@:** {pass_at}  **replay:** {status_summary['replay']}  \n\n")
+            f.write(f"**pass@:** {pass_at}  **replay:** {status_summary['replay']}  **no_skill:** {no_skill}  \n\n")
             f.write("## Summary\n\n")
             f.write(f"- **Passed:** {passed}  \n")
             f.write(f"- **Failed:** {failed}  \n")
