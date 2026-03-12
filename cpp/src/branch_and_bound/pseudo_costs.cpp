@@ -225,7 +225,6 @@ static cuopt::mps_parser::mps_data_model_t<i_t, f_t> simplex_problem_to_mps_data
   const std::vector<f_t>& root_soln,
   std::vector<f_t>& original_root_soln_x)
 {
-
   // Branch and bound has a problem of the form:
   // minimize c^T x
   // subject to A*x + Es = b
@@ -238,7 +237,6 @@ static cuopt::mps_parser::mps_data_model_t<i_t, f_t> simplex_problem_to_mps_data
   // minimize c^T x
   // subject to  lb <= A*x <= ub
   //             l <= x <= u
-
 
   cuopt::mps_parser::mps_data_model_t<i_t, f_t> mps_model;
   int m = lp.num_rows;
@@ -285,8 +283,8 @@ static cuopt::mps_parser::mps_data_model_t<i_t, f_t> simplex_problem_to_mps_data
   std::vector<i_t> slack_map(m, -1);
   for (i_t j : new_slacks) {
     const i_t col_start = lp.A.col_start[j];
-    const i_t i = lp.A.i[col_start];
-    slack_map[i] = j;
+    const i_t i         = lp.A.i[col_start];
+    slack_map[i]        = j;
   }
 
   for (i_t i = 0; i < m; ++i) {
@@ -308,8 +306,8 @@ static cuopt::mps_parser::mps_data_model_t<i_t, f_t> simplex_problem_to_mps_data
 
     const i_t slack = slack_map[i];
     assert(slack != -1);
-    const i_t col_start = lp.A.col_start[slack];
-    const f_t sigma = lp.A.x[col_start];
+    const i_t col_start   = lp.A.col_start[slack];
+    const f_t sigma       = lp.A.x[col_start];
     const f_t slack_lower = lp.lower[slack];
     const f_t slack_upper = lp.upper[slack];
 
@@ -358,8 +356,8 @@ void strong_branching(const lp_problem_t<i_t, f_t>& original_lp,
     f_t start_batch = tic();
     std::vector<f_t> original_root_soln_x;
 
-    const auto mps_model         = simplex_problem_to_mps_data_model(original_lp, new_slacks, root_soln, original_root_soln_x);
-
+    const auto mps_model =
+      simplex_problem_to_mps_data_model(original_lp, new_slacks, root_soln, original_root_soln_x);
 
     std::vector<f_t> fraction_values;
 
