@@ -399,7 +399,7 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
   const int task_priority = rb_settings.task_priority;
 
 #pragma omp taskloop if (num_tasks > 1) priority(task_priority) num_tasks(num_tasks) \
-  shared(score_mutex)
+  shared(score_mutex, strong_branching_lp_iter)
   for (i_t i = 0; i < num_candidates; ++i) {
     const i_t j = unreliable_list[i];
 
