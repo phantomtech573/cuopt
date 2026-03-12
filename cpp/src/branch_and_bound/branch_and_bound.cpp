@@ -2574,6 +2574,12 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       }
 #endif
 
+      if (toc(exploration_stats_.start_time) > settings_.time_limit) {
+        solver_status_ = mip_status_t::TIME_LIMIT;
+        set_final_solution(solution, root_objective_);
+        return solver_status_;
+      }
+
       // Generate cuts and add them to the cut pool
       f_t cut_start_time    = tic();
       bool problem_feasible = cut_generation.generate_cuts(original_lp_,
