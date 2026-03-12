@@ -15,6 +15,7 @@ TestSolutionInterfacePolymorphism:
 
 import logging
 import os
+import re
 import shutil
 import signal
 import socket
@@ -86,6 +87,49 @@ def _cpu_only_env(port):
     env["CUOPT_REMOTE_HOST"] = "localhost"
     env["CUOPT_REMOTE_PORT"] = str(port)
     return env
+
+
+def _parse_cli_output(output):
+    """Extract solver status and objective value from cuopt_cli output.
+
+    Handles both the LP summary format
+        (``Status: Optimal  Objective: -464.753  ...  Time: 0.1s``)
+    and the MIP format
+        (``Optimal solution found.`` + ``Solution objective: 2.000000 ...``).
+    """
+    result = {"status": "Unknown", "objective_value": float("nan")}
+
+    for line in output.split("\n"):
+        stripped = line.strip()
+
+        # LP summary: "Status: Optimal  Objective: -464.753  ... Time: 0.1s"
+        if stripped.startswith("Status:") and "Time:" in stripped:
+            m = re.match(r"Status:\s*(\S+)", stripped)
+            if m:
+                result["status"] = m.group(1)
+            m = re.search(
+                r"Objective:\s*([+-]?\d+\.?\d*(?:[eE][+-]?\d+)?)",
+                stripped,
+            )
+            if m:
+                result["objective_value"] = float(m.group(1))
+            continue
+
+        # MIP termination
+        if stripped == "Optimal solution found.":
+            result["status"] = "Optimal"
+            continue
+
+        # MIP solution: "Solution objective: 2.000000 , ..."
+        m = re.match(
+            r"Solution objective:\s*([+-]?\d+\.?\d*(?:[eE][+-]?\d+)?)",
+            stripped,
+        )
+        if m:
+            result["objective_value"] = float(m.group(1))
+            continue
+
+    return result
 
 
 def _generate_test_certs(cert_dir):
@@ -501,15 +545,24 @@ class TestCuoptCliCPUOnly:
         "CUDA initialization failed",
     ]
 
-    def _run_cli(self, mps_file, env):
+    def _run_cli(self, mps_file, env, extra_args=None):
+        """Run cuopt_cli on *mps_file* in remote-execution mode.
+
+        Returns the combined stdout+stderr so callers can parse it.
+        Asserts no CUDA errors and zero exit code.
+        """
         cli = self._find_cuopt_cli()
         if cli is None:
             pytest.skip("cuopt_cli not found")
         if not os.path.exists(mps_file):
             pytest.skip(f"Test file not found: {mps_file}")
 
+        cmd = [cli, mps_file, "--time-limit", "60"]
+        if extra_args:
+            cmd.extend(extra_args)
+
         result = subprocess.run(
-            [cli, mps_file, "--time-limit", "60"],
+            cmd,
             env=env,
             capture_output=True,
             text=True,
@@ -527,17 +580,61 @@ class TestCuoptCliCPUOnly:
         assert result.returncode == 0, (
             f"cuopt_cli exited with {result.returncode}"
         )
+        return combined
 
-    def test_cuopt_cli_lp_cpu_only(self, cpu_only_env_with_server):
-        self._run_cli(
+    _REMOTE_INDICATORS = [
+        "connecting to gRPC server",
+        "solve completed successfully",
+    ]
+
+    def _assert_remote_execution(self, output):
+        """Check that log output contains evidence of remote gRPC execution."""
+        for indicator in self._REMOTE_INDICATORS:
+            assert indicator in output, (
+                f"Remote execution indicator '{indicator}' not found "
+                "in CLI output -- solve may not have been forwarded"
+            )
+
+    def test_cli_lp_remote(self, cpu_only_env_with_server):
+        """LP solve via cuopt_cli runs remotely with correct objective."""
+        output = self._run_cli(
             f"{RAPIDS_DATASET_ROOT_DIR}/linear_programming/afiro_original.mps",
             cpu_only_env_with_server,
         )
+        self._assert_remote_execution(output)
 
-    def test_cuopt_cli_mip_cpu_only(self, cpu_only_env_with_server):
-        self._run_cli(
+        parsed = _parse_cli_output(output)
+        assert parsed["status"] == "Optimal", (
+            f"Expected Optimal, got {parsed['status']}"
+        )
+        expected_obj = -464.7531428571
+        rel_err = abs(parsed["objective_value"] - expected_obj) / abs(
+            expected_obj
+        )
+        assert rel_err < 0.01, (
+            f"Objective {parsed['objective_value']} differs from expected "
+            f"{expected_obj} (rel error {rel_err:.4e})"
+        )
+
+    def test_cli_mip_remote(self, cpu_only_env_with_server):
+        """MIP solve via cuopt_cli runs remotely with correct objective."""
+        output = self._run_cli(
             f"{RAPIDS_DATASET_ROOT_DIR}/mip/bb_optimality.mps",
             cpu_only_env_with_server,
+        )
+        self._assert_remote_execution(output)
+
+        parsed = _parse_cli_output(output)
+        assert parsed["status"] == "Optimal", (
+            f"Expected Optimal, got {parsed['status']}"
+        )
+        expected_obj = 2.0
+        rel_err = abs(parsed["objective_value"] - expected_obj) / max(
+            abs(expected_obj), 1e-12
+        )
+        assert rel_err < 0.01, (
+            f"Objective {parsed['objective_value']} differs from expected "
+            f"{expected_obj} (rel error {rel_err:.4e})"
         )
 
 
