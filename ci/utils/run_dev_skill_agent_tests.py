@@ -60,8 +60,12 @@ def config_suite_name(path: str) -> str:
     return os.path.splitext(os.path.basename(path))[0]
 
 
-def run_claude(root: str, skill_path: str, prompt: str, timeout: int) -> tuple[str, float]:
-    """Run Claude CLI with skill as system context; return (combined stdout+stderr, elapsed_seconds)."""
+def run_claude(root: str, skill_path: str, prompt: str, timeout: int) -> tuple[str, float, dict]:
+    """Run Claude CLI with skill as system context.
+
+    Returns (response_text, elapsed_seconds, metadata) where metadata
+    contains token counts and turn/step information when available.
+    """
     abs_skill = os.path.join(root, skill_path)
     if not os.path.isfile(abs_skill):
         raise FileNotFoundError(f"Skill file not found: {abs_skill}")
@@ -69,6 +73,7 @@ def run_claude(root: str, skill_path: str, prompt: str, timeout: int) -> tuple[s
         "claude",
         "-p",
         "--no-session-persistence",
+        "--output-format", "json",
         "--append-system-prompt-file", abs_skill,
         prompt,
     ]
@@ -81,12 +86,25 @@ def run_claude(root: str, skill_path: str, prompt: str, timeout: int) -> tuple[s
         timeout=timeout,
     )
     elapsed = time.perf_counter() - start
-    out = (result.stdout or "") + (result.stderr or "")
     if result.returncode != 0:
         raise RuntimeError(
             f"Claude CLI exited {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-    return (out, elapsed)
+    metadata: dict = {}
+    try:
+        data = json.loads(result.stdout)
+        response_text = data.get("result", "")
+        metadata = {
+            "input_tokens": data.get("input_tokens", 0),
+            "output_tokens": data.get("output_tokens", 0),
+            "num_turns": data.get("num_turns", 0),
+            "cost_usd": data.get("cost_usd", 0.0),
+            "duration_ms": data.get("duration_ms", 0),
+            "duration_api_ms": data.get("duration_api_ms", 0),
+        }
+    except (json.JSONDecodeError, TypeError):
+        response_text = (result.stdout or "") + (result.stderr or "")
+    return (response_text, elapsed, metadata)
 
 
 def _phrase_in_response(text_lower: str, item: str | list[str]) -> bool:
@@ -287,8 +305,8 @@ def main() -> int:
     passed = 0
     failed = 0
     skipped = 0
-    runtimes_report: dict[str, dict] = {}  # label -> { runtimes: [], median: float, passed: bool }
-    report_rows: list[dict] = []  # for --report: { label, test_id, prompt, passed, median_seconds, failure_reasons, response_preview }
+    runtimes_report: dict[str, dict] = {}  # label -> { runtimes: [], median: float, passed: bool, tokens/turns }
+    report_rows: list[dict] = []  # for --report: { label, test_id, prompt, passed, median_seconds, tokens, turns, ... }
 
     for suite_name, config in configs_to_run:
         skill_file = config["skill_file"]
@@ -311,6 +329,7 @@ def main() -> int:
             label = f"{suite_name}/{test_id}" if len(configs_to_run) > 1 else test_id
             runtimes: list[float] = []
             responses: list[str] = []
+            metadata_list: list[dict] = []
             test_passed = False
 
             if args.replay:
@@ -319,7 +338,7 @@ def main() -> int:
                     print(f"SKIP {label}: no replay file {replay_path}")
                     skipped += 1
                     if args.report:
-                        report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "SKIP", "median_seconds": "", "failure_reasons": [], "response_preview": ""})
+                        report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "SKIP", "median_seconds": "", "median_input_tokens": "", "median_output_tokens": "", "median_num_turns": "", "failure_reasons": [], "response_preview": ""})
                     continue
                 t0 = time.perf_counter()
                 with open(replay_path, encoding="utf-8") as f:
@@ -330,16 +349,18 @@ def main() -> int:
                 # Live: run pass_at times (pass@1 or pass@5, etc.)
                 for attempt in range(pass_at):
                     try:
-                        response, elapsed = run_claude(root, skill_file, prompt, timeout)
+                        response, elapsed, meta = run_claude(root, skill_file, prompt, timeout)
                         runtimes.append(elapsed)
                         responses.append(response)
+                        metadata_list.append(meta)
                     except Exception as e:
                         print(f"FAIL {label} (attempt {attempt + 1}/{pass_at}): {e}")
                         runtimes.clear()
                         responses.clear()
+                        metadata_list.clear()
                         failed += 1
                         if args.report:
-                            report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "FAIL", "median_seconds": "", "failure_reasons": [str(e)], "response_preview": ""})
+                            report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "FAIL", "median_seconds": "", "median_input_tokens": "", "median_output_tokens": "", "median_num_turns": "", "failure_reasons": [str(e)], "response_preview": ""})
                         break
                 else:
                     if args.save and responses and save_dir_actual:
@@ -361,11 +382,20 @@ def main() -> int:
             if not test_passed and responses:
                 _, failures_list = check_response(responses[0], must_include, must_not_include)
 
+            # Aggregate token/step metadata across attempts
+            def _median_meta(key: str) -> int:
+                vals = [m.get(key, 0) for m in metadata_list if m]
+                return round(statistics.median(vals)) if vals else 0
+
+            med_in_tok = _median_meta("input_tokens")
+            med_out_tok = _median_meta("output_tokens")
+            med_turns = _median_meta("num_turns")
+
             if test_passed:
                 print(f"PASS {label}" + (f" (pass@{pass_at})" if pass_at > 1 else ""))
                 passed += 1
                 if args.report and runtimes:
-                    report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "PASS", "median_seconds": round(statistics.median(runtimes), 3), "failure_reasons": [], "response_preview": ""})
+                    report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "PASS", "median_seconds": round(statistics.median(runtimes), 3), "median_input_tokens": med_in_tok, "median_output_tokens": med_out_tok, "median_num_turns": med_turns, "failure_reasons": [], "response_preview": ""})
             else:
                 print(f"FAIL {label}" + (f" (0/{pass_at} passed)" if pass_at > 1 else ""))
                 if pass_at == 1 and responses:
@@ -377,7 +407,7 @@ def main() -> int:
                 failed += 1
                 if args.report:
                     preview = (responses[0][:800] + "..." if len(responses[0]) > 800 else responses[0]) if responses else ""
-                    report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "FAIL", "median_seconds": round(statistics.median(runtimes), 3) if runtimes else "", "failure_reasons": failures_list, "response_preview": preview})
+                    report_rows.append({"label": label, "test_id": test_id, "prompt": prompt, "passed": "FAIL", "median_seconds": round(statistics.median(runtimes), 3) if runtimes else "", "median_input_tokens": med_in_tok, "median_output_tokens": med_out_tok, "median_num_turns": med_turns, "failure_reasons": failures_list, "response_preview": preview})
 
             if runtimes:
                 median_sec = statistics.median(runtimes)
@@ -385,9 +415,16 @@ def main() -> int:
                     "runtimes_seconds": runtimes,
                     "median_seconds": round(median_sec, 3),
                     "passed": test_passed,
+                    "input_tokens": [m.get("input_tokens", 0) for m in metadata_list],
+                    "output_tokens": [m.get("output_tokens", 0) for m in metadata_list],
+                    "num_turns": [m.get("num_turns", 0) for m in metadata_list],
+                    "median_input_tokens": med_in_tok,
+                    "median_output_tokens": med_out_tok,
+                    "median_num_turns": med_turns,
+                    "cost_usd": [m.get("cost_usd", 0.0) for m in metadata_list],
                 }
                 if pass_at > 1:
-                    print(f"  median runtime: {median_sec:.2f}s")
+                    print(f"  median runtime: {median_sec:.2f}s  tokens(in/out): {med_in_tok}/{med_out_tok}  turns: {med_turns}")
 
     # Summary
     total_run = passed + failed
@@ -398,16 +435,33 @@ def main() -> int:
 
     # Median runtime table
     if runtimes_report:
-        print("\nMedian runtime per request (seconds):")
+        print("\nMedian runtime per request (seconds), tokens, turns:")
         for label, data in sorted(runtimes_report.items()):
             status = "PASS" if data["passed"] else "FAIL"
-            print(f"  {label}: {data['median_seconds']:.2f}s  [{status}]")
+            tok_str = f"  tokens(in/out): {data.get('median_input_tokens', 0)}/{data.get('median_output_tokens', 0)}" if data.get("median_input_tokens") else ""
+            turn_str = f"  turns: {data.get('median_num_turns', 0)}" if data.get("median_num_turns") else ""
+            print(f"  {label}: {data['median_seconds']:.2f}s{tok_str}{turn_str}  [{status}]")
 
     # Overall median runtime (median of per-test median runtimes)
     median_runtime_overall: float | None = None
+    median_input_tokens_overall: int | None = None
+    median_output_tokens_overall: int | None = None
+    median_num_turns_overall: int | None = None
+    total_cost_usd: float = 0.0
     if runtimes_report:
         per_test_medians = [d["median_seconds"] for d in runtimes_report.values()]
         median_runtime_overall = round(statistics.median(per_test_medians), 3)
+        in_toks = [d["median_input_tokens"] for d in runtimes_report.values() if d.get("median_input_tokens")]
+        out_toks = [d["median_output_tokens"] for d in runtimes_report.values() if d.get("median_output_tokens")]
+        turns = [d["median_num_turns"] for d in runtimes_report.values() if d.get("median_num_turns")]
+        if in_toks:
+            median_input_tokens_overall = round(statistics.median(in_toks))
+        if out_toks:
+            median_output_tokens_overall = round(statistics.median(out_toks))
+        if turns:
+            median_num_turns_overall = round(statistics.median(turns))
+        for d in runtimes_report.values():
+            total_cost_usd += sum(d.get("cost_usd", []))
 
     # Shareable status block at end of run
     status_summary = {
@@ -420,20 +474,32 @@ def main() -> int:
         "replay": args.replay is not None,
         "exit_code": exit_code,
         "median_runtime_seconds": median_runtime_overall,
+        "median_input_tokens": median_input_tokens_overall,
+        "median_output_tokens": median_output_tokens_overall,
+        "median_num_turns": median_num_turns_overall,
+        "total_cost_usd": round(total_cost_usd, 4),
     }
+    _rt = f"{median_runtime_overall:.2f}s" if median_runtime_overall is not None else "n/a"
+    _it = str(median_input_tokens_overall) if median_input_tokens_overall is not None else "n/a"
+    _ot = str(median_output_tokens_overall) if median_output_tokens_overall is not None else "n/a"
+    _nt = str(median_num_turns_overall) if median_num_turns_overall is not None else "n/a"
+    _cost = f"${total_cost_usd:.4f}" if total_cost_usd > 0 else "n/a"
+
     print("\n" + "=" * 60)
     print("STATUS (shareable)")
     print("=" * 60)
-    print(f"  passed:     {passed}")
-    print(f"  failed:     {failed}")
-    print(f"  skipped:    {skipped}")
-    print(f"  total run:  {total_run}")
-    if pass_at > 1:
-        print(f"  pass@{pass_at}:  {passed}/{total_run}")
-    if median_runtime_overall is not None:
-        print(f"  median_runtime: {median_runtime_overall:.2f}s")
-    print(f"  replay:     {status_summary['replay']}")
-    print(f"  exit_code: {exit_code}")
+    print(f"  passed:               {passed}")
+    print(f"  failed:               {failed}")
+    print(f"  skipped:              {skipped}")
+    print(f"  total run:            {total_run}")
+    print(f"  pass@{pass_at}:               {passed}/{total_run}")
+    print(f"  median_runtime:       {_rt}")
+    print(f"  median_input_tokens:  {_it}")
+    print(f"  median_output_tokens: {_ot}")
+    print(f"  median_num_turns:     {_nt}")
+    print(f"  total_cost_usd:       {_cost}")
+    print(f"  replay:               {status_summary['replay']}")
+    print(f"  exit_code:            {exit_code}")
     print("=" * 60)
 
     if args.runtimes_file and runtimes_report:
@@ -455,14 +521,17 @@ def main() -> int:
         csv_path = os.path.join(report_dir, "results.csv")
         md_path = os.path.join(report_dir, "report.md")
 
-        # CSV: test_id, label, prompt, passed, median_seconds, failure_reasons
+        # CSV: test_id, label, prompt, passed, median_seconds, input_tokens, output_tokens, num_turns, failure_reasons
         with open(csv_path, "w", encoding="utf-8", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["test_id", "label", "prompt", "passed", "median_seconds", "failure_reasons"])
+            w.writerow(["test_id", "label", "prompt", "passed", "median_seconds", "median_input_tokens", "median_output_tokens", "median_num_turns", "failure_reasons"])
             for r in report_rows:
                 reasons = " | ".join(r["failure_reasons"]) if r["failure_reasons"] else ""
                 med = r["median_seconds"] if r["median_seconds"] != "" else ""
-                w.writerow([r["test_id"], r["label"], r["prompt"], r["passed"], med, reasons])
+                in_tok = r.get("median_input_tokens", "")
+                out_tok = r.get("median_output_tokens", "")
+                turns = r.get("median_num_turns", "")
+                w.writerow([r["test_id"], r["label"], r["prompt"], r["passed"], med, in_tok, out_tok, turns, reasons])
 
         # Markdown report
         with open(md_path, "w", encoding="utf-8") as f:
@@ -476,14 +545,25 @@ def main() -> int:
             f.write(f"- **Exit code:** {exit_code}  \n")
             if median_runtime_overall is not None:
                 f.write(f"- **Median runtime (overall):** {median_runtime_overall:.2f}s  \n")
+            if median_input_tokens_overall is not None:
+                f.write(f"- **Median input tokens (overall):** {median_input_tokens_overall}  \n")
+            if median_output_tokens_overall is not None:
+                f.write(f"- **Median output tokens (overall):** {median_output_tokens_overall}  \n")
+            if median_num_turns_overall is not None:
+                f.write(f"- **Median turns/steps (overall):** {median_num_turns_overall}  \n")
+            if total_cost_usd > 0:
+                f.write(f"- **Total cost:** ${total_cost_usd:.4f}  \n")
             f.write("\n## Results\n\n")
-            f.write("| test_id | prompt | median_seconds | pass/fail |\n")
-            f.write("|---------|--------|----------------|----------|\n")
+            f.write("| test_id | prompt | median_seconds | input_tokens | output_tokens | turns | pass/fail |\n")
+            f.write("|---------|--------|----------------|-------------|--------------|-------|----------|\n")
             for r in report_rows:
                 prompt_short = (r["prompt"][:60] + "…") if len(r["prompt"]) > 60 else r["prompt"]
                 prompt_short = prompt_short.replace("|", "\\|").replace("\n", " ")
                 med = r["median_seconds"] if r["median_seconds"] != "" else "—"
-                f.write(f"| {r['test_id']} | {prompt_short} | {med} | {r['passed']} |\n")
+                in_tok = r.get("median_input_tokens", "—") or "—"
+                out_tok = r.get("median_output_tokens", "—") or "—"
+                turns = r.get("median_num_turns", "—") or "—"
+                f.write(f"| {r['test_id']} | {prompt_short} | {med} | {in_tok} | {out_tok} | {turns} | {r['passed']} |\n")
             failed_rows = [r for r in report_rows if r["passed"] == "FAIL"]
             if failed_rows:
                 f.write("\n## Failed tests (details)\n\n")
