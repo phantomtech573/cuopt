@@ -5,7 +5,9 @@
  */
 /* clang-format on */
 
+#include <branch_and_bound/reduced_cost_fixing.hpp>
 #include <branch_and_bound/branch_and_bound.hpp>
+#include <branch_and_bound/diving_heuristics.hpp>
 #include <branch_and_bound/mip_node.hpp>
 #include <branch_and_bound/pseudo_costs.hpp>
 
@@ -35,11 +37,9 @@
 #include <deque>
 #include <future>
 #include <limits>
-#include <map>
 #include <optional>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 namespace cuopt::linear_programming::dual_simplex {
@@ -380,66 +380,6 @@ void branch_and_bound_t<i_t, f_t>::report(
 }
 
 template <typename i_t, typename f_t>
-i_t branch_and_bound_t<i_t, f_t>::find_reduced_cost_fixings(f_t upper_bound,
-                                                            std::vector<f_t>& lower_bounds,
-                                                            std::vector<f_t>& upper_bounds,
-                                                            std::vector<bool>& bounds_changed)
-{
-  std::vector<f_t>& reduced_costs = root_relax_soln_.z;
-  lower_bounds                    = original_lp_.lower;
-  upper_bounds                    = original_lp_.upper;
-  bounds_changed.assign(original_lp_.num_cols, false);
-
-  const f_t threshold   = 100.0 * settings_.integer_tol;
-  const f_t weaken      = settings_.integer_tol;
-  const f_t fixed_tol   = settings_.fixed_tol;
-  i_t num_improved      = 0;
-  i_t num_fixed         = 0;
-  i_t num_cols_to_check = reduced_costs.size();  // Reduced costs will be smaller than the original
-                                                 // problem because we have added slacks for cuts
-  for (i_t j = 0; j < num_cols_to_check; j++) {
-    if (std::isfinite(reduced_costs[j]) && std::abs(reduced_costs[j]) > threshold) {
-      const f_t lower_j            = original_lp_.lower[j];
-      const f_t upper_j            = original_lp_.upper[j];
-      const f_t abs_gap            = upper_bound - root_objective_;
-      f_t reduced_cost_upper_bound = upper_j;
-      f_t reduced_cost_lower_bound = lower_j;
-      if (lower_j > -inf && reduced_costs[j] > 0) {
-        const f_t new_upper_bound = lower_j + abs_gap / reduced_costs[j];
-        reduced_cost_upper_bound  = var_types_[j] == variable_type_t::INTEGER
-                                      ? std::floor(new_upper_bound + weaken)
-                                      : new_upper_bound;
-        if (reduced_cost_upper_bound < upper_j && var_types_[j] == variable_type_t::INTEGER) {
-          num_improved++;
-          upper_bounds[j]   = reduced_cost_upper_bound;
-          bounds_changed[j] = true;
-        }
-      }
-      if (upper_j < inf && reduced_costs[j] < 0) {
-        const f_t new_lower_bound = upper_j + abs_gap / reduced_costs[j];
-        reduced_cost_lower_bound  = var_types_[j] == variable_type_t::INTEGER
-                                      ? std::ceil(new_lower_bound - weaken)
-                                      : new_lower_bound;
-        if (reduced_cost_lower_bound > lower_j && var_types_[j] == variable_type_t::INTEGER) {
-          num_improved++;
-          lower_bounds[j]   = reduced_cost_lower_bound;
-          bounds_changed[j] = true;
-        }
-      }
-      if (var_types_[j] == variable_type_t::INTEGER &&
-          reduced_cost_upper_bound <= reduced_cost_lower_bound + fixed_tol) {
-        num_fixed++;
-      }
-    }
-  }
-
-  if (num_fixed > 0 || num_improved > 0) {
-    settings_.log.printf(
-      "Reduced costs: Found %d improved bounds and %d fixed variables\n", num_improved, num_fixed);
-  }
-  return num_fixed;
-}
-template <typename i_t, typename f_t>
 bool branch_and_bound_t<i_t, f_t>::update_root_bounds(const std::vector<f_t>& lower_bounds,
                                                       const std::vector<f_t>& upper_bounds,
                                                       const std::vector<bool>& bounds_changed)
@@ -453,8 +393,6 @@ bool branch_and_bound_t<i_t, f_t>::update_root_bounds(const std::vector<f_t>& lo
   bool feasible      = node_presolve.bounds_strengthening(
     settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
   mutex_original_lp_.unlock();
-
-  was_bounds_at_root_updated = true;
 
   return feasible;
 }
@@ -508,10 +446,17 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
       incumbent_.set_incumbent_solution(obj, crushed_solution);
 
       if (settings_.reduced_cost_strengthening >= 3) {
-        num_fixed = find_reduced_cost_fixings(obj, lower_bound, upper_bound, bounds_changed);
-        settings_.log.printf("H: Applied reduced cost fixing. obj=%.10e. num_fixed=%d.\n",
-                             compute_user_objective(original_lp_, obj),
-                             num_fixed);
+        lower_bound = original_lp_.lower;
+        upper_bound = original_lp_.upper;
+        num_fixed   = find_reduced_cost_fixings(original_lp_,
+                                              root_relax_soln_.z,
+                                              var_types_,
+                                              root_objective_,
+                                              obj,
+                                              lower_bound,
+                                              upper_bound,
+                                              bounds_changed,
+                                              settings_);
       }
 
     } else {
@@ -696,8 +641,17 @@ void branch_and_bound_t<i_t, f_t>::repair_heuristic_solutions()
           }
 
           if (settings_.reduced_cost_strengthening >= 3) {
-            num_fixed = find_reduced_cost_fixings(
-              upper_bound_.load(), lower_bound, upper_bound, bounds_changed);
+            lower_bound = original_lp_.lower;
+            upper_bound = original_lp_.upper;
+            num_fixed   = find_reduced_cost_fixings(original_lp_,
+                                                  root_relax_soln_.z,
+                                                  var_types_,
+                                                  root_objective_,
+                                                  repaired_obj,
+                                                  lower_bound,
+                                                  upper_bound,
+                                                  bounds_changed,
+                                                  settings_);
             settings_.log.printf(
               "Repair H: Applied reduced cost fixing. obj=%.10e. num_fixed=%d.\n",
               compute_user_objective(original_lp_, repaired_obj),
@@ -857,12 +811,17 @@ void branch_and_bound_t<i_t, f_t>::add_feasible_solution(f_t leaf_objective,
     send_solution = true;
 
     if (settings_.reduced_cost_strengthening >= 3) {
-      num_fixed =
-        find_reduced_cost_fixings(leaf_objective, lower_bound, upper_bound, bounds_changed);
-      settings_.log.printf("%c: Applying reduced cost fixing. obj=%.10e. num_fixed=%d.\n",
-                           feasible_solution_symbol(thread_type),
-                           compute_user_objective(original_lp_, leaf_objective),
-                           num_fixed);
+      lower_bound = original_lp_.lower;
+      upper_bound = original_lp_.upper;
+      num_fixed   = find_reduced_cost_fixings(original_lp_,
+                                            root_relax_soln_.z,
+                                            var_types_,
+                                            root_objective_,
+                                            leaf_objective,
+                                            lower_bound,
+                                            upper_bound,
+                                            bounds_changed,
+                                            settings_);
     }
   }
 
@@ -1265,6 +1224,9 @@ std::pair<node_status_t, rounding_direction_t> branch_and_bound_t<i_t, f_t>::upd
   node_status_t status                   = node_status_t::PENDING;
   rounding_direction_t round_dir         = rounding_direction_t::NONE;
 
+  worker->recompute_basis  = true;
+  worker->recompute_bounds = true;
+
   if (lp_status == dual::status_t::DUAL_UNBOUNDED) {
     node_ptr->lower_bound = inf;
     policy.graphviz(search_tree, node_ptr, "infeasible", 0.0);
@@ -1324,6 +1286,29 @@ std::pair<node_status_t, rounding_direction_t> branch_and_bound_t<i_t, f_t>::upd
       assert(dir != rounding_direction_t::NONE);
 
       policy.update_objective_estimate(node_ptr, leaf_fractional, leaf_solution.x);
+      worker->recompute_basis  = false;
+      worker->recompute_bounds = false;
+
+      if (settings_.reduced_cost_strengthening >= 4) {
+        i_t num_fixed = find_reduced_cost_fixings(leaf_problem,
+                                                  leaf_solution.z,
+                                                  var_types_,
+                                                  leaf_obj,
+                                                  upper_bound,
+                                                  leaf_problem.lower,
+                                                  leaf_problem.upper,
+                                                  worker->bounds_changed,
+                                                  settings_);
+        if (num_fixed > 0) {
+          bool feasible = worker->node_presolver.bounds_strengthening(
+            settings_, worker->bounds_changed, leaf_problem.lower, leaf_problem.upper);
+          if (!feasible) {
+            // If bounds strenghtening failed after applying reduced cost fixing at the node,
+            // recompute the bounds from the beginning
+            worker->recompute_bounds = true;
+          }
+        }
+      }
 
       logger_t log;
       log.log = false;
@@ -1563,10 +1548,6 @@ void branch_and_bound_t<i_t, f_t>::plunge_with(branch_and_bound_worker_t<i_t, f_
 
     auto [node_status, round_dir] =
       update_tree(node_ptr, search_tree_, worker, lp_status, settings_.log);
-
-    worker->recompute_basis  = node_status != node_status_t::HAS_CHILDREN;
-    worker->recompute_bounds = node_status != node_status_t::HAS_CHILDREN;
-
     if (node_status == node_status_t::HAS_CHILDREN) {
       // The stack should only contain the children of the current parent.
       // If the stack size is greater than 0,
@@ -1660,9 +1641,6 @@ void branch_and_bound_t<i_t, f_t>::dive_with(branch_and_bound_worker_t<i_t, f_t>
     ++dive_stats.nodes_explored;
 
     auto [node_status, round_dir] = update_tree(node_ptr, dive_tree, worker, lp_status, log);
-
-    worker->recompute_basis  = node_status != node_status_t::HAS_CHILDREN;
-    worker->recompute_bounds = node_status != node_status_t::HAS_CHILDREN;
 
     if (node_status == node_status_t::HAS_CHILDREN) {
       if (round_dir == rounding_direction_t::UP) {
@@ -2362,9 +2340,21 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       std::vector<f_t> new_upper;
 
       if (settings_.reduced_cost_strengthening >= 1 && upper_bound_.load() < last_upper_bound) {
+        mutex_original_lp_.lock();
+        new_lower = original_lp_.lower;
+        new_upper = original_lp_.upper;
+        mutex_original_lp_.unlock();
         mutex_upper_.lock();
         last_upper_bound = upper_bound_.load();
-        find_reduced_cost_fixings(upper_bound_.load(), new_lower, new_upper, bounds_changed);
+        find_reduced_cost_fixings(original_lp_,
+                                  root_relax_soln_.z,
+                                  var_types_,
+                                  compute_objective(original_lp_, root_relax_soln_.x),
+                                  upper_bound_.load(),
+                                  new_lower,
+                                  new_upper,
+                                  bounds_changed,
+                                  settings_);
         mutex_upper_.unlock();
         mutex_original_lp_.lock();
         original_lp_.lower = new_lower;
@@ -2553,13 +2543,23 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   }
 
   if (settings_.reduced_cost_strengthening >= 2 && upper_bound_.load() < last_upper_bound) {
-    std::vector<f_t> lower_bounds;
-    std::vector<f_t> upper_bounds;
     std::vector<bool> bounds_changed;
 
+    mutex_original_lp_.lock();
+    std::vector<f_t> lower_bounds = original_lp_.lower;
+    std::vector<f_t> upper_bounds = original_lp_.upper;
+    mutex_original_lp_.unlock();
+
     mutex_upper_.lock();
-    i_t num_fixed =
-      find_reduced_cost_fixings(upper_bound_.load(), lower_bounds, upper_bounds, bounds_changed);
+    i_t num_fixed = find_reduced_cost_fixings(original_lp_,
+                                              root_relax_soln_.z,
+                                              var_types_,
+                                              root_objective_,
+                                              upper_bound_.load(),
+                                              lower_bounds,
+                                              upper_bounds,
+                                              bounds_changed,
+                                              settings_);
     mutex_upper_.unlock();
 
     if (num_fixed > 0) {

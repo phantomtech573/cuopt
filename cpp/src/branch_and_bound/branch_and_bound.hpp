@@ -10,7 +10,6 @@
 #include <branch_and_bound/bb_event.hpp>
 #include <branch_and_bound/branch_and_bound_worker.hpp>
 #include <branch_and_bound/deterministic_workers.hpp>
-#include <branch_and_bound/diving_heuristics.hpp>
 #include <branch_and_bound/mip_node.hpp>
 #include <branch_and_bound/node_queue.hpp>
 #include <branch_and_bound/pseudo_costs.hpp>
@@ -29,8 +28,6 @@
 #include <utilities/producer_sync.hpp>
 #include <utilities/work_limit_context.hpp>
 #include <utilities/work_unit_scheduler.hpp>
-
-#include <omp.h>
 
 #include <atomic>
 #include <functional>
@@ -172,10 +169,6 @@ class branch_and_bound_t {
   // when modifying the original LP.
   omp_mutex_t mutex_original_lp_;
 
-  // If the reduced cost strengthening modified the bounds of the root LP problem,,
-  // then all workers must also update its local bounds.
-  omp_atomic_t<bool> was_bounds_at_root_updated;
-
   // Mutex for upper bound
   omp_mutex_t mutex_upper_;
 
@@ -307,15 +300,9 @@ class branch_and_bound_t {
     dual::status_t lp_status,
     logger_t& log);
 
-  i_t find_reduced_cost_fixings(f_t upper_bound,
-                                std::vector<f_t>& lower_bounds,
-                                std::vector<f_t>& upper_bounds,
-                                std::vector<bool>& bounds_changed);
- bool update_root_bounds(const std::vector<f_t>& lower_bounds,
+  bool update_root_bounds(const std::vector<f_t>& lower_bounds,
                           const std::vector<f_t>& upper_bounds,
                           const std::vector<bool>& bounds_changed);
-
-  i_t apply_reduced_cost_fixings();
 
   // ============================================================================
   // Deterministic BSP (Bulk Synchronous Parallel) methods for deterministic parallel B&B
