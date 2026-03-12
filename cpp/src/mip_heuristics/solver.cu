@@ -283,6 +283,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
         ? 2
         : context.settings.reduced_cost_strengthening;
     branch_and_bound_settings.bnb_work_unit_scale = solver_settings_.bnb_work_unit_scale;
+    branch_and_bound_settings.gpu_heur_wait_for_exploration =
+      solver_settings_.gpu_heur_wait_for_exploration;
 
     if (context.settings.num_cpu_threads < 0) {
       branch_and_bound_settings.num_threads = std::max(1, omp_get_max_threads() - 1);

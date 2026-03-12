@@ -2329,9 +2329,14 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   if (settings_.deterministic) {
     work_unit_context_.deterministic = true;
     cuopt_assert(settings_.bnb_work_unit_scale > 0.0, "B&B work-unit scale must be positive");
-    // Scale=0 during pre-exploration: root LP/cuts/SB don't advance the deterministic timeline.
-    // Restored to bnb_work_unit_scale when exploration begins.
-    work_unit_context_.work_unit_scale = 0.0;
+    if (settings_.gpu_heur_wait_for_exploration) {
+      // Scale=0 during pre-exploration: root LP/cuts/SB don't advance the deterministic timeline.
+      // GPU heuristics start after exploration, so both timelines begin at 0 together.
+      work_unit_context_.work_unit_scale = 0.0;
+    } else {
+      // GPU heuristics race with B&B pre-exploration, so B&B work must advance normally.
+      work_unit_context_.work_unit_scale = settings_.bnb_work_unit_scale;
+    }
 
     // Detach the scheduler during the serial root/cuts/SB phase.
     // record_work_sync_on_horizon still accumulates global_work_units_elapsed,
