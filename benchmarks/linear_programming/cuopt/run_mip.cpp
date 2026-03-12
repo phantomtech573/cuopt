@@ -284,6 +284,7 @@ int run_single_file(std::string file_path,
   settings.bnb_work_unit_scale           = 1;
   settings.gpu_heur_work_unit_scale      = 0.4;
   settings.mip_scaling                   = false;
+  settings.gpu_heur_wait_for_exploration = false;
   cuopt::linear_programming::benchmark_info_t benchmark_info;
   settings.benchmark_info_ptr = &benchmark_info;
   auto start_run_solver       = std::chrono::high_resolution_clock::now();
