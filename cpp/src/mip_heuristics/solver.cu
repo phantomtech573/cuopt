@@ -19,8 +19,8 @@
 #include <dual_simplex/solve.hpp>
 #include <utilities/determinism_log.hpp>
 
-#undef CUOPT_DETERMINISM_LOG_INFO
-#define CUOPT_DETERMINISM_LOG_INFO(...) CUOPT_LOG_INFO(__VA_ARGS__)
+#undef CUOPT_DETERMINISM_LOG
+#define CUOPT_DETERMINISM_LOG(...) CUOPT_LOG_INFO(__VA_ARGS__)
 
 #include <raft/sparse/detail/cusparse_wrappers.h>
 #include <raft/core/cusparse_macros.hpp>
@@ -401,7 +401,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     if (bb_status == dual_simplex::mip_status_t::INFEASIBLE) { sol.set_problem_fully_reduced(); }
     if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
         std::isfinite(branch_and_bound_solution.objective)) {
-      CUOPT_DETERMINISM_LOG_INFO(
+      CUOPT_DETERMINISM_LOG(
         "Deterministic solver B&B overwrite: bb_status=%d bb_obj=%.16e bb_lower=%.16e "
         "bb_x_size=%zu bb_has_incumbent=%d "
         "bb_hash=0x%x dm_hash=0x%x nodes=%d simplex_iterations=%d",
@@ -420,7 +420,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       f_t max_cstr_vio = bb_sol.compute_max_constraint_violation();
       f_t max_int_vio  = bb_sol.compute_max_int_violation();
       f_t max_bnd_vio  = bb_sol.compute_max_variable_violation();
-      CUOPT_DETERMINISM_LOG_INFO(
+      CUOPT_DETERMINISM_LOG(
         "Deterministic B&B overwrite feasibility: feasible=%d obj=%.16e user_obj=%.16e "
         "max_cstr_vio=%.6e max_int_vio=%.6e max_bnd_vio=%.6e "
         "n_integers=%d n_int_vars=%d n_feas_cstr=%d n_cstr=%d hash=0x%x",
@@ -451,7 +451,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
           f_t lo_vio = std::max(0.0, (double)(h_clb[row] - ax));
           f_t hi_vio = std::max(0.0, (double)(ax - h_cub[row]));
           if (lo_vio > 1e-6 || hi_vio > 1e-6) {
-            CUOPT_DETERMINISM_LOG_INFO(
+            CUOPT_DETERMINISM_LOG(
               "  Constraint %d violated: Ax=%.16e lb=%.16e ub=%.16e lo_vio=%.6e hi_vio=%.6e "
               "nnz=%d",
               row,
@@ -466,7 +466,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       }
       sol = std::move(bb_sol);
     } else if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
-      CUOPT_DETERMINISM_LOG_INFO(
+      CUOPT_DETERMINISM_LOG(
         "Deterministic B&B overwrite skipped: bb_obj=%.16e bb_obj_finite=%d bb_has_incumbent=%d",
         branch_and_bound_solution.objective,
         (int)std::isfinite(branch_and_bound_solution.objective),

@@ -22,14 +22,14 @@
   } while (0)
 #endif
 
-#ifndef CUOPT_DETERMINISM_LOG_INFO
-#define CUOPT_DETERMINISM_LOG_INFO(...) \
-  do {                                  \
+#ifndef CUOPT_DETERMINISM_LOG
+#define CUOPT_DETERMINISM_LOG(...) \
+  do {                             \
   } while (0)
 #endif
 
-#ifndef CUOPT_DETERMINISM_LOG_DEBUG
-#define CUOPT_DETERMINISM_LOG_DEBUG(...) \
-  do {                                   \
+#ifndef CUOPT_DETERMINISM_LOG
+#define CUOPT_DETERMINISM_LOG(...) \
+  do {                             \
   } while (0)
 #endif

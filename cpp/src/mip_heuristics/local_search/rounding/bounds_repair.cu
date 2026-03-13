@@ -500,7 +500,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
   if (timer.deterministic) {
     const double setup_work = estimate_bounds_repair_setup_work(problem);
     record_estimated_work(timer, &total_estimated_work, setup_work);
-    CUOPT_DETERMINISM_LOG_INFO(
+    CUOPT_DETERMINISM_LOG(
       "Repair entry: pb_hash=0x%x bounds_hash=0x%x violated_hash=0x%x n_violated=%d "
       "best_violation=%.6f timer_rem=%.6f total_work=%.6f setup_work=%.6f",
       problem.get_fingerprint(),

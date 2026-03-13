@@ -261,7 +261,7 @@ class recombiner_t {
     const char* enabled_3 = recombiner_t::enabled_recombiners.size() > 3
                               ? recombiner_name(recombiner_t::enabled_recombiners[3])
                               : "NONE";
-    CUOPT_DETERMINISM_LOG_INFO(
+    CUOPT_DETERMINISM_LOG(
       "Deterministic recombiner init: expensive_to_fix=%d n_continuous=%d "
       "max_continuous=%zu disable_fp_submip_expensive=%d "
       "disable_submip_continuous=%d disable_submip_deterministic=%d size=%zu "

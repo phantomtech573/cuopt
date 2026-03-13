@@ -23,6 +23,12 @@
 
 #include <atomic>
 
+// #undef CUOPT_DETERMINISM_LOG
+// #define CUOPT_DETERMINISM_LOG(...) \
+//   do {                                            \
+//     CUOPT_LOG_INFO(__VA_ARGS__);                   \
+//   } while (0)
+
 namespace cuopt::linear_programming::detail {
 
 template <typename i_t, typename f_t>
@@ -90,18 +96,22 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   if (determinism_mode) {
     // try to estimate the iteration count based on the requested work limit
     estim_iters = 100;
-    do {
-      // TODO: use an actual predictor model here
-      double estim_ms = 313 + 200 * op_problem.n_variables - 400 * op_problem.n_constraints +
-                        600 * op_problem.coefficients.size() + 7100 * estim_iters;
-      estim_ms = std::max(0.0, estim_ms);
-      if (estim_ms > work_limit * 1000) { break; }
-      estim_iters += 100;
-    } while (true);
-    CUOPT_LOG_DEBUG("estimated iterations %d for work limit %f", estim_iters, settings.work_limit);
+    if (!std::isinf(work_limit)) {
+      do {
+        // TODO: use an actual predictor model here
+        double estim_ms = 313 + 200 * op_problem.n_variables - 400 * op_problem.n_constraints +
+                          600 * op_problem.coefficients.size() + 7100 * estim_iters;
+        estim_ms = std::max(0.0, estim_ms);
+        if (estim_ms > work_limit * 1000) { break; }
+        estim_iters += 100;
+      } while (true);
+    } else {
+      estim_iters = std::numeric_limits<int>::max();
+    }
+    CUOPT_LOG_INFO("estimated iterations %d for work limit %f", estim_iters, settings.work_limit);
     pdlp_settings.iteration_limit  = estim_iters;
     pdlp_settings.time_limit       = std::numeric_limits<double>::infinity();
-    pdlp_settings.pdlp_solver_mode = pdlp_solver_mode_t::Stable3;
+    pdlp_settings.pdlp_solver_mode = pdlp_solver_mode_t::Stable2;
     pdlp_settings.presolver        = presolver_t::None;
   }
   CUOPT_LOG_DEBUG(
@@ -151,28 +161,27 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   // temporarily add timer
   auto start_time = timer_t(pdlp_settings.time_limit);
   lp_solver.set_inside_mip(true);
-  CUOPT_DETERMINISM_LOG_INFO(
+  CUOPT_DETERMINISM_LOG(
     "prev solution sizes primal=%lu dual=%lu", assignment.size(), lp_state.prev_dual.size());
   auto solver_response = lp_solver.run_solver(start_time);
-  CUOPT_DETERMINISM_LOG_INFO("post LP primal size %lu",
-                             solver_response.get_primal_solution().size());
+  CUOPT_DETERMINISM_LOG("post LP primal size %lu", solver_response.get_primal_solution().size());
   const int actual_iters =
     solver_response.get_additional_termination_information().number_of_steps_taken;
-  CUOPT_DETERMINISM_LOG_INFO("LP call %lu result: status=%d iters=%d primal_hash=0x%x",
-                             lp_call_id,
-                             (int)solver_response.get_termination_status(),
-                             actual_iters,
-                             solver_response.get_primal_solution().size() != 0
-                               ? detail::compute_hash(solver_response.get_primal_solution(),
-                                                      op_problem.handle_ptr->get_stream())
-                               : 0u);
+  CUOPT_DETERMINISM_LOG("LP call %lu result: status=%d iters=%d primal_hash=0x%x",
+                        lp_call_id,
+                        (int)solver_response.get_termination_status(),
+                        actual_iters,
+                        solver_response.get_primal_solution().size() != 0
+                          ? detail::compute_hash(solver_response.get_primal_solution(),
+                                                 op_problem.handle_ptr->get_stream())
+                          : 0u);
   if (determinism_mode && settings.work_context != nullptr) {
     double work_to_record = settings.work_limit;
     if (estim_iters > 0) {
       work_to_record =
         settings.work_limit * std::clamp((double)actual_iters / (double)estim_iters, 0.0, 1.0);
     }
-    CUOPT_DETERMINISM_LOG_INFO(
+    CUOPT_DETERMINISM_LOG(
       "LP call %lu recording %.6fwu (actual_iters=%d estim_iters=%d requested=%.6f)",
       lp_call_id,
       work_to_record,
@@ -194,14 +203,14 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
                solver_response.get_primal_solution().size(),
                op_problem.handle_ptr->get_stream());
   }
-  CUOPT_DETERMINISM_LOG_INFO("LP call %lu assignment_after_copy hash=0x%x",
-                             lp_call_id,
-                             detail::compute_hash(assignment, op_problem.handle_ptr->get_stream()));
+  CUOPT_DETERMINISM_LOG("LP call %lu assignment_after_copy hash=0x%x",
+                        lp_call_id,
+                        detail::compute_hash(assignment, op_problem.handle_ptr->get_stream()));
   if (solver_response.get_termination_status() == pdlp_termination_status_t::Optimal) {
     CUOPT_LOG_TRACE("feasible solution found with LP objective %f",
                     solver_response.get_objective_value());
   } else {
-    CUOPT_DETERMINISM_LOG_INFO(
+    CUOPT_DETERMINISM_LOG(
       "LP returned with reason %d, %d iterations",
       solver_response.get_termination_status(),
       solver_response.get_additional_termination_information().number_of_steps_taken);

@@ -228,7 +228,7 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
 
     // Initialize seed generator if a specific seed is requested
     if (settings.seed >= 0) { cuopt::seed_generator::set_seed(settings.seed); }
-    CUOPT_DETERMINISM_LOG_INFO(
+    CUOPT_DETERMINISM_LOG(
       "Deterministic solve start settings: seed=%lld seed_state=%lld det_mode=%d "
       "work_limit=%.6f max_cut_passes=%d num_cpu_threads=%d",
       (long long)settings.seed,

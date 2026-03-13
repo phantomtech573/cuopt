@@ -137,7 +137,7 @@ struct work_limit_context_t {
     producer_sync = producer_sync_;
     producer_work_units_elapsed->store(current_producer_work(), std::memory_order_release);
     if (work_unit_scale != 1.0) {
-      CUOPT_DETERMINISM_LOG_DEBUG("[%s] Using work-unit scale %f", name.c_str(), work_unit_scale);
+      CUOPT_DETERMINISM_LOG("[%s] Using work-unit scale %f", name.c_str(), work_unit_scale);
     }
   }
 

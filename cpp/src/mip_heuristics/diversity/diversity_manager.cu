@@ -21,7 +21,12 @@
 #include <utilities/determinism_log.hpp>
 #include <utilities/scope_guard.hpp>
 
-#include <memory>
+// uncomment to enable detailed detemrinism logs
+// #undef CUOPT_DETERMINISM_LOG
+// #define CUOPT_DETERMINISM_LOG(...) \
+//   do {                                            \
+//     CUOPT_LOG_INFO(__VA_ARGS__);                   \
+//   } while (0)
 
 constexpr bool fj_only_run = false;
 
@@ -90,7 +95,7 @@ diversity_manager_t<i_t, f_t>::diversity_manager_t(mip_solver_context_t<i_t, f_t
   sub_mip_recombiner_config_t::max_n_of_vars_from_other =
     sub_mip_recombiner_config_t::initial_n_of_vars_from_other;
 
-  CUOPT_DETERMINISM_LOG_INFO(
+  CUOPT_DETERMINISM_LOG(
     "Deterministic solve start diversity state: seed_state=%lld fp_max=%zu "
     "ls_max=%zu bp_max=%zu sub_mip_max=%zu last_lm=%d last_ls=%d "
     "enabled_recombiners=%zu",
@@ -352,10 +357,10 @@ void diversity_manager_t<i_t, f_t>::run_fj_alone(solution_t<i_t, f_t>& solution)
 template <typename i_t, typename f_t>
 void diversity_manager_t<i_t, f_t>::run_fp_alone()
 {
-  CUOPT_DETERMINISM_LOG_INFO("Deterministic FP alone enter");
+  CUOPT_DETERMINISM_LOG("Deterministic FP alone enter");
   solution_t<i_t, f_t> sol(population.best_feasible());
   sol.handle_ptr->sync_stream();
-  CUOPT_DETERMINISM_LOG_INFO(
+  CUOPT_DETERMINISM_LOG(
     "Deterministic FP alone input: hash=0x%x feasible=%d obj=%.16e excess=%.16e",
     sol.get_hash(),
     (int)sol.get_feasible(),
@@ -363,7 +368,7 @@ void diversity_manager_t<i_t, f_t>::run_fp_alone()
     sol.get_total_excess());
   ls.run_fp(sol, timer, &population, diversity_config.n_fp_iterations);
   sol.handle_ptr->sync_stream();
-  CUOPT_DETERMINISM_LOG_INFO(
+  CUOPT_DETERMINISM_LOG(
     "Deterministic FP alone output: hash=0x%x feasible=%d obj=%.16e excess=%.16e",
     sol.get_hash(),
     (int)sol.get_feasible(),
@@ -374,7 +379,7 @@ void diversity_manager_t<i_t, f_t>::run_fp_alone()
   }
   auto& best_sol = population.best_feasible();
   best_sol.handle_ptr->sync_stream();
-  CUOPT_DETERMINISM_LOG_INFO(
+  CUOPT_DETERMINISM_LOG(
     "Deterministic FP alone population best after: hash=0x%x feasible=%d obj=%.16e excess=%.16e",
     best_sol.get_hash(),
     (int)best_sol.get_feasible(),
@@ -404,7 +409,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     cuopt::scope_guard([&]() { stats.total_solve_time = timer.elapsed_time(); });
   auto log_return_solution = [&](const char* reason, solution_t<i_t, f_t>& sol) {
     sol.handle_ptr->sync_stream();
-    CUOPT_DETERMINISM_LOG_INFO(
+    CUOPT_DETERMINISM_LOG(
       "Deterministic run_solver return: reason=%s hash=0x%x feasible=%d "
       "obj=%.16e excess=%.16e",
       reason,
@@ -529,7 +534,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
         lp_settings.concurrent_halt         = &global_concurrent_halt;
         lp_settings.work_context            = &context.gpu_heur_loop;
         cuopt_assert(lp_settings.work_context != nullptr, "Missing deterministic work context");
-        CUOPT_DETERMINISM_LOG_DEBUG(
+        CUOPT_DETERMINISM_LOG(
           "DM root LP config: dry_run=%d deterministic=%d work_limit=%.6f time_limit=%.6f",
           (int)diversity_config.dry_run,
           (int)timer.deterministic,
@@ -549,16 +554,10 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
       pdlp_settings.pdlp_solver_mode                     = pdlp_solver_mode_t::Stable2;
       pdlp_settings.num_gpus                             = context.settings.num_gpus;
       pdlp_settings.presolver                            = presolver_t::None;
-      CUOPT_DETERMINISM_LOG_DEBUG(
-        "DM root LP config: dry_run=%d deterministic=%d lp_time_limit=%.6f iter_limit=%d",
-        (int)diversity_config.dry_run,
-        (int)timer.deterministic,
-        pdlp_settings.time_limit,
-        pdlp_settings.iteration_limit);
       timer_t lp_timer(lp_time_limit);
       return solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);
     }();
-    CUOPT_DETERMINISM_LOG_DEBUG(
+    CUOPT_DETERMINISM_LOG(
       "DM root LP result: status=%d iters=%d user_obj=%.12f primal_hash=0x%x",
       (int)lp_result.get_termination_status(),
       lp_result.get_additional_termination_information().number_of_steps_taken,
@@ -649,7 +648,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
 
     // in case the pdlp returned var boudns that are out of bounds
     clamp_within_var_bounds(lp_optimal_solution, problem_ptr, problem_ptr->handle_ptr);
-    CUOPT_DETERMINISM_LOG_DEBUG(
+    CUOPT_DETERMINISM_LOG(
       "DM root LP post-clamp: lp_optimal_solution hash=0x%x",
       detail::compute_hash(lp_optimal_solution, problem_ptr->handle_ptr->get_stream()));
   }
@@ -1008,7 +1007,7 @@ std::pair<solution_t<i_t, f_t>, bool> diversity_manager_t<i_t, f_t>::recombine(
       }
     }
   }
-  CUOPT_DETERMINISM_LOG_INFO(
+  CUOPT_DETERMINISM_LOG(
     "Deterministic recombiner selection: requested=%s selected_index=%d chosen=%s "
     "enabled_size=%zu last_choice_before=%d",
     recombiner_t<i_t, f_t>::recombiner_name(recombiner_type),

@@ -150,7 +150,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   cuopt_assert(h_assignment.size() == solution.problem_ptr->n_variables, "Size mismatch");
   cuopt_assert(h_last_projection.size() == solution.problem_ptr->n_variables, "Size mismatch");
   cuopt_assert(h_variable_bounds.size() == solution.problem_ptr->n_variables, "Size mismatch");
-  CUOPT_DETERMINISM_LOG_INFO(
+  CUOPT_DETERMINISM_LOG(
     "FP proj inputs: assign_hash=0x%x last_proj_hash=0x%x integer_idx_hash=0x%x n_vars=%d n_int=%d",
     detail::compute_hash(h_assignment),
     detail::compute_hash(h_last_projection),
@@ -205,7 +205,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
       interior_integer_indices.push_back(i);
     }
   }
-  CUOPT_DETERMINISM_LOG_INFO(
+  CUOPT_DETERMINISM_LOG(
     "FP proj build: at_lower=%d at_upper=%d interior=%d interior_idx_hash=0x%x obj_hash=0x%x "
     "assign_aug_hash=0x%x vars_added=%d cstr_added=%d cstr_var_hash=0x%x cstr_coeff_hash=0x%x "
     "cstr_offset_hash=0x%x cstr_lb_hash=0x%x cstr_ub_hash=0x%x",
@@ -223,8 +223,8 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     detail::compute_hash(h_constraints.constraint_lower_bounds),
     detail::compute_hash(h_constraints.constraint_upper_bounds));
   adjust_objective_with_original(solution, obj_coefficients, longer_lp_run);
-  CUOPT_DETERMINISM_LOG_INFO("FP proj adjusted objective hash=0x%x",
-                             detail::compute_hash(obj_coefficients));
+  CUOPT_DETERMINISM_LOG("FP proj adjusted objective hash=0x%x",
+                        detail::compute_hash(obj_coefficients));
   // commit all the changes that were done by the host
   if (h_variables.size() > 0) { temp_p.insert_variables(h_variables); }
   if (h_constraints.n_constraints() > 0) { temp_p.insert_constraints(h_constraints); }
@@ -235,7 +235,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   cuopt_assert(temp_p.objective_coefficients.size() == temp_p.n_variables, "Var count mismatch!");
   solution.copy_new_assignment(h_assignment);
   cuopt_assert(solution.assignment.size() == temp_p.n_variables, "Var count mismatch!");
-  CUOPT_DETERMINISM_LOG_INFO(
+  CUOPT_DETERMINISM_LOG(
     "FP proj pre-LP: temp_fingerprint=0x%x assignment_hash=0x%x n_vars=%d n_cstr=%d",
     temp_p.get_fingerprint(),
     detail::compute_hash(solution.assignment, solution.handle_ptr->get_stream()),
@@ -537,18 +537,18 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
 {
   raft::common::nvtx::range fun_scope("run_single_fp_descent");
   i_t fp_iter = 0;
-  CUOPT_DETERMINISM_LOG_INFO("FP descent start: hash=0x%x feas=%d obj=%.12f timer_det=%d rem=%.6f",
-                             solution.get_hash(),
-                             (int)solution.get_feasible(),
-                             solution.get_user_objective(),
-                             (int)timer.deterministic,
-                             timer.remaining_time());
+  CUOPT_DETERMINISM_LOG("FP descent start: hash=0x%x feas=%d obj=%.12f timer_det=%d rem=%.6f",
+                        solution.get_hash(),
+                        (int)solution.get_feasible(),
+                        solution.get_user_objective(),
+                        (int)timer.deterministic,
+                        timer.remaining_time());
   // start by doing nearest rounding
   solution.round_nearest();
-  CUOPT_DETERMINISM_LOG_INFO("FP descent after initial round: hash=0x%x feas=%d obj=%.12f",
-                             solution.get_hash(),
-                             (int)solution.get_feasible(),
-                             solution.get_user_objective());
+  CUOPT_DETERMINISM_LOG("FP descent after initial round: hash=0x%x feas=%d obj=%.12f",
+                        solution.get_hash(),
+                        (int)solution.get_feasible(),
+                        solution.get_user_objective());
   cuopt_assert(last_projection.size() == solution.assignment.size(), "Size mismatch");
   // First projection in a descent has no previous projection history: initialize explicitly
   raft::copy(last_projection.data(),
@@ -560,12 +560,12 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
              solution.assignment.size(),
              solution.handle_ptr->get_stream());
   while (true) {
-    CUOPT_DETERMINISM_LOG_INFO("FP iter %d pre-projection: hash=0x%x feas=%d obj=%.12f rem=%.6f",
-                               fp_iter,
-                               solution.get_hash(),
-                               (int)solution.get_feasible(),
-                               solution.get_user_objective(),
-                               timer.remaining_time());
+    CUOPT_DETERMINISM_LOG("FP iter %d pre-projection: hash=0x%x feas=%d obj=%.12f rem=%.6f",
+                          fp_iter,
+                          solution.get_hash(),
+                          (int)solution.get_feasible(),
+                          solution.get_user_objective(),
+                          timer.remaining_time());
     bool preempt = (context.diversity_manager_ptr != nullptr &&
                     context.diversity_manager_ptr->check_b_b_preemption());
     if (preempt || timer.check_time_limit()) {
@@ -583,7 +583,7 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     CUOPT_LOG_DEBUG("after fp projection n_integers %d total n_integes %d",
                     n_integers,
                     solution.problem_ptr->n_integer_vars);
-    CUOPT_DETERMINISM_LOG_INFO(
+    CUOPT_DETERMINISM_LOG(
       "FP iter %d post-projection: hash=0x%x feasible_after_lp=%d obj=%.12f rem=%.6f lp_stage=%.6f",
       fp_iter,
       solution.get_hash(),
@@ -591,12 +591,12 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
       solution.get_user_objective(),
       remaining_after_projection,
       proj_begin - remaining_after_projection);
-    CUOPT_DETERMINISM_LOG_INFO("FP iter %d pre-round: hash=0x%x feas=%d obj=%.12f rem=%.6f",
-                               fp_iter,
-                               solution.get_hash(),
-                               (int)is_feasible,
-                               solution.get_user_objective(),
-                               remaining_after_projection);
+    CUOPT_DETERMINISM_LOG("FP iter %d pre-round: hash=0x%x feas=%d obj=%.12f rem=%.6f",
+                          fp_iter,
+                          solution.get_hash(),
+                          (int)is_feasible,
+                          solution.get_user_objective(),
+                          remaining_after_projection);
     bool is_cycle = true;
     // temp comment for presolve run
     if (config.check_distance_cycle) {
@@ -664,7 +664,7 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     cuopt_func_call(solution.test_variable_bounds(true));
     const f_t remaining_after_round = timer.remaining_time();
     proj_and_round_time             = proj_begin - remaining_after_round;
-    CUOPT_DETERMINISM_LOG_INFO(
+    CUOPT_DETERMINISM_LOG(
       "FP iter %d post-round: hash=0x%x feasible_after_round=%d obj=%.12f rem=%.6f "
       "round_stage=%.6f proj_round_total=%.6f",
       fp_iter,
@@ -677,14 +677,14 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     if (!is_feasible) {
       const f_t time_ratio = 0.2;
       const f_t fj_budget  = time_ratio * proj_and_round_time;
-      CUOPT_DETERMINISM_LOG_INFO("FP iter %d pre-fj-fallback: hash=0x%x rem=%.6f fj_budget=%.6f",
-                                 fp_iter,
-                                 solution.get_hash(),
-                                 remaining_after_round,
-                                 fj_budget);
+      CUOPT_DETERMINISM_LOG("FP iter %d pre-fj-fallback: hash=0x%x rem=%.6f fj_budget=%.6f",
+                            fp_iter,
+                            solution.get_hash(),
+                            remaining_after_round,
+                            fj_budget);
       is_feasible                  = test_fj_feasible(solution, fj_budget);
       const f_t remaining_after_fj = timer.remaining_time();
-      CUOPT_DETERMINISM_LOG_INFO(
+      CUOPT_DETERMINISM_LOG(
         "FP iter %d post-fj-fallback: hash=0x%x feasible_after_fj=%d obj=%.12f rem=%.6f "
         "fj_stage=%.6f",
         fp_iter,

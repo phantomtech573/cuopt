@@ -57,7 +57,7 @@ local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context
     cpu_fj.fj_ptr = &fj;
   }
   scratch_cpu_fj_on_lp_opt.fj_ptr = &fj;
-  CUOPT_DETERMINISM_LOG_INFO(
+  CUOPT_DETERMINISM_LOG(
     "Deterministic solve start local_search state: seed_state=%lld "
     "local_search_best_obj=%.16e pop_ptr_set=%d",
     (long long)cuopt::seed_generator::peek_seed(),

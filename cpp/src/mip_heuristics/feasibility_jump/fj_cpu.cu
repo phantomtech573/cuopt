@@ -1336,7 +1336,7 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> fj_t<i_t, f_t>::create_cpu_climber(
       : read_positive_work_unit_scale("CUOPT_CPUFJ_WORK_UNIT_SCALE");
   fj_cpu->work_unit_bias *= cpu_work_unit_scale;
   if (cpu_work_unit_scale != 1.0) {
-    CUOPT_DETERMINISM_LOG_DEBUG(
+    CUOPT_DETERMINISM_LOG(
       "CPUFJ using work-unit scale %f (bias=%f)", cpu_work_unit_scale, fj_cpu->work_unit_bias);
   }
   fj_cpu->settings = settings;
