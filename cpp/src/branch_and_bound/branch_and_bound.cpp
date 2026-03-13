@@ -1770,7 +1770,10 @@ void branch_and_bound_t<i_t, f_t>::run_scheduler()
           continue;
         }
 
+        mutex_original_lp_.lock();
         bool feasible = worker->init_best_first(start_node.value(), original_lp_);
+        mutex_original_lp_.unlock();
+
         if (!feasible) {
           // This node was put on the heap earlier but its variables bounds now violates the
           // bounds at the root node
