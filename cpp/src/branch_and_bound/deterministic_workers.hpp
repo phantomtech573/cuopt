@@ -62,6 +62,7 @@ struct deterministic_snapshot_t {
   pseudo_cost_snapshot_t<i_t, f_t> pc_snapshot;
   std::vector<f_t> incumbent;
   i_t total_lp_iters;
+  i_t nodes_explored;
 };
 
 template <typename i_t, typename f_t, typename Derived>
@@ -78,6 +79,7 @@ class deterministic_worker_base_t : public branch_and_bound_worker_t<i_t, f_t> {
   // Diving-specific snapshots (ignored by BFS workers)
   std::vector<f_t> incumbent_snapshot;
   i_t total_lp_iters_snapshot{0};
+  i_t nodes_explored_snapshot{0};
 
   std::vector<queued_integer_solution_t<i_t, f_t>> integer_solutions;
   int next_solution_seq{0};
@@ -104,6 +106,7 @@ class deterministic_worker_base_t : public branch_and_bound_worker_t<i_t, f_t> {
     pc_snapshot             = snap.pc_snapshot;
     incumbent_snapshot      = snap.incumbent;
     total_lp_iters_snapshot = snap.total_lp_iters;
+    nodes_explored_snapshot = snap.nodes_explored;
   }
 
   bool has_work() const { return static_cast<const Derived*>(this)->has_work_impl(); }

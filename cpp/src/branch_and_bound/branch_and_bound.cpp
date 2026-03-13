@@ -46,11 +46,11 @@
 #include <vector>
 
 // uncomment to enable detailed detemrinism logs
-#undef CUOPT_DETERMINISM_LOG
-#define CUOPT_DETERMINISM_LOG(logger, ...) \
-  do {                                     \
-    logger.printf(__VA_ARGS__);            \
-  } while (0)
+// #undef CUOPT_DETERMINISM_LOG
+// #define CUOPT_DETERMINISM_LOG(logger, ...) \
+//   do {                                     \
+//     logger.printf(__VA_ARGS__);            \
+//   } while (0)
 
 namespace cuopt::linear_programming::dual_simplex {
 
@@ -1329,7 +1329,7 @@ struct deterministic_bfs_policy_t
   {
     i_t var;
     if (this->bnb.settings_.reliability_branching != 0 &&
-        this->bnb.exploration_stats_.nodes_explored > 0) {
+        this->worker.nodes_explored_snapshot > 0) {
       var = reliable_variable_selection_core(node,
                                              fractional,
                                              x,
@@ -1347,8 +1347,8 @@ struct deterministic_bfs_policy_t
                                              this->worker.pc_snapshot.n_vars(),
                                              this->worker.pc_snapshot.strong_branching_lp_iter_,
                                              this->worker.local_upper_bound,
-                                             this->bnb.exploration_stats_.total_lp_iters,
-                                             this->bnb.exploration_stats_.nodes_explored,
+                                             (int64_t)this->worker.total_lp_iters_snapshot,
+                                             (int64_t)this->worker.nodes_explored_snapshot,
                                              this->bnb.exploration_stats_.start_time,
                                              this->bnb.pc_.reliability_branching_settings,
                                              1,
@@ -4027,6 +4027,7 @@ void branch_and_bound_t<i_t, f_t>::deterministic_broadcast_snapshots(
   deterministic_snapshot_t<i_t, f_t> snap;
   snap.upper_bound    = upper_bound_.load();
   snap.total_lp_iters = exploration_stats_.total_lp_iters.load();
+  snap.nodes_explored = exploration_stats_.nodes_explored.load();
   snap.incumbent      = incumbent_snapshot;
   snap.pc_snapshot    = pc_.create_snapshot();
 
