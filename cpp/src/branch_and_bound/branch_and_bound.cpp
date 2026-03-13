@@ -5,11 +5,11 @@
  */
 /* clang-format on */
 
-#include <branch_and_bound/reduced_cost_fixing.hpp>
 #include <branch_and_bound/branch_and_bound.hpp>
 #include <branch_and_bound/diving_heuristics.hpp>
 #include <branch_and_bound/mip_node.hpp>
 #include <branch_and_bound/pseudo_costs.hpp>
+#include <branch_and_bound/reduced_cost_fixing.hpp>
 
 #include <cuts/cuts.hpp>
 #include <mip_heuristics/presolve/conflict_graph/clique_table.cuh>
@@ -393,6 +393,8 @@ bool branch_and_bound_t<i_t, f_t>::update_root_bounds(const std::vector<f_t>& lo
   bool feasible      = node_presolve.bounds_strengthening(
     settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
   mutex_original_lp_.unlock();
+
+  worker_pool_.broadcast_root_bounds_change();
 
   return feasible;
 }
@@ -1289,27 +1291,6 @@ std::pair<node_status_t, rounding_direction_t> branch_and_bound_t<i_t, f_t>::upd
       worker->recompute_basis  = false;
       worker->recompute_bounds = false;
 
-      if (settings_.reduced_cost_strengthening >= 4) {
-        i_t num_fixed = find_reduced_cost_fixings(leaf_problem,
-                                                  leaf_solution.z,
-                                                  var_types_,
-                                                  leaf_obj,
-                                                  upper_bound,
-                                                  leaf_problem.lower,
-                                                  leaf_problem.upper,
-                                                  worker->bounds_changed,
-                                                  settings_);
-        if (num_fixed > 0) {
-          bool feasible = worker->node_presolver.bounds_strengthening(
-            settings_, worker->bounds_changed, leaf_problem.lower, leaf_problem.upper);
-          if (!feasible) {
-            // If bounds strenghtening failed after applying reduced cost fixing at the node,
-            // recompute the bounds from the beginning
-            worker->recompute_bounds = true;
-          }
-        }
-      }
-
       logger_t log;
       log.log = false;
       search_tree.branch(node_ptr,
@@ -1759,6 +1740,17 @@ void branch_and_bound_t<i_t, f_t>::run_scheduler()
         if (upper_bound_ < start_node.value()->lower_bound) {
           // This node was put on the heap earlier but its lower bound is now greater than the
           // current upper bound
+          search_tree_.graphviz_node(
+            settings_.log, start_node.value(), "cutoff", start_node.value()->lower_bound);
+          search_tree_.update(start_node.value(), node_status_t::FATHOMED);
+          continue;
+        }
+
+        bool feasible =
+          start_node.value()->check_variable_bounds(original_lp_.lower, original_lp_.upper);
+        if (!feasible) {
+          // This node was put on the heap earlier but its variables bounds now violates the bounds
+          // at the root node
           search_tree_.graphviz_node(
             settings_.log, start_node.value(), "cutoff", start_node.value()->lower_bound);
           search_tree_.update(start_node.value(), node_status_t::FATHOMED);
@@ -3164,17 +3156,22 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
   raft::common::nvtx::range scope("BB::solve_node_deterministic");
 
   double work_units_at_start = worker.work_context.global_work_units_elapsed;
+  bool feasible              = true;
 
   std::fill(worker.bounds_changed.begin(), worker.bounds_changed.end(), false);
 
   if (worker.recompute_bounds_and_basis) {
-    worker.leaf_problem.lower = original_lp_.lower;
-    worker.leaf_problem.upper = original_lp_.upper;
-    node_ptr->get_variable_bounds(
-      worker.leaf_problem.lower, worker.leaf_problem.upper, worker.bounds_changed);
+    feasible = node_ptr->get_variable_bounds(original_lp_.lower,
+                                             original_lp_.upper,
+                                             worker.leaf_problem.lower,
+                                             worker.leaf_problem.upper,
+                                             worker.bounds_changed);
   } else {
-    node_ptr->update_branched_variable_bounds(
-      worker.leaf_problem.lower, worker.leaf_problem.upper, worker.bounds_changed);
+    feasible = node_ptr->update_branched_variable_bounds(original_lp_.lower,
+                                                         original_lp_.upper,
+                                                         worker.leaf_problem.lower,
+                                                         worker.leaf_problem.upper,
+                                                         worker.bounds_changed);
   }
 
   double remaining_time = settings_.time_limit - toc(exploration_stats_.start_time);
@@ -3188,11 +3185,12 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
   lp_settings.time_limit    = remaining_time;
   lp_settings.scale_columns = false;
 
-  bool feasible = true;
 #ifndef DETERMINISM_DISABLE_BOUNDS_STRENGTHENING
   raft::common::nvtx::range scope_bs("BB::bound_strengthening");
-  feasible = worker.node_presolver.bounds_strengthening(
-    lp_settings, worker.bounds_changed, worker.leaf_problem.lower, worker.leaf_problem.upper);
+  if (feasible) {
+    feasible = worker.node_presolver.bounds_strengthening(
+      lp_settings, worker.bounds_changed, worker.leaf_problem.lower, worker.leaf_problem.upper);
+  }
 
   if (settings_.deterministic) {
     // TEMP APPROXIMATION;
@@ -3779,13 +3777,17 @@ void branch_and_bound_t<i_t, f_t>::deterministic_dive(
     std::fill(worker.bounds_changed.begin(), worker.bounds_changed.end(), false);
 
     if (worker.recompute_bounds_and_basis) {
-      worker.leaf_problem.lower = worker.dive_lower;
-      worker.leaf_problem.upper = worker.dive_upper;
-      node_ptr->get_variable_bounds(
-        worker.leaf_problem.lower, worker.leaf_problem.upper, worker.bounds_changed);
+      node_ptr->get_variable_bounds(worker.dive_lower,
+                                    worker.dive_upper,
+                                    worker.leaf_problem.lower,
+                                    worker.leaf_problem.upper,
+                                    worker.bounds_changed);
     } else {
-      node_ptr->update_branched_variable_bounds(
-        worker.leaf_problem.lower, worker.leaf_problem.upper, worker.bounds_changed);
+      node_ptr->update_branched_variable_bounds(worker.dive_lower,
+                                                worker.dive_upper,
+                                                worker.leaf_problem.lower,
+                                                worker.leaf_problem.upper,
+                                                worker.bounds_changed);
     }
 
     double remaining_time = settings_.time_limit - toc(exploration_stats_.start_time);

@@ -8,9 +8,9 @@
 #pragma once
 
 #include <branch_and_bound/bb_event.hpp>
-#include <branch_and_bound/branch_and_bound_worker.hpp>
 #include <branch_and_bound/diving_heuristics.hpp>
 #include <branch_and_bound/node_queue.hpp>
+#include <branch_and_bound/worker.hpp>
 
 #include <utilities/work_limit_context.hpp>
 
@@ -316,10 +316,12 @@ class deterministic_diving_worker_t
   void enqueue_dive_node(mip_node_t<i_t, f_t>* node, const lp_problem_t<i_t, f_t>& original_lp)
   {
     dive_queue_entry_t<i_t, f_t> entry;
-    entry.resolved_lower = original_lp.lower;
-    entry.resolved_upper = original_lp.upper;
     std::vector<bool> bounds_changed(original_lp.num_cols, false);
-    node->get_variable_bounds(entry.resolved_lower, entry.resolved_upper, bounds_changed);
+    node->get_variable_bounds(original_lp.lower,
+                              original_lp.upper,
+                              entry.resolved_lower,
+                              entry.resolved_upper,
+                              bounds_changed);
     entry.node = node->detach_copy();
     dive_queue.push_back(std::move(entry));
   }

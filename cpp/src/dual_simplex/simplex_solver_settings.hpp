@@ -189,7 +189,6 @@ struct simplex_solver_settings_t {
   // 1 - apply to root after each cut pass
   // 2 - apply to root after all cuts
   // 3 - apply to root after each incumbent update
-  // 4 - apply to the current node before branching, if it generates children
   i_t reduced_cost_strengthening;
   // strengthening
   f_t cut_change_threshold;                // threshold for cut change
