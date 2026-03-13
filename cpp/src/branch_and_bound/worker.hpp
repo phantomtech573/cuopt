@@ -141,37 +141,43 @@ class branch_and_bound_worker_t {
     start_upper     = original_lp.upper;
     search_strategy = type;
     lower_bound     = node_ptr->lower_bound;
-    is_active       = true;
     std::fill(bounds_changed.begin(), bounds_changed.end(), false);
 
     bool feasible = node_ptr->get_variable_bounds(
       original_lp.lower, original_lp.upper, start_lower, start_upper, bounds_changed);
-    if (!feasible) { return false; }
-
-    return node_presolver.bounds_strengthening(settings, bounds_changed, start_lower, start_upper);
+    if (feasible) {
+      feasible =
+        node_presolver.bounds_strengthening(settings, bounds_changed, start_lower, start_upper);
+    }
+    is_active = feasible;
+    return feasible;
   }
 
   // Set the variables bounds for the LP relaxation in the current node.
   bool set_lp_variable_bounds(mip_node_t<i_t, f_t>* node_ptr,
                               const simplex_solver_settings_t<i_t, f_t>& settings)
   {
+    bool feasible = false;
+
     // Reset the bound_changed markers
     std::fill(bounds_changed.begin(), bounds_changed.end(), false);
 
     // Set the correct bounds for the leaf problem
     if (recompute_bounds) {
-      bool feasible = node_ptr->get_variable_bounds(
+      feasible = node_ptr->get_variable_bounds(
         start_lower, start_upper, leaf_problem.lower, leaf_problem.upper, bounds_changed);
-      if (!feasible) { return false; }
 
     } else {
-      bool feasible = node_ptr->update_branched_variable_bounds(
+      feasible = node_ptr->update_branched_variable_bounds(
         start_lower, start_upper, leaf_problem.lower, leaf_problem.upper, bounds_changed);
-      if (!feasible) { return false; }
     }
 
-    return node_presolver.bounds_strengthening(
-      settings, bounds_changed, leaf_problem.lower, leaf_problem.upper);
+    if (feasible) {
+      feasible = node_presolver.bounds_strengthening(
+        settings, bounds_changed, leaf_problem.lower, leaf_problem.upper);
+    }
+
+    return feasible;
   }
 
  private:

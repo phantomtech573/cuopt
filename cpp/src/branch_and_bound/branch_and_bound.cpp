@@ -2577,7 +2577,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                                          bounds_changed);
     mutex_upper_.unlock();
 
-    if (num_fixed > 0) {
+    if (num_fixed > 0 || num_improved > 0) {
       bool feasible = update_root_bounds(lower_bounds, upper_bounds, bounds_changed);
       if (!feasible) {
         settings_.log.printf("Bound strengthening failed\n");
