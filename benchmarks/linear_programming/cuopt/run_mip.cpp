@@ -325,7 +325,7 @@ int run_single_file(std::string file_path,
      << benchmark_info.last_improvement_after_recombination << "," << mip_gap << "," << is_optimal
      << "\n";
   write_to_output_file(out_dir, base_filename, device, n_gpus, batch_id, ss.str());
-  if (!out_dir.empty() && incumbent_tracker.size() > 0) {
+  if (!out_dir.empty()) {
     std::string mps_stem = base_filename.substr(0, base_filename.find(".mps"));
     std::string csv_path = out_dir + "/" + mps_stem + "_incumbents.csv";
     incumbent_tracker.write_csv(csv_path);
