@@ -829,6 +829,40 @@ void branch_and_bound_t<i_t, f_t>::set_solution_at_root(mip_solution_t<i_t, f_t>
 }
 
 template <typename i_t, typename f_t>
+bool branch_and_bound_t<i_t, f_t>::retire_queued_solution(
+  const queued_external_solution_t& queued_solution, f_t& out_obj, std::vector<f_t>& out_crushed)
+{
+  f_t primal_err;
+  f_t bound_err;
+  i_t num_fractional;
+
+  mutex_original_lp_.lock();
+  crush_primal_solution<i_t, f_t>(
+    original_problem_, original_lp_, queued_solution.solution, new_slacks_, out_crushed);
+  out_obj          = compute_objective(original_lp_, out_crushed);
+  bool is_feasible = check_guess(
+    original_lp_, settings_, var_types_, out_crushed, primal_err, bound_err, num_fractional);
+  mutex_original_lp_.unlock();
+
+  if (is_feasible) { return true; }
+
+  std::vector<f_t> repaired_solution;
+  f_t repaired_obj;
+  bool repaired = repair_solution(edge_norms_, out_crushed, repaired_obj, repaired_solution);
+  if (repaired) {
+    out_crushed = std::move(repaired_solution);
+    out_obj     = repaired_obj;
+    return true;
+  }
+
+  CUOPT_DETERMINISM_LOG(settings_.log,
+                        "Deterministic repair FAILED: wut=%.3f origin=%s\n",
+                        queued_solution.work_timestamp,
+                        cuopt::internals::mip_solution_origin_to_string(queued_solution.origin));
+  return false;
+}
+
+template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& solution,
                                                       f_t lower_bound)
 {
@@ -897,6 +931,34 @@ void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& 
       solver_status_ = mip_status_t::INFEASIBLE;
       if (settings_.heuristic_preemption_callback != nullptr) {
         settings_.heuristic_preemption_callback();
+      }
+    }
+  }
+
+  // Drain any pending heuristic solutions that B&B never got to retire during exploration
+  // (e.g., root solve consumed the entire time limit before tree exploration started).
+  if (settings_.deterministic && !incumbent_.has_incumbent) {
+    const double current_work = work_unit_context_.current_work();
+    mutex_heuristic_queue_.lock();
+    std::vector<queued_external_solution_t> pending;
+    pending.swap(heuristic_solution_queue_);
+    mutex_heuristic_queue_.unlock();
+
+    for (const auto& queued_solution : pending) {
+      if (queued_solution.work_timestamp > current_work) { continue; }
+      std::vector<f_t> crushed_solution;
+      f_t obj;
+      bool is_feasible = retire_queued_solution(queued_solution, obj, crushed_solution);
+
+      if (is_feasible && obj < upper_bound_) {
+        upper_bound_ = obj;
+        incumbent_.set_incumbent_solution(obj, crushed_solution);
+        settings_.log.printf(
+          "Late-retired heuristic incumbent: obj=%.6e wut=%.3f origin=%s\n",
+          compute_user_objective(original_lp_, obj),
+          queued_solution.work_timestamp,
+          cuopt::internals::mip_solution_origin_to_string(queued_solution.origin));
+        emit_solution_callback_from_crushed(crushed_solution, obj, queued_solution.origin, -1.0);
       }
     }
   }
@@ -4016,23 +4078,7 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
       for (const auto& queued_solution : due_solutions) {
         std::vector<f_t> crushed_solution;
         f_t obj;
-        f_t primal_err;
-        f_t bound_err;
-        i_t num_fractional;
-        bool is_feasible = false;
-        mutex_original_lp_.lock();
-        crush_primal_solution<i_t, f_t>(
-          original_problem_, original_lp_, queued_solution.solution, new_slacks_, crushed_solution);
-        obj         = compute_objective(original_lp_, crushed_solution);
-        is_feasible = check_guess(original_lp_,
-                                  settings_,
-                                  var_types_,
-                                  crushed_solution,
-                                  primal_err,
-                                  bound_err,
-                                  num_fractional);
-        mutex_original_lp_.unlock();
-
+        bool is_feasible = retire_queued_solution(queued_solution, obj, crushed_solution);
         if (is_feasible) {
           replay_solutions.push_back({{obj,
                                        std::move(crushed_solution),
@@ -4042,42 +4088,6 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
                                        queued_solution.work_timestamp,
                                        queued_solution.origin},
                                       search_strategy_t::BEST_FIRST});
-          CUOPT_DETERMINISM_LOG(
-            settings_.log,
-            "Deterministic retirement accepted: wut=%.6f obj=%.16e origin=%s primal_err=%.6e "
-            "bound_err=%.6e fractional=%d\n",
-            queued_solution.work_timestamp,
-            obj,
-            cuopt::internals::mip_solution_origin_to_string(queued_solution.origin),
-            primal_err,
-            bound_err,
-            num_fractional);
-          continue;
-        }
-
-        std::vector<f_t> repaired_solution;
-        f_t repaired_obj;
-        bool success =
-          repair_solution(edge_norms_, crushed_solution, repaired_obj, repaired_solution);
-        if (success) {
-          settings_.log.printf(
-            "Deterministic repair success: wut=%.3f obj=%.16e origin=%s\n",
-            queued_solution.work_timestamp,
-            repaired_obj,
-            cuopt::internals::mip_solution_origin_to_string(queued_solution.origin));
-          replay_solutions.push_back({{repaired_obj,
-                                       std::move(repaired_solution),
-                                       0,
-                                       -1,
-                                       0,
-                                       queued_solution.work_timestamp,
-                                       queued_solution.origin},
-                                      search_strategy_t::BEST_FIRST});
-        } else {
-          settings_.log.printf(
-            "Deterministic repair FAILED: wut=%.3f origin=%s\n",
-            queued_solution.work_timestamp,
-            cuopt::internals::mip_solution_origin_to_string(queued_solution.origin));
         }
       }
     }

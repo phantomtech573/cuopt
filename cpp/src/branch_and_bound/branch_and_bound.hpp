@@ -465,6 +465,10 @@ class branch_and_bound_t {
       cuopt::internals::mip_solution_origin_t::UNKNOWN};
   };
 
+  bool retire_queued_solution(const queued_external_solution_t& queued_solution,
+                              f_t& out_obj,
+                              std::vector<f_t>& out_crushed);
+
   // Deterministic pending external solution queue.
   // External solutions stay raw until their retirement horizon, where they are
   // crushed, checked, and repaired immediately if needed.
