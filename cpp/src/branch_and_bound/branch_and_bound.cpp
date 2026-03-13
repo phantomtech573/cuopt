@@ -448,9 +448,11 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
       incumbent_.set_incumbent_solution(obj, crushed_solution);
 
       if (settings_.reduced_cost_strengthening >= 3) {
+        mutex_original_lp_.lock();
         lower_bound = original_lp_.lower;
         upper_bound = original_lp_.upper;
-        num_fixed   = find_reduced_cost_fixings(original_lp_,
+        mutex_original_lp_.unlock();
+        num_fixed = find_reduced_cost_fixings(original_lp_,
                                               root_relax_soln_.z,
                                               var_types_,
                                               root_objective_,
@@ -643,9 +645,11 @@ void branch_and_bound_t<i_t, f_t>::repair_heuristic_solutions()
           }
 
           if (settings_.reduced_cost_strengthening >= 3) {
+            mutex_original_lp_.lock();
             lower_bound = original_lp_.lower;
             upper_bound = original_lp_.upper;
-            num_fixed   = find_reduced_cost_fixings(original_lp_,
+            mutex_original_lp_.unlock();
+            num_fixed = find_reduced_cost_fixings(original_lp_,
                                                   root_relax_soln_.z,
                                                   var_types_,
                                                   root_objective_,
@@ -813,9 +817,12 @@ void branch_and_bound_t<i_t, f_t>::add_feasible_solution(f_t leaf_objective,
     send_solution = true;
 
     if (settings_.reduced_cost_strengthening >= 3) {
+      mutex_original_lp_.lock();
       lower_bound = original_lp_.lower;
       upper_bound = original_lp_.upper;
-      num_fixed   = find_reduced_cost_fixings(original_lp_,
+      mutex_original_lp_.unlock();
+
+      num_fixed = find_reduced_cost_fixings(original_lp_,
                                             root_relax_soln_.z,
                                             var_types_,
                                             root_objective_,
