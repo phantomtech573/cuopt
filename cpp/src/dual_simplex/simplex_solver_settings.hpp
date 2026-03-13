@@ -183,14 +183,14 @@ struct simplex_solver_settings_t {
   i_t clique_cuts;                 // -1 automatic, 0 to disable, >0 to enable clique cuts
   i_t strong_chvatal_gomory_cuts;  // -1 automatic, 0 to disable, >0 to enable strong Chvatal Gomory
                                    // cuts
- // >= 0 adds additional reduced cost strengthening passes at each level
+  // >= 0 adds additional reduced cost strengthening passes at each level
   // -1 - automatic
   // 0 - disable
   // 1 - apply to root after each cut pass
   // 2 - apply to root after all cuts
   // 3 - apply to root after each incumbent update
   i_t reduced_cost_strengthening;
-  // strengthening
+
   f_t cut_change_threshold;                // threshold for cut change
   f_t cut_min_orthogonality;               // minimum orthogonality for cuts
   i_t mip_batch_pdlp_strong_branching{0};  // 0 if not using batch PDLP for strong branching, 1 if

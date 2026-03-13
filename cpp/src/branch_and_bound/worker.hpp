@@ -81,7 +81,7 @@ class branch_and_bound_worker_t {
   // as the starting bounds.
   std::vector<f_t> start_lower;
   std::vector<f_t> start_upper;
- mip_node_t<i_t, f_t>* start_node;
+  mip_node_t<i_t, f_t>* start_node;
 
   pcgenerator_t rng;
 
@@ -115,13 +115,16 @@ class branch_and_bound_worker_t {
   // `start_upper`. Returns `true` if no bounds were violated in any of the previous nodes
   bool init_best_first(mip_node_t<i_t, f_t>* node, lp_problem_t<i_t, f_t>& original_lp)
   {
+    bool feasible = node->check_variable_bounds(original_lp.lower, original_lp.upper);
+    if (!feasible) { return false; }
+
     start_node      = node;
     start_lower     = original_lp.lower;
     start_upper     = original_lp.upper;
     search_strategy = BEST_FIRST;
     lower_bound     = node->lower_bound;
     is_active       = true;
-    return node->check_variable_bounds(start_lower, start_upper);
+    return true;
   }
 
   // Initialize the worker for diving, setting the `start_node`, `start_lower` and

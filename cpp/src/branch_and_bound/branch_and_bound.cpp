@@ -414,12 +414,9 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
     settings_.log.printf(
       "Solution size mismatch %ld %d\n", solution.size(), original_problem_.num_cols);
   }
-  std::vector<f_t> crushed_solution;
-  std::vector<f_t> lower_bound;
-  std::vector<f_t> upper_bound;
-  std::vector<bool> bounds_changed;
 
   mutex_original_lp_.lock();
+  std::vector<f_t> crushed_solution;
   crush_primal_solution<i_t, f_t>(
     original_problem_, original_lp_, solution, new_slacks_, crushed_solution);
   f_t obj = compute_objective(original_lp_, crushed_solution);
@@ -450,9 +447,11 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
 
       if (settings_.reduced_cost_strengthening >= 3) {
         mutex_original_lp_.lock();
-        lower_bound = original_lp_.lower;
-        upper_bound = original_lp_.upper;
+        std::vector<f_t> lower_bound = original_lp_.lower;
+        std::vector<f_t> upper_bound = original_lp_.upper;
+        std::vector<bool> bounds_changed;
         mutex_original_lp_.unlock();
+
         auto [num_fixed, num_improved] = reduced_cost_fixing(root_relax_soln_.z,
                                                              var_types_,
                                                              settings_,
@@ -461,6 +460,7 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
                                                              lower_bound,
                                                              upper_bound,
                                                              bounds_changed);
+
         if (num_fixed > 0 || num_improved > 0) {
           bool feasible = update_root_bounds(lower_bound, upper_bound, bounds_changed);
           if (!feasible) {
@@ -626,9 +626,6 @@ void branch_and_bound_t<i_t, f_t>::repair_heuristic_solutions()
       mutex_original_lp_.unlock();
 
       std::vector<f_t> repaired_solution;
-      std::vector<f_t> lower_bound;
-      std::vector<f_t> upper_bound;
-      std::vector<bool> bounds_changed;
       f_t repaired_obj;
 
       bool is_feasible =
@@ -649,9 +646,11 @@ void branch_and_bound_t<i_t, f_t>::repair_heuristic_solutions()
 
           if (settings_.reduced_cost_strengthening >= 3) {
             mutex_original_lp_.lock();
-            lower_bound = original_lp_.lower;
-            upper_bound = original_lp_.upper;
+            std::vector<f_t> lower_bound = original_lp_.lower;
+            std::vector<f_t> upper_bound = original_lp_.upper;
+            std::vector<bool> bounds_changed;
             mutex_original_lp_.unlock();
+
             auto [num_fixed, num_improved] = reduced_cost_fixing(root_relax_soln_.z,
                                                                  var_types_,
                                                                  settings_,
@@ -795,11 +794,6 @@ void branch_and_bound_t<i_t, f_t>::add_feasible_solution(f_t leaf_objective,
                                                          search_strategy_t thread_type)
 {
   bool send_solution = false;
-  i_t num_fixed      = 0;
-
-  std::vector<f_t> lower_bound;
-  std::vector<f_t> upper_bound;
-  std::vector<bool> bounds_changed;
 
   settings_.log.debug("%c found a feasible solution with obj=%.10e.\n",
                       feasible_solution_symbol(thread_type),
@@ -814,8 +808,9 @@ void branch_and_bound_t<i_t, f_t>::add_feasible_solution(f_t leaf_objective,
 
     if (settings_.reduced_cost_strengthening >= 3) {
       mutex_original_lp_.lock();
-      lower_bound = original_lp_.lower;
-      upper_bound = original_lp_.upper;
+      std::vector<f_t> lower_bound = original_lp_.lower;
+      std::vector<f_t> upper_bound = original_lp_.upper;
+      std::vector<bool> bounds_changed;
       mutex_original_lp_.unlock();
 
       auto [num_fixed, num_improved] = reduced_cost_fixing(root_relax_soln_.z,
@@ -2702,6 +2697,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 //  Deterministic implementation
 // ============================================================================
 
+// TODO: reduced cost fixing is not enabled for the deterministic mode
 // The deterministic BSP model is based on letting independent workers execute during virtual time
 // intervals, and exchange data during serialized interval sync points.
 /*
