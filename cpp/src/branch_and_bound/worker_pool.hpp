@@ -84,9 +84,7 @@ class branch_and_bound_worker_pool_t {
   {
     if (is_initialized) {
       for (i_t i = 0; i < workers_.size(); ++i) {
-        if (workers_[i]->search_strategy == BEST_FIRST && workers_[i]->is_active) {
-          workers_[i]->start_bounds_updated = true;
-        }
+        if (workers_[i]->is_active) { workers_[i]->start_bounds_updated = true; }
       }
     }
   }
@@ -101,7 +99,7 @@ class branch_and_bound_worker_pool_t {
   omp_atomic_t<i_t> num_idle_workers_;
 };
 
-template <typename f_t, typename i_t>
+template <typename i_t, typename f_t>
 std::vector<search_strategy_t> get_search_strategies(
   diving_heuristics_settings_t<i_t, f_t> settings)
 {

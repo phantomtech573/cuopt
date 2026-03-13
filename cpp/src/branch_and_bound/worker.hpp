@@ -67,9 +67,21 @@ class branch_and_bound_worker_t {
   bounds_strengthening_t<i_t, f_t> node_presolver;
   std::vector<bool> bounds_changed;
 
-  std::vector<f_t>* start_lower;
-  std::vector<f_t>* start_upper;
-  mip_node_t<i_t, f_t>* start_node;
+  // We need to maintain a copy in each worker for 2 reasons:
+  //
+  // - The root LP may be modified by multiple threads and
+  // require a mutex for accessing its variable bounds.
+  // Since we are maintain a copy here, we can access
+  // without having to acquire the mutex. Only if the
+  // bounds is modified, then we acquire the lock and update the copy.
+  //
+  // - When diving, we are working on a separated subtree. Hence, we cannot
+  // retrieve the bounds from the main tree. Instead, we copy the bounds until
+  // the starting node before it is detached from the main tree and use it
+  // as the starting bounds.
+  std::vector<f_t> start_lower;
+  std::vector<f_t> start_upper;
+ mip_node_t<i_t, f_t>* start_node;
 
   pcgenerator_t rng;
 
@@ -93,23 +105,23 @@ class branch_and_bound_worker_t {
       nonbasic_list(),
       node_presolver(leaf_problem, Arow, {}, var_type),
       bounds_changed(original_lp.num_cols, false),
-      start_lower(nullptr),
-      start_upper(nullptr),
       start_node(nullptr),
       rng(settings.random_seed + pcgenerator_t::default_seed + worker_id,
           pcgenerator_t::default_stream ^ worker_id)
   {
   }
 
-  // Set the `start_node` for best-first search.
-  void init_best_first(mip_node_t<i_t, f_t>* node, lp_problem_t<i_t, f_t>& original_lp)
+  // Initialize the worker for plunging, setting the `start_node`, `start_lower` and
+  // `start_upper`. Returns `true` if no bounds were violated in any of the previous nodes
+  bool init_best_first(mip_node_t<i_t, f_t>* node, lp_problem_t<i_t, f_t>& original_lp)
   {
     start_node      = node;
-    start_lower     = &original_lp.lower;
-    start_upper     = &original_lp.upper;
+    start_lower     = original_lp.lower;
+    start_upper     = original_lp.upper;
     search_strategy = BEST_FIRST;
     lower_bound     = node->lower_bound;
     is_active       = true;
+    return node->check_variable_bounds(start_lower, start_upper);
   }
 
   // Initialize the worker for diving, setting the `start_node`, `start_lower` and
@@ -122,44 +134,36 @@ class branch_and_bound_worker_t {
   {
     internal_node   = node_ptr->detach_copy();
     start_node      = &internal_node;
-    start_lower     = &internal_start_lower;
-    start_upper     = &internal_start_upper;
+    start_lower     = original_lp.lower;
+    start_upper     = original_lp.upper;
     search_strategy = type;
     lower_bound     = node_ptr->lower_bound;
     is_active       = true;
     std::fill(bounds_changed.begin(), bounds_changed.end(), false);
 
     bool feasible = node_ptr->get_variable_bounds(
-      original_lp.lower, original_lp.upper, *start_lower, *start_upper, bounds_changed);
+      original_lp.lower, original_lp.upper, start_lower, start_upper, bounds_changed);
     if (!feasible) { return false; }
 
-    return node_presolver.bounds_strengthening(
-      settings, bounds_changed, *start_lower, *start_upper);
+    return node_presolver.bounds_strengthening(settings, bounds_changed, start_lower, start_upper);
   }
 
   // Set the variables bounds for the LP relaxation in the current node.
   bool set_lp_variable_bounds(mip_node_t<i_t, f_t>* node_ptr,
                               const simplex_solver_settings_t<i_t, f_t>& settings)
   {
-    // If the starting bounds were updated via reduced cost fixing, then
-    // recompute the bounds from scratch
-    if (start_bounds_updated) {
-      recompute_bounds     = true;
-      start_bounds_updated = false;
-    }
-
     // Reset the bound_changed markers
     std::fill(bounds_changed.begin(), bounds_changed.end(), false);
 
     // Set the correct bounds for the leaf problem
     if (recompute_bounds) {
       bool feasible = node_ptr->get_variable_bounds(
-        *start_lower, *start_upper, leaf_problem.lower, leaf_problem.upper, bounds_changed);
+        start_lower, start_upper, leaf_problem.lower, leaf_problem.upper, bounds_changed);
       if (!feasible) { return false; }
 
     } else {
       bool feasible = node_ptr->update_branched_variable_bounds(
-        *start_lower, *start_upper, leaf_problem.lower, leaf_problem.upper, bounds_changed);
+        start_lower, start_upper, leaf_problem.lower, leaf_problem.upper, bounds_changed);
       if (!feasible) { return false; }
     }
 
@@ -168,15 +172,13 @@ class branch_and_bound_worker_t {
   }
 
  private:
-  // For diving, we need to store the full node instead of
+  // For diving, we need to store the full node instead
   // of just a pointer, since it is not stored in the tree anymore.
   // To keep the same interface across all worker types,
   // this will be used as a temporary storage and
   // will be pointed by `start_node`.
   // For exploration, this will not be used.
   mip_node_t<i_t, f_t> internal_node;
-  std::vector<f_t> internal_start_lower;
-  std::vector<f_t> internal_start_upper;
 };
 
 }  // namespace cuopt::linear_programming::dual_simplex

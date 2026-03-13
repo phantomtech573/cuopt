@@ -12,16 +12,17 @@
 
 namespace cuopt::linear_programming::dual_simplex {
 
+// Applies reduced cost fixing over the lower and bounds. Stores the bounds changes
+// for applying bound strengthening later. Returns {num_fixed, num_improved}.
 template <typename i_t, typename f_t>
-i_t find_reduced_cost_fixings(const lp_problem_t<i_t, f_t>& lp,
-                              const std::vector<f_t>& reduced_costs,
-                              const std::vector<variable_type_t>& var_types,
-                              f_t obj,
-                              f_t upper_bound,
-                              std::vector<f_t>& lower_bounds,
-                              std::vector<f_t>& upper_bounds,
-                              std::vector<bool>& bounds_changed,
-                              const simplex_solver_settings_t<i_t, f_t>& settings)
+std::pair<i_t, i_t> reduced_cost_fixing(const std::vector<f_t>& reduced_costs,
+                                        const std::vector<variable_type_t>& var_types,
+                                        const simplex_solver_settings_t<i_t, f_t>& settings,
+                                        f_t obj,
+                                        f_t upper_bound,
+                                        std::vector<f_t>& lower_bounds,
+                                        std::vector<f_t>& upper_bounds,
+                                        std::vector<bool>& bounds_changed)
 {
   const f_t threshold   = 100.0 * settings.integer_tol;
   const f_t weaken      = settings.integer_tol;
@@ -31,12 +32,12 @@ i_t find_reduced_cost_fixings(const lp_problem_t<i_t, f_t>& lp,
   i_t num_cols_to_check = reduced_costs.size();  // Reduced costs will be smaller than the original
                                                  // problem because we have added slacks for cuts
 
-  bounds_changed.assign(lp.num_cols, false);
+  bounds_changed.assign(lower_bounds.size(), false);
 
   for (i_t j = 0; j < num_cols_to_check; j++) {
     if (std::isfinite(reduced_costs[j]) && std::abs(reduced_costs[j]) > threshold) {
-      const f_t lower_j            = lp.lower[j];
-      const f_t upper_j            = lp.upper[j];
+      const f_t lower_j            = lower_bounds[j];
+      const f_t upper_j            = upper_bounds[j];
       const f_t abs_gap            = upper_bound - obj;
       f_t reduced_cost_upper_bound = upper_j;
       f_t reduced_cost_lower_bound = lower_j;
@@ -73,7 +74,6 @@ i_t find_reduced_cost_fixings(const lp_problem_t<i_t, f_t>& lp,
     settings.log.debug(
       "Reduced costs: Found %d improved bounds and %d fixed variables\n", num_improved, num_fixed);
   }
-  return num_fixed;
+  return {num_fixed, num_improved};
 }
-
 }  // namespace cuopt::linear_programming::dual_simplex
