@@ -330,7 +330,7 @@ int run_single_file(std::string file_path,
     std::string csv_path = out_dir + "/" + mps_stem + "_incumbents.csv";
     incumbent_tracker.write_csv(csv_path);
     CUOPT_LOG_INFO(
-      "1Incumbent trace (%zu entries) written to %s", incumbent_tracker.size(), csv_path.c_str());
+      "Incumbent trace (%zu entries) written to %s", incumbent_tracker.size(), csv_path.c_str());
   }
   return sol_found;
 }
