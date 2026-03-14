@@ -232,7 +232,7 @@ class recombiner_t {
     const bool disable_submip_for_continuous_limit =
       n_continuous_vars > (i_t)sub_mip_recombiner_config_t::max_continuous_vars;
     const bool disable_submip_for_determinism =
-      (context.settings.determinism_mode & CUOPT_DETERMINISM_BB) != 0;
+      (context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS) != 0;
     for (auto recombiner : recombiner_types) {
       enabled_recombiners.insert(recombiner);
     }

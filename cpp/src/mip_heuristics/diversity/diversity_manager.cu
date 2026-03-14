@@ -94,6 +94,8 @@ diversity_manager_t<i_t, f_t>::diversity_manager_t(mip_solver_context_t<i_t, f_t
     bp_recombiner_config_t::initial_n_of_vars_from_other;
   sub_mip_recombiner_config_t::max_n_of_vars_from_other =
     sub_mip_recombiner_config_t::initial_n_of_vars_from_other;
+  mab_ls_config_t<i_t, f_t>::last_lm_config     = 0;
+  mab_ls_config_t<i_t, f_t>::last_ls_mab_option = 0;
 
   CUOPT_DETERMINISM_LOG(
     "Deterministic solve start diversity state: seed_state=%lld fp_max=%zu "
@@ -136,7 +138,8 @@ diversity_manager_t<i_t, f_t>::diversity_manager_t(mip_solver_context_t<i_t, f_t
     return;
   }
 
-  context.gpu_heur_loop.deterministic = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB);
+  context.gpu_heur_loop.deterministic =
+    (context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS);
 }
 
 // this function is to specialize the local search with config from diversity manager
@@ -244,9 +247,9 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit,
   const bool remap_cache_ids = true;
   if (!global_timer.check_time_limit()) { trivial_presolve(*problem_ptr, remap_cache_ids); }
   if (!problem_ptr->empty && !check_bounds_sanity(*problem_ptr)) { return false; }
-  const bool run_clique_table = !presolve_timer.check_time_limit() &&
-                                !context.settings.heuristics_only && !problem_ptr->empty &&
-                                !(context.settings.determinism_mode & CUOPT_DETERMINISM_BB);
+  const bool run_clique_table =
+    !presolve_timer.check_time_limit() && !context.settings.heuristics_only &&
+    !problem_ptr->empty && !(context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS);
   // if (run_clique_table) {
   //   f_t time_limit_for_clique_table = std::min(3., presolve_timer.remaining_time() / 5);
   //   timer_t clique_timer(time_limit_for_clique_table);
@@ -500,7 +503,8 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   // Run CPUFJ early to find quick initial solutions
   ls_cpufj_raii_guard_t ls_cpufj_raii_guard(ls);  // RAII to stop cpufj threads on solve stop
 
-  if (!diversity_config.dry_run && !(context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
+  if (!diversity_config.dry_run &&
+      !(context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS)) {
     ls.start_cpufj_scratch_threads(population);
   }
 
@@ -671,7 +675,8 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
                     lp_rounded_sol.get_user_objective());
     population.add_solution(std::move(lp_rounded_sol),
                             internals::mip_solution_origin_t::LP_ROUNDING);
-    if (!diversity_config.dry_run && !(context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
+    if (!diversity_config.dry_run &&
+        !(context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS)) {
       ls.start_cpufj_lptopt_scratch_threads(population);
     }
   }
@@ -708,7 +713,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     log_return_solution("fj_only_run", sol);
     return sol;
   }
-  if (!(context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) { rins.enable(); }
+  if (!(context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS)) { rins.enable(); }
 
   generate_solution(timer.remaining_time(), false);
   if (diversity_config.initial_solution_only) {
@@ -882,7 +887,7 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
                   sol1.get_feasible(),
                   sol2.get_quality(population.weights),
                   sol2.get_feasible());
-  bool deterministic                = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB);
+  bool deterministic = (context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS);
   double best_objective_of_parents  = std::min(sol1.get_objective(), sol2.get_objective());
   bool at_least_one_parent_feasible = sol1.get_feasible() || sol2.get_feasible();
   // randomly choose among 3 recombiners

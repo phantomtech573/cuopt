@@ -192,7 +192,7 @@ struct mip_solver_context_t {
     cuopt_assert(problem_ptr != nullptr, "problem_ptr is nullptr");
     stats.set_solution_bound(problem_ptr->maximize ? std::numeric_limits<f_t>::infinity()
                                                    : -std::numeric_limits<f_t>::infinity());
-    gpu_heur_loop.deterministic = (settings.determinism_mode & CUOPT_DETERMINISM_BB);
+    gpu_heur_loop.deterministic = (settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS);
     cuopt_assert(settings.cpufj_work_unit_scale > 0.0, "CPUFJ work-unit scale must be positive");
     cuopt_assert(settings.gpu_heur_work_unit_scale > 0.0,
                  "GPU heuristic work-unit scale must be positive");

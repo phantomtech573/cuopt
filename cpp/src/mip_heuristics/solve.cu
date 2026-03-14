@@ -261,7 +261,7 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
 
     auto timer =
       cuopt::termination_checker_t(time_limit, cuopt::termination_checker_t::root_tag_t{});
-    const bool deterministic_run = (settings.determinism_mode & CUOPT_DETERMINISM_BB);
+    const bool deterministic_run = (settings.determinism_mode != CUOPT_DETERMINISM_NONE);
 
     double presolve_time = 0.0;
     std::unique_ptr<detail::third_party_presolve_t<i_t, f_t>> presolver;

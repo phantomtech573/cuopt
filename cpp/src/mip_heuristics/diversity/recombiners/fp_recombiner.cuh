@@ -88,7 +88,7 @@ class fp_recombiner_t : public recombiner_t<i_t, f_t> {
       CUOPT_DETERMINISM_LOG("FP rec: running LP with infeasibility detection");
       relaxed_lp_settings_t lp_settings;
       lp_settings.time_limit = fp_recombiner_config_t::infeasibility_detection_time_limit;
-      if (this->context.settings.determinism_mode & CUOPT_DETERMINISM_BB) {
+      if (this->context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS) {
         lp_settings.time_limit =
           std::numeric_limits<double>::max();  // TODO should be global time limit
         lp_settings.work_limit   = fp_recombiner_config_t::infeasibility_detection_time_limit;

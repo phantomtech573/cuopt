@@ -869,7 +869,7 @@ void fj_t<i_t, f_t>::refresh_lhs_and_violation(const rmm::cuda_stream_view& stre
     thrust::plus<f_t>());
   data.violation_score.set_value_async(violation, stream);
   data.weighted_violation_score.set_value_async(weighted_violation, stream);
-  if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
+  if ((context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS)) {
     data.violated_constraints.sort(stream);
   }
 #if FJ_SINGLE_STEP
@@ -1293,7 +1293,7 @@ template <typename i_t, typename f_t>
 i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range scope("fj_solve");
-  bool deterministic = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB);
+  bool deterministic = (context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS);
   if (deterministic) {
     settings.time_limit = std::max((f_t)0.0, settings.time_limit);
     settings.work_limit = settings.time_limit;
@@ -1429,7 +1429,8 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
       // Compute the work unit corresponding to the number of iterations elapsed
       // by incrementally guessing work units until the model predicts >= actual iterations
       // TODO: awfully ugly, change
-      if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB) && iterations > 0) {
+      if ((context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS) &&
+          iterations > 0) {
         double guessed_work         = 0.0;
         const double work_increment = 0.1;
         const double max_work       = settings.work_limit * 2.0;  // Safety limit

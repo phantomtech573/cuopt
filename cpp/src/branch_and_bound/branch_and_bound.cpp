@@ -655,7 +655,7 @@ void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
   mutex_original_lp_.unlock();
 
   mutex_heuristic_queue_.lock();
-  heuristic_solution_queue_.push_back({solution, user_objective, bnb_work_total, origin});
+  heuristic_solution_queue_.push_back({solution, user_objective, work_unit_ts, origin});
   const size_t heuristic_queue_size = heuristic_solution_queue_.size();
   mutex_heuristic_queue_.unlock();
   CUOPT_DETERMINISM_LOG(

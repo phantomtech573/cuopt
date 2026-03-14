@@ -483,7 +483,7 @@ TEST_P(DeterministicGpuHeuristicsInstanceTest, reproducible_with_gpu_heuristics)
 
   mip_solver_settings_t<int, double> settings;
   settings.time_limit       = 60.0;
-  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS;
+  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
   settings.num_cpu_threads  = 8;
   settings.work_limit       = 30;
 
@@ -519,7 +519,7 @@ TEST_F(DeterministicBBTest, reproducible_with_gpu_heuristics_50v10_no_cuts)
 
   mip_solver_settings_t<int, double> settings;
   settings.time_limit       = 60.0;
-  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS;
+  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
   settings.num_cpu_threads  = 8;
   settings.work_limit       = 30;
   // settings.max_cut_passes   = 0;
@@ -572,7 +572,7 @@ class DeterministicBBInstanceTest
 
 TEST_P(DeterministicBBInstanceTest, deterministic_across_runs)
 {
-  scoped_env_var_t gpu_fj_work_scale("CUOPT_GPU_HEUR_WORK_UNIT_SCALE", "0.1");
+  // scoped_env_var_t gpu_fj_work_scale("CUOPT_GPU_HEUR_WORK_UNIT_SCALE", "0.1");
   auto [instance_path, num_threads, time_limit, work_limit] = GetParam();
   auto path                                                 = make_path_absolute(instance_path);
   auto problem = mps_parser::parse_mps<int, double>(path, false);
