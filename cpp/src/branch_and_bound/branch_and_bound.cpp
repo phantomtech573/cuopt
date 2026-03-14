@@ -493,6 +493,7 @@ void branch_and_bound_t<i_t, f_t>::emit_solution_callback(
   cuopt::internals::mip_solution_origin_t origin,
   double work_timestamp)
 {
+  cuopt_assert(work_timestamp >= 0.0, "work_timestamp must not be negative");
   const size_t callback_count = (settings_.solution_callback != nullptr ? 1UL : 0UL) +
                                 (settings_.solution_callback_ext != nullptr ? 1UL : 0UL);
   settings_.log.debug("Publishing incumbent: obj=%g wut=%.6f origin=%s callbacks=%zu\n",
@@ -655,7 +656,7 @@ void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
   mutex_original_lp_.unlock();
 
   mutex_heuristic_queue_.lock();
-  heuristic_solution_queue_.push_back({solution, user_objective, work_unit_ts, origin});
+  heuristic_solution_queue_.push_back({solution, user_objective, bnb_work_total, origin});
   const size_t heuristic_queue_size = heuristic_solution_queue_.size();
   mutex_heuristic_queue_.unlock();
   CUOPT_DETERMINISM_LOG(
@@ -781,8 +782,10 @@ void branch_and_bound_t<i_t, f_t>::repair_heuristic_solutions()
             detail::compute_hash(repaired_solution));
           report_heuristic(repaired_obj, queued_solution.work_timestamp);
 
-          emit_solution_callback_from_crushed(
-            repaired_solution, repaired_obj, queued_solution.origin, -1.0);
+          emit_solution_callback_from_crushed(repaired_solution,
+                                              repaired_obj,
+                                              queued_solution.origin,
+                                              queued_solution.work_timestamp);
         }
 
         mutex_upper_.unlock();
@@ -821,8 +824,10 @@ void branch_and_bound_t<i_t, f_t>::set_solution_at_root(mip_solution_t<i_t, f_t>
                        compute_user_objective(original_lp_, root_objective_),
                        toc(exploration_stats_.start_time));
 
-  emit_solution_callback(
-    solution.x, solution.objective, cuopt::internals::mip_solution_origin_t::BRANCH_AND_BOUND_NODE);
+  emit_solution_callback(solution.x,
+                         solution.objective,
+                         cuopt::internals::mip_solution_origin_t::BRANCH_AND_BOUND_NODE,
+                         work_unit_context_.current_work());
   if (settings_.heuristic_preemption_callback != nullptr) {
     settings_.heuristic_preemption_callback();
   }
@@ -958,7 +963,8 @@ void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& 
           compute_user_objective(original_lp_, obj),
           queued_solution.work_timestamp,
           cuopt::internals::mip_solution_origin_to_string(queued_solution.origin));
-        emit_solution_callback_from_crushed(crushed_solution, obj, queued_solution.origin, -1.0);
+        emit_solution_callback_from_crushed(
+          crushed_solution, obj, queued_solution.origin, queued_solution.work_timestamp);
       }
     }
   }
@@ -1020,7 +1026,7 @@ void branch_and_bound_t<i_t, f_t>::add_feasible_solution(f_t leaf_objective,
       incumbent_.x,
       upper_bound_,
       cuopt::internals::mip_solution_origin_t::BRANCH_AND_BOUND_NODE,
-      -1.0);
+      work_unit_context_.current_work());
   }
   mutex_upper_.unlock();
 }

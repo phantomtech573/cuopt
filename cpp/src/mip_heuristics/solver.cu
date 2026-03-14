@@ -141,7 +141,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       context.gpu_heur_loop,
       sol,
       internals::mip_solution_origin_t::UNKNOWN,
-      -1.0);
+      0.0);
     context.solution_publication.invoke_get_solution_callbacks(payload);
     context.problem_ptr->post_process_solution(sol);
     return sol;
@@ -179,7 +179,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       context.gpu_heur_loop,
       sol,
       internals::mip_solution_origin_t::UNKNOWN,
-      -1.0);
+      0.0);
     context.solution_publication.invoke_get_solution_callbacks(payload);
     context.problem_ptr->post_process_solution(sol);
     return sol;
@@ -220,7 +220,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
         context.gpu_heur_loop,
         sol,
         internals::mip_solution_origin_t::UNKNOWN,
-        -1.0);
+        0.0);
       context.solution_publication.invoke_get_solution_callbacks(payload);
     }
     context.problem_ptr->post_process_solution(sol);

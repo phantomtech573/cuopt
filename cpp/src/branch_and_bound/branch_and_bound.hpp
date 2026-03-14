@@ -302,11 +302,11 @@ class branch_and_bound_t {
   void emit_solution_callback(std::vector<f_t>& original_x,
                               f_t objective,
                               cuopt::internals::mip_solution_origin_t origin,
-                              double work_timestamp = -1.0);
+                              double work_timestamp);
   void emit_solution_callback_from_crushed(const std::vector<f_t>& crushed_solution,
                                            f_t objective,
                                            cuopt::internals::mip_solution_origin_t origin,
-                                           double work_timestamp = -1.0);
+                                           double work_timestamp);
 
   // Set the solution when found at the root node
   void set_solution_at_root(mip_solution_t<i_t, f_t>& solution,

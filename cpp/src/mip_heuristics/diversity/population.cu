@@ -346,6 +346,7 @@ void population_t<i_t, f_t>::run_solution_callbacks(
       if (problem_ptr->branch_and_bound_callback != nullptr) {
         problem_ptr->branch_and_bound_callback(sol.get_host_assignment());
       }
+      const double work_timestamp = context.gpu_heur_loop.current_work();
       const auto payload =
         make_solution_callback_payload_from_solution<i_t, f_t>(problem_ptr,
                                                                context.settings,
@@ -353,7 +354,7 @@ void population_t<i_t, f_t>::run_solution_callbacks(
                                                                context.gpu_heur_loop,
                                                                sol,
                                                                callback_origin,
-                                                               -1.0);
+                                                               work_timestamp);
       const bool published =
         context.solution_publication.publish_new_best_feasible(payload, timer.elapsed_time());
       cuopt_assert(published, "New best feasible solution should publish to GET callbacks");

@@ -62,9 +62,7 @@ solution_callback_payload_t<i_t, f_t> make_solution_callback_payload_from_soluti
   double work_timestamp)
 {
   cuopt_assert(problem_ptr != nullptr, "Callback payload problem pointer must not be null");
-  if (work_timestamp < 0.0 && (settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
-    work_timestamp = gpu_heur_loop.current_work();
-  }
+  cuopt_assert(work_timestamp >= 0.0, "work_timestamp must not be negative");
   solution_callback_payload_t<i_t, f_t> payload{};
   payload.user_objective               = sol.get_user_objective();
   payload.solver_objective             = sol.get_objective();
@@ -94,9 +92,7 @@ solution_callback_payload_t<i_t, f_t> make_solution_callback_payload_from_host_s
   double work_timestamp)
 {
   cuopt_assert(problem_ptr != nullptr, "Callback payload problem pointer must not be null");
-  if (work_timestamp < 0.0 && (settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
-    work_timestamp = gpu_heur_loop.current_work();
-  }
+  cuopt_assert(work_timestamp >= 0.0, "work_timestamp must not be negative");
   solution_callback_payload_t<i_t, f_t> payload{};
   payload.assignment           = assignment;
   payload.user_objective       = problem_ptr->get_user_obj_from_solver_obj(solver_objective);
