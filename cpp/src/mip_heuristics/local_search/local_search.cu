@@ -275,10 +275,10 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
   in_fj.settings.time_limit = timer.remaining_time();
   in_fj.solve(solution);
 
-  // Stop CPU solver (in opportunistic mode this halts immediately;
-  // in deterministic mode CPUFJ self-halts via work_budget)
-  for (auto& cpu_fj : ls_cpu_fj) {
-    cpu_fj.stop_cpu_solver();
+  if (!deterministic) {
+    for (auto& cpu_fj : ls_cpu_fj) {
+      cpu_fj.stop_cpu_solver();
+    }
   }
 
   auto gpu_fj_end        = std::chrono::high_resolution_clock::now();

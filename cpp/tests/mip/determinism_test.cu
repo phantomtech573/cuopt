@@ -203,7 +203,7 @@ TEST_F(DeterministicBBTest, reproducible_objective)
 
   mip_solver_settings_t<int, double> settings;
   settings.time_limit       = 60.0;
-  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
+  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_BB;
   settings.num_cpu_threads  = 8;
   settings.work_limit       = 4;
 
@@ -235,7 +235,7 @@ TEST_F(DeterministicBBTest, reproducible_infeasibility)
 
   mip_solver_settings_t<int, double> settings;
   settings.time_limit       = 60.0;
-  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
+  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_BB;
   settings.num_cpu_threads  = 8;
   settings.work_limit       = 100;  // High enough to fully explore
 
@@ -267,7 +267,7 @@ TEST_F(DeterministicBBTest, reproducible_high_contention)
 
   mip_solver_settings_t<int, double> settings;
   settings.time_limit       = 60.0;
-  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
+  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_BB;
   settings.num_cpu_threads  = 128;  // High thread count to stress contention
   settings.work_limit       = 1;
 
@@ -302,7 +302,7 @@ TEST_F(DeterministicBBTest, reproducible_solution_vector)
 
   mip_solver_settings_t<int, double> settings;
   settings.time_limit       = 60.0;
-  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
+  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_BB;
   settings.num_cpu_threads  = 8;
   settings.work_limit       = 2;
 

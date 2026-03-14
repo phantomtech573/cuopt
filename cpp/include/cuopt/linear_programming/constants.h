@@ -86,6 +86,7 @@
 /* Backward compatibility aliases */
 #define CUOPT_MODE_OPPORTUNISTIC                CUOPT_DETERMINISM_NONE
 #define CUOPT_MODE_DETERMINISTIC                CUOPT_DETERMINISM_FULL
+#define CUOPT_MODE_DETERMINISTIC_BB             CUOPT_DETERMINISM_BB
 #define CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS CUOPT_DETERMINISM_GPU_HEURISTICS
 
 /* @brief LP/MIP termination status constants */

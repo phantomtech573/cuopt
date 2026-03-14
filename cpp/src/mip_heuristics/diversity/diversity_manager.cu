@@ -400,9 +400,10 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
 {
   raft::common::nvtx::range fun_scope("run_solver");
 
-  CUOPT_LOG_DEBUG(
-    "Determinism mode: %s",
-    (context.settings.determinism_mode & CUOPT_DETERMINISM_BB) ? "deterministic" : "opportunistic");
+  CUOPT_LOG_DEBUG("Determinism mode: %s",
+                  (context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS)
+                    ? "deterministic"
+                    : "opportunistic");
 
   // to automatically compute the solving time on scope exit
   auto timer_raii_guard =
@@ -419,9 +420,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
       sol.get_total_excess());
   };
 
+  bool bb_only = (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC_BB);
   // Debug: Allow disabling GPU heuristics to test B&B tree determinism in isolation
   const char* disable_heuristics_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
-  if (disable_heuristics_env != nullptr && std::string(disable_heuristics_env) == "1") {
+  if (bb_only ||
+      (disable_heuristics_env != nullptr && std::string(disable_heuristics_env) == "1")) {
     CUOPT_LOG_INFO("GPU heuristics disabled via CUOPT_DISABLE_GPU_HEURISTICS=1");
     if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
         context.branch_and_bound_ptr != nullptr) {

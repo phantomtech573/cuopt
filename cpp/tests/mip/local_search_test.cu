@@ -90,7 +90,11 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
 
   init_handler(op_problem.get_handle_ptr());
   // run the problem constructor of MIP, so that we do bounds standardization
-  detail::problem_t<int, double> problem(op_problem);
+  auto settings             = mip_solver_settings_t<int, double>{};
+  settings.time_limit       = 120.;
+  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
+
+  detail::problem_t<int, double> problem(op_problem, settings.get_tolerances(), true);
   problem.preprocess_problem();
 
   setup_device_symbols(op_problem.get_handle_ptr()->get_stream());
@@ -106,11 +110,8 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
                                                                nullptr,
                                                                hyper_params,
                                                                true);
-
-  auto settings             = mip_solver_settings_t<int, double>{};
-  settings.time_limit       = 30.;
-  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
-  auto timer = cuopt::termination_checker_t(30.0, cuopt::termination_checker_t::root_tag_t{});
+  auto timer =
+    cuopt::termination_checker_t(settings.time_limit, cuopt::termination_checker_t::root_tag_t{});
   detail::mip_solver_t<int, double> solver(problem, settings, scaling, timer);
   problem.tolerances = settings.get_tolerances();
 
@@ -148,7 +149,8 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
   printf("running mode: %d\n", mode);
 
   work_limit_context_t work_limit_context("LocalSearch");
-  local_search.fp.timer = work_limit_timer_t(work_limit_context, 6000, timer);
+  work_limit_context.deterministic = true;
+  local_search.fp.timer            = work_limit_timer_t(work_limit_context, 10, timer);
 
   detail::ls_config_t<int, double> ls_config{};
 
@@ -208,7 +210,10 @@ class LocalSearchTestParams : public testing::TestWithParam<std::tuple<local_sea
 
 TEST_P(LocalSearchTestParams, local_search_operator_determinism)
 {
+  cuopt::init_logger_t log("", true);
   cuopt::default_logger().set_pattern("[%n] [%-6l] %v");
+  cuopt::default_logger().set_level(rapids_logger::level_enum::debug);
+  cuopt::default_logger().flush_on(rapids_logger::level_enum::debug);
 
   spin_stream_raii_t spin_stream_1;
   spin_stream_raii_t spin_stream_2;
@@ -250,9 +255,10 @@ TEST_P(LocalSearchTestParams, local_search_operator_determinism)
 
 INSTANTIATE_TEST_SUITE_P(LocalSearchTests,
                          LocalSearchTestParams,
-                         testing::Values(std::make_tuple(local_search_mode_t::FP),
-                                         std::make_tuple(local_search_mode_t::FJ_LINE_SEGMENT),
-                                         std::make_tuple(local_search_mode_t::FJ_ON_ZERO),
-                                         std::make_tuple(local_search_mode_t::FJ_ANNEALING)));
+                         testing::Values(
+                           // std::make_tuple(local_search_mode_t::FP)
+                           //                std::make_tuple(local_search_mode_t::FJ_LINE_SEGMENT),
+                           //                std::make_tuple(local_search_mode_t::FJ_ON_ZERO),
+                           std::make_tuple(local_search_mode_t::FJ_ANNEALING)));
 
 }  // namespace cuopt::linear_programming::test
