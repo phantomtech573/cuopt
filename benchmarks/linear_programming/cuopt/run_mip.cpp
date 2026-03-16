@@ -277,6 +277,7 @@ int run_single_file(std::string file_path,
     settings.work_limit);
   settings.tolerances.relative_tolerance = 1e-12;
   settings.tolerances.absolute_tolerance = 1e-6;
+  // TODO: restore
   settings.presolver                     = cuopt::linear_programming::presolver_t::None;
   settings.reliability_branching         = reliability_branching;
   settings.clique_cuts                   = -1;
