@@ -23,6 +23,7 @@
 
 #include <atomic>
 
+// uncomment to enable detailed detemrinism logs
 #undef CUOPT_DETERMINISM_LOG
 #define CUOPT_DETERMINISM_LOG(...) \
   do {                             \
