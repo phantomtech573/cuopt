@@ -141,6 +141,8 @@ void symmetrize_csr(const std::vector<f_t>& in_values,
                     std::vector<i_t>& out_indices,
                     std::vector<i_t>& out_offsets)
 {
+  if (in_offsets.size() <= 1) { return; }
+
   i_t n_rows = static_cast<i_t>(in_offsets.size()) - 1;
   symmetrize_csr(in_values.data(),
                  in_indices.data(),
