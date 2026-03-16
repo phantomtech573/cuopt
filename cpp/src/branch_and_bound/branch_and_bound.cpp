@@ -3187,6 +3187,14 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
 
   std::fill(worker.bounds_changed.begin(), worker.bounds_changed.end(), false);
 
+  // FIXME: Add mutex protection for original_lp_ bounds access in solve_node_deterministic.
+  // The code reads original_lp_.lower and original_lp_.upper without mutex protection at lines
+  // 3171-3172 and 3177-3178. However, update_root_bounds (called from set_new_solution during
+  // solution processing) modifies these same bounds while holding mutex_original_lp_. This creates
+  // a data race: workers can read bounds while the main thread updates them via heuristic
+  // solutions. Acquire mutex_original_lp_ before accessing the bounds, or take a snapshot at the
+  // start of solve_node_deterministic to avoid repeated locking.
+  // (This fix is needed for deterministic mode + reduced cost strengthening)
   if (worker.recompute_bounds_and_basis) {
     feasible = node_ptr->get_variable_bounds(original_lp_.lower,
                                              original_lp_.upper,

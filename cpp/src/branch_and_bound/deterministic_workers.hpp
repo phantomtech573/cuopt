@@ -317,11 +317,12 @@ class deterministic_diving_worker_t
   {
     dive_queue_entry_t<i_t, f_t> entry;
     std::vector<bool> bounds_changed(original_lp.num_cols, false);
-    node->get_variable_bounds(original_lp.lower,
-                              original_lp.upper,
-                              entry.resolved_lower,
-                              entry.resolved_upper,
-                              bounds_changed);
+    bool feasible = node->get_variable_bounds(original_lp.lower,
+                                              original_lp.upper,
+                                              entry.resolved_lower,
+                                              entry.resolved_upper,
+                                              bounds_changed);
+    if (!feasible) { return; }
     entry.node = node->detach_copy();
     dive_queue.push_back(std::move(entry));
   }
