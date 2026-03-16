@@ -5,7 +5,13 @@
  */
 /* clang-format on */
 
-#include "cuda_profiler_api.h"
+// uncomment to enable detailed detemrinism logs
+#undef CUOPT_DETERMINISM_LOG
+#define CUOPT_DETERMINISM_LOG(...) \
+  do {                             \
+    CUOPT_LOG_INFO(__VA_ARGS__);   \
+  } while (0)
+
 #include "diversity_manager.cuh"
 
 #include <mip_heuristics/mip_constants.hpp>
@@ -20,13 +26,6 @@
 
 #include <utilities/determinism_log.hpp>
 #include <utilities/scope_guard.hpp>
-
-// uncomment to enable detailed detemrinism logs
-// #undef CUOPT_DETERMINISM_LOG
-// #define CUOPT_DETERMINISM_LOG(...)
-//   do {
-//     CUOPT_LOG_INFO(__VA_ARGS__);
-//   } while (0)
 
 constexpr bool fj_only_run = false;
 
