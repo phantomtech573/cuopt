@@ -3765,19 +3765,20 @@ void branch_and_bound_t<i_t, f_t>::deterministic_dive(
 
     // Setup bounds for this node
     std::fill(worker.bounds_changed.begin(), worker.bounds_changed.end(), false);
+    bool feasible = true;
 
     if (worker.recompute_bounds_and_basis) {
-      node_ptr->get_variable_bounds(worker.dive_lower,
-                                    worker.dive_upper,
-                                    worker.leaf_problem.lower,
-                                    worker.leaf_problem.upper,
-                                    worker.bounds_changed);
+      feasible = node_ptr->get_variable_bounds(worker.dive_lower,
+                                               worker.dive_upper,
+                                               worker.leaf_problem.lower,
+                                               worker.leaf_problem.upper,
+                                               worker.bounds_changed);
     } else {
-      node_ptr->update_branched_variable_bounds(worker.dive_lower,
-                                                worker.dive_upper,
-                                                worker.leaf_problem.lower,
-                                                worker.leaf_problem.upper,
-                                                worker.bounds_changed);
+      feasible = node_ptr->update_branched_variable_bounds(worker.dive_lower,
+                                                           worker.dive_upper,
+                                                           worker.leaf_problem.lower,
+                                                           worker.leaf_problem.upper,
+                                                           worker.bounds_changed);
     }
 
     double remaining_time = settings_.time_limit - toc(exploration_stats_.start_time);
@@ -3792,8 +3793,10 @@ void branch_and_bound_t<i_t, f_t>::deterministic_dive(
     lp_settings.scale_columns = false;
 
 #ifndef DETERMINISM_DISABLE_BOUNDS_STRENGTHENING
-    bool feasible = worker.node_presolver.bounds_strengthening(
-      lp_settings, worker.bounds_changed, worker.leaf_problem.lower, worker.leaf_problem.upper);
+    if (feasible) {
+      feasible = worker.node_presolver.bounds_strengthening(
+        lp_settings, worker.bounds_changed, worker.leaf_problem.lower, worker.leaf_problem.upper);
+    }
 
     if (settings_.deterministic) {
       // TEMP APPROXIMATION;
