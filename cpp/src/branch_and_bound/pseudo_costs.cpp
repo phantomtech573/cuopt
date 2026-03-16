@@ -672,27 +672,25 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
     f_t strong_branching_start_time = tic();
 
     const bool use_work_accounting = work_unit_context && work_unit_context->deterministic;
-    std::vector<cuopt::work_limit_context_t> thread_work_contexts;
+    // more tasks than threads in order to allow for dynamic load balancing through OpenMP.
+    // work context accounting needs to be one on a task basis to avoid
+    // nondeterminism, because openmp is free to schedule threads as it likes.
+    const i_t n_tasks = std::min<i_t>(4 * settings.num_threads, fractional.size());
+    std::vector<cuopt::work_limit_context_t> task_work_contexts;
     if (use_work_accounting) {
-      thread_work_contexts.reserve(settings.num_threads);
-      for (i_t t = 0; t < settings.num_threads; ++t) {
-        thread_work_contexts.emplace_back("sb_thread_" + std::to_string(t));
-        thread_work_contexts.back().deterministic = true;
+      task_work_contexts.reserve(n_tasks);
+      for (i_t k = 0; k < n_tasks; ++k) {
+        task_work_contexts.emplace_back("sb_task_" + std::to_string(k));
+        task_work_contexts.back().deterministic = true;
       }
     }
 
 #pragma omp parallel num_threads(settings.num_threads)
     {
-      i_t n = std::min<i_t>(4 * settings.num_threads, fractional.size());
-
-      // Here we are creating more tasks than the number of threads
-      // such that they can be scheduled dynamically to the threads.
-      cuopt::work_limit_context_t* thread_ctx =
-        use_work_accounting ? &thread_work_contexts[omp_get_thread_num()] : nullptr;
 #pragma omp for schedule(dynamic, 1)
-      for (i_t k = 0; k < n; k++) {
-        i_t start = std::floor(k * fractional.size() / n);
-        i_t end   = std::floor((k + 1) * fractional.size() / n);
+      for (i_t k = 0; k < n_tasks; k++) {
+        i_t start = std::floor(k * fractional.size() / n_tasks);
+        i_t end   = std::floor((k + 1) * fractional.size() / n_tasks);
 
         constexpr bool verbose = false;
         if (verbose) {
@@ -703,6 +701,9 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
                               end,
                               end - start);
         }
+
+        cuopt::work_limit_context_t* task_ctx =
+          use_work_accounting ? &task_work_contexts[k] : nullptr;
 
         strong_branch_helper(start,
                              end,
@@ -716,13 +717,13 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
                              root_vstatus,
                              edge_norms,
                              pc,
-                             thread_ctx);
+                             task_ctx);
       }
     }
 
     if (use_work_accounting) {
       double max_work = 0.0;
-      for (const auto& ctx : thread_work_contexts) {
+      for (auto& ctx : task_work_contexts) {
         max_work = std::max(max_work, ctx.current_work());
       }
       work_unit_context->record_work_sync_on_horizon(max_work);

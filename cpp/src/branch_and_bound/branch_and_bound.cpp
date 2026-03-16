@@ -46,11 +46,11 @@
 #include <vector>
 
 // uncomment to enable detailed detemrinism logs
-// #undef CUOPT_DETERMINISM_LOG
-// #define CUOPT_DETERMINISM_LOG(logger, ...) \
-//   do {                                     \
-//     logger.printf(__VA_ARGS__);            \
-//   } while (0)
+#undef CUOPT_DETERMINISM_LOG
+#define CUOPT_DETERMINISM_LOG(logger, ...) \
+  do {                                     \
+    logger.printf(__VA_ARGS__);            \
+  } while (0)
 
 namespace cuopt::linear_programming::dual_simplex {
 
@@ -2514,6 +2514,10 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   solving_root_relaxation_               = false;
   exploration_stats_.total_lp_iters      = root_relax_soln_.iterations;
   exploration_stats_.total_lp_solve_time = toc(exploration_stats_.start_time);
+  CUOPT_DETERMINISM_LOG(settings_.log,
+                        "Post-root-LP work: %.16e iters=%d\n",
+                        work_unit_context_.current_work(),
+                        root_relax_soln_.iterations);
 
   auto finish_clique_thread = [this]() {
     if (clique_table_future_.valid()) {
@@ -3204,7 +3208,13 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     calculate_variable_locks(original_lp_, var_up_locks_, var_down_locks_);
   }
   if (settings_.deterministic) {
-    pre_exploration_work_              = work_unit_context_.current_work();
+    pre_exploration_work_ = work_unit_context_.current_work();
+    CUOPT_DETERMINISM_LOG(
+      settings_.log,
+      "Pre-exploration work breakdown: total=%.16e scale=%.6f deterministic=%d\n",
+      pre_exploration_work_,
+      work_unit_context_.work_unit_scale,
+      (int)work_unit_context_.deterministic);
     work_unit_context_.scheduler       = saved_scheduler;
     work_unit_context_.work_unit_scale = settings_.bnb_work_unit_scale;
     settings_.log.printf(
@@ -3671,7 +3681,8 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sync_callback()
       worker_clocks_str += std::to_string(w.worker_id) + ":" + std::to_string(w.clock) + "/" +
                            std::to_string(w.integer_solutions.size()) + " ";
     }
-    settings_.log.printf(
+    CUOPT_DETERMINISM_LOG(
+      settings_.log,
       "Deterministic sync #%d: horizon=%.6f pre_expl=%.6f heur_q=%zu workers=[%s]\n",
       deterministic_horizon_number_,
       deterministic_current_horizon_,
@@ -4097,14 +4108,16 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
               });
 
     if (!due_solutions.empty() || !heuristic_solution_queue_.empty()) {
-      settings_.log.printf(
+      CUOPT_DETERMINISM_LOG(
+        settings_.log,
         "Deterministic sync retire: horizon=%.6f due=%zu future=%zu pre_expl=%.6f\n",
         deterministic_current_horizon_,
         due_solutions.size(),
         heuristic_solution_queue_.size(),
         pre_exploration_work_);
       for (size_t i = 0; i < due_solutions.size(); ++i) {
-        settings_.log.printf(
+        CUOPT_DETERMINISM_LOG(
+          settings_.log,
           "  due[%zu]: wut=%.6f obj=%g origin=%s\n",
           i,
           due_solutions[i].work_timestamp,
@@ -4264,7 +4277,8 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
         detail::compute_hash(sol.solution));
 
       if (improved) {
-        settings_.log.printf(
+        CUOPT_DETERMINISM_LOG(
+          settings_.log,
           "Deterministic replay PUBLISH: horizon=%.6f wut=%.6f obj=%g origin=%s worker=%d "
           "upper_after=%.16e\n",
           deterministic_current_horizon_,
