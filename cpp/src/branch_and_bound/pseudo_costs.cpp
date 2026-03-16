@@ -672,7 +672,7 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
     f_t strong_branching_start_time = tic();
 
     const bool use_work_accounting = work_unit_context && work_unit_context->deterministic;
-    // more tasks than threads in order to allow for dynamic load balancing through OpenMP.
+    // More tasks than threads in order to allow for dynamic load balancing through OpenMP.
     // work context accounting needs to be one on a task basis to avoid
     // nondeterminism, because openmp is free to schedule threads as it likes.
     const i_t n_tasks = std::min<i_t>(4 * settings.num_threads, fractional.size());
