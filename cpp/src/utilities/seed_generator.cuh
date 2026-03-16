@@ -11,18 +11,34 @@
 
 namespace cuopt {
 
-// TODO: should be thread local?
 class seed_generator {
-  static int64_t seed_;
+  static int64_t base_seed_;
+
+  struct thread_state_t {
+    int64_t counter{0};
+    int64_t last_base{0};
+    bool initialized{false};
+  };
+
+  static thread_state_t& local_state()
+  {
+    thread_local thread_state_t state;
+    if (!state.initialized || state.last_base != base_seed_) {
+      state.counter     = base_seed_;
+      state.last_base   = base_seed_;
+      state.initialized = true;
+    }
+    return state;
+  }
 
  public:
   template <typename seed_t>
   static void set_seed(seed_t seed)
   {
 #ifdef BENCHMARK
-    seed_ = std::random_device{}();
+    base_seed_ = std::random_device{}();
 #else
-    seed_ = static_cast<int64_t>(seed);
+    base_seed_ = static_cast<int64_t>(seed);
 #endif
   }
   template <typename arg0, typename arg1, typename... args>
@@ -37,13 +53,13 @@ class seed_generator {
                           int line           = __builtin_LINE())
   {
     printf("&&&&&&& SEED CALLED BY %s:%d: %s() ***\n", file, line, caller);
-    return seed_++;
+    return local_state().counter++;
   }
 #else
-  static int64_t get_seed() { return seed_++; }
+  static int64_t get_seed() { return local_state().counter++; }
 #endif
 
-  static int64_t peek_seed() { return seed_; }
+  static int64_t peek_seed() { return local_state().counter; }
 
  public:
   seed_generator(seed_generator const&) = delete;
