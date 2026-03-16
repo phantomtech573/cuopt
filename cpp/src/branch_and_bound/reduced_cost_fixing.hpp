@@ -71,7 +71,7 @@ std::pair<i_t, i_t> reduced_cost_fixing(const std::vector<f_t>& reduced_costs,
   }
 
   if (num_fixed > 0 || num_improved > 0) {
-    settings.log.debug(
+    settings.log.printf(
       "Reduced costs: Found %d improved bounds and %d fixed variables\n", num_improved, num_fixed);
   }
   return {num_fixed, num_improved};

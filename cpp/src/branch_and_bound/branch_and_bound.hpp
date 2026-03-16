@@ -301,9 +301,7 @@ class branch_and_bound_t {
     dual::status_t lp_status,
     logger_t& log);
 
-  bool update_root_bounds(const std::vector<f_t>& lower_bounds,
-                          const std::vector<f_t>& upper_bounds,
-                          const std::vector<bool>& bounds_changed);
+  void root_reduced_cost_fixing(f_t upper_bound);
 
   // ============================================================================
   // Deterministic BSP (Bulk Synchronous Parallel) methods for deterministic parallel B&B

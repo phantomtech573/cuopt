@@ -380,31 +380,51 @@ void branch_and_bound_t<i_t, f_t>::report(
 }
 
 template <typename i_t, typename f_t>
-bool branch_and_bound_t<i_t, f_t>::update_root_bounds(const std::vector<f_t>& lower_bounds,
-                                                      const std::vector<f_t>& upper_bounds,
-                                                      const std::vector<bool>& bounds_changed)
-{
-  std::vector<char> row_sense;
-  bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
-
-  mutex_original_lp_.lock();
-  original_lp_.lower = lower_bounds;
-  original_lp_.upper = upper_bounds;
-  bool feasible      = node_presolve.bounds_strengthening(
-    settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
-  mutex_original_lp_.unlock();
-
-  worker_pool_.broadcast_root_bounds_change();
-
-  return feasible;
-}
-
-template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::update_user_bound(f_t lower_bound)
 {
   if (user_bound_callback_ == nullptr) { return; }
   f_t user_lower = compute_user_objective(original_lp_, lower_bound);
   user_bound_callback_(user_lower);
+}
+
+template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::root_reduced_cost_fixing(f_t upper_bound)
+{
+  if (settings_.reduced_cost_strengthening < 3) { return; }
+
+  mutex_original_lp_.lock();
+  std::vector<f_t> lower = original_lp_.lower;
+  std::vector<f_t> upper = original_lp_.upper;
+  std::vector<bool> bounds_changed;
+  mutex_original_lp_.unlock();
+
+  auto [num_fixed, num_improved] = reduced_cost_fixing(root_relax_soln_.z,
+                                                       var_types_,
+                                                       settings_,
+                                                       root_objective_,
+                                                       upper_bound,
+                                                       lower,
+                                                       upper,
+                                                       bounds_changed);
+  if (num_fixed > 0 || num_improved > 0) {
+    std::vector<char> row_sense;
+    bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
+
+    mutex_original_lp_.lock();
+    original_lp_.lower = lower;
+    original_lp_.upper = upper;
+    bool feasible      = node_presolve.bounds_strengthening(
+      settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
+    mutex_original_lp_.unlock();
+
+    worker_pool_.broadcast_root_bounds_change();
+
+    if (!feasible) {
+      settings_.log.printf(
+        "Bound strengthening failed when updating the bounds at the root node!\n");
+      solver_status_ = mip_status_t::NUMERICAL;
+    }
+  }
 }
 
 template <typename i_t, typename f_t>
@@ -444,33 +464,7 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
     if (is_feasible && obj < upper_bound_) {
       upper_bound_ = obj;
       incumbent_.set_incumbent_solution(obj, crushed_solution);
-
-      if (settings_.reduced_cost_strengthening >= 3) {
-        mutex_original_lp_.lock();
-        std::vector<f_t> lower_bound = original_lp_.lower;
-        std::vector<f_t> upper_bound = original_lp_.upper;
-        std::vector<bool> bounds_changed;
-        mutex_original_lp_.unlock();
-
-        auto [num_fixed, num_improved] = reduced_cost_fixing(root_relax_soln_.z,
-                                                             var_types_,
-                                                             settings_,
-                                                             root_objective_,
-                                                             obj,
-                                                             lower_bound,
-                                                             upper_bound,
-                                                             bounds_changed);
-
-        if (num_fixed > 0 || num_improved > 0) {
-          bool feasible = update_root_bounds(lower_bound, upper_bound, bounds_changed);
-          if (!feasible) {
-            settings_.log.printf(
-              "Bound strengthening failed when updating the bounds at the root node!\n");
-            solver_status_ = mip_status_t::NUMERICAL;
-          }
-        }
-      }
-
+      root_reduced_cost_fixing(obj);
     } else {
       attempt_repair         = true;
       constexpr bool verbose = false;
@@ -644,30 +638,7 @@ void branch_and_bound_t<i_t, f_t>::repair_heuristic_solutions()
             settings_.solution_callback(original_x, repaired_obj);
           }
 
-          if (settings_.reduced_cost_strengthening >= 3) {
-            mutex_original_lp_.lock();
-            std::vector<f_t> lower_bound = original_lp_.lower;
-            std::vector<f_t> upper_bound = original_lp_.upper;
-            std::vector<bool> bounds_changed;
-            mutex_original_lp_.unlock();
-
-            auto [num_fixed, num_improved] = reduced_cost_fixing(root_relax_soln_.z,
-                                                                 var_types_,
-                                                                 settings_,
-                                                                 root_objective_,
-                                                                 repaired_obj,
-                                                                 lower_bound,
-                                                                 upper_bound,
-                                                                 bounds_changed);
-            if (num_fixed > 0 || num_improved > 0) {
-              bool feasible = update_root_bounds(lower_bound, upper_bound, bounds_changed);
-              if (!feasible) {
-                settings_.log.printf(
-                  "Bound strengthening failed when updating the bounds at the root node!\n");
-                solver_status_ = mip_status_t::NUMERICAL;
-              }
-            }
-          }
+          root_reduced_cost_fixing(repaired_obj);
         }
         mutex_upper_.unlock();
       }
@@ -804,32 +775,8 @@ void branch_and_bound_t<i_t, f_t>::add_feasible_solution(f_t leaf_objective,
     incumbent_.set_incumbent_solution(leaf_objective, leaf_solution);
     upper_bound_ = leaf_objective;
     report(feasible_solution_symbol(thread_type), leaf_objective, get_lower_bound(), leaf_depth, 0);
+    root_reduced_cost_fixing(leaf_objective);
     send_solution = true;
-
-    if (settings_.reduced_cost_strengthening >= 3) {
-      mutex_original_lp_.lock();
-      std::vector<f_t> lower_bound = original_lp_.lower;
-      std::vector<f_t> upper_bound = original_lp_.upper;
-      std::vector<bool> bounds_changed;
-      mutex_original_lp_.unlock();
-
-      auto [num_fixed, num_improved] = reduced_cost_fixing(root_relax_soln_.z,
-                                                           var_types_,
-                                                           settings_,
-                                                           root_objective_,
-                                                           leaf_objective,
-                                                           lower_bound,
-                                                           upper_bound,
-                                                           bounds_changed);
-      if (num_fixed > 0 || num_improved > 0) {
-        bool feasible = update_root_bounds(lower_bound, upper_bound, bounds_changed);
-        if (!feasible) {
-          settings_.log.printf(
-            "Bound strengthening failed when updating the bounds at the root node!\n");
-          solver_status_ = mip_status_t::NUMERICAL;
-        }
-      }
-    }
   }
 
   if (send_solution && settings_.solution_callback != nullptr) {
@@ -1432,8 +1379,8 @@ dual::status_t branch_and_bound_t<i_t, f_t>::solve_node_lp(
       mutex_original_lp_.unlock();
     } else {
       // When diving, we are working on a separated subtree so we no longer can
-      // retrieve the bounds from the starting node until the root node of
-      // the main. Instead, we apply the reduced cost fixing directly
+      // propagate the root bound changes from the root to the current node.
+      // Instead, we apply the reduced cost fixing directly
       // to the starting bounds.
       reduced_cost_fixing(root_relax_soln_.z,
                           var_types_,
@@ -2216,8 +2163,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 
   if (num_fractional != 0 && settings_.max_cut_passes > 0) {
     settings_.log.printf(
-      " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node | "
-      "  "
+      " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node |   "
       "Gap    "
       "|  Time  |\n");
   }
@@ -2581,7 +2527,16 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     mutex_upper_.unlock();
 
     if (num_fixed > 0 || num_improved > 0) {
-      bool feasible = update_root_bounds(lower_bounds, upper_bounds, bounds_changed);
+      std::vector<char> row_sense;
+      bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
+
+      mutex_original_lp_.lock();
+      original_lp_.lower = lower_bounds;
+      original_lp_.upper = upper_bounds;
+      bool feasible      = node_presolve.bounds_strengthening(
+        settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
+      mutex_original_lp_.unlock();
+
       if (!feasible) {
         settings_.log.printf("Bound strengthening failed\n");
         return mip_status_t::NUMERICAL;  // We had a feasible integer solution, but bound
@@ -2754,8 +2709,8 @@ Work Units:   0                              0.5                              1.
 ──────────────────────────────────────────────────────────────────────────────────────────►
                                                                         Work Unit Time
 
-Legend:  ▓▓▓ = actively working    ░░░ = waiting at barrier    [hash] = state hash for
-verification wut = work unit timestamp    PC = pseudo-costs    snap = snapshot (local copy)
+Legend:  ▓▓▓ = actively working    ░░░ = waiting at barrier    [hash] = state hash for verification
+         wut = work unit timestamp    PC = pseudo-costs    snap = snapshot (local copy)
 
 */
 
@@ -2793,22 +2748,23 @@ Producer Sync:
   Producing solutions in the past would break determinism, therefore this unidirectional sync
 ensures no such thing can occur. Instrumentation Aggregator: Collects multiple instrument vectors
 into a single aggregation point for estimating work from memory operations. Worker Context: Object
-representing the "context" (e.g.: the worker) that should register the amount of work recorded
-There is a 1context:1worker mapping. The Work Unit Scheduler registers such contexts and ensure
-they remained synchronized together. Queued Integer Solutions: New integer solutions found within
-horizons are queued with a work unit timestamp, in order to be sorted and played in order during
-the sync callback. Creation Sequence: In nondeterministic mode, a single global atomic integer is
-used to generate sequential IDs for the nodes. Since this is a global atomic, it is inherently
+representing the "context" (e.g.: the worker) that should register the amount of work recorded There
+is a 1context:1worker mapping. The Work Unit Scheduler registers such contexts and ensure they
+remained synchronized together. Queued Integer Solutions: New integer solutions found within
+horizons are queued with a work unit timestamp, in order to be sorted and played in order during the
+sync callback. Creation Sequence: In nondeterministic mode, a single global atomic integer is used
+to generate sequential IDs for the nodes. Since this is a global atomic, it is inherently
 nondeterministic. To fix this, in deterministic mode, nodes are addressed by a tuple <worker_id,
 seq_id>
-  where "worker_id" is the ID of the worker that created this node, and "seq_id" is a sequential
-ID local to the worker.\ This sequential ID is similar in principle to the global atomic ID
-sequence of the nondeterminsitic mode but since it is local to each worker, it is updated serially
-and thus is deterministic. worker IDs are unique, and sequence IDs are unique to their workers,
-therefor <worker_id, seq_id> is a globally unique node identifier. Pseudocost Update: Each worker
-updates its local pseudocosts when branching. These updates are queued within horizons. During the
-horizon sync, these updates are all played in order, and the newly updated global pseudocosts are
-broadcast to the worker's pseudocost snapshots for the coming horizon.
+  where "worker_id" is the ID of the worker that created this node, and "seq_id" is a sequential ID
+local to the worker.\ This sequential ID is similar in principle to the global atomic ID sequence of
+the nondeterminsitic mode but since it is local to each worker, it is updated serially and thus is
+deterministic. worker IDs are unique, and sequence IDs are unique to their workers, therefor
+  <worker_id, seq_id> is a globally unique node identifier.
+Pseudocost Update:
+  Each worker updates its local pseudocosts when branching. These updates are queued within
+horizons. During the horizon sync, these updates are all played in order, and the newly updated
+global pseudocosts are broadcast to the worker's pseudocost snapshots for the coming horizon.
 
 */
 
@@ -2926,8 +2882,7 @@ void branch_and_bound_t<i_t, f_t>::run_deterministic_coordinator(const csr_matri
     "Sync%% | NoWork\n");
   settings_.log.printf(
     "  "
-    "-------+---------+----------+--------+---------+--------+----------+----------+-------+-----"
-    "--"
+    "-------+---------+----------+--------+---------+--------+----------+----------+-------+-------"
     "\n");
   for (const auto& worker : *deterministic_workers_) {
     double sync_time    = worker.work_context.total_sync_time;
