@@ -979,7 +979,7 @@ void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& 
   solution.simplex_iterations = exploration_stats_.total_lp_iters;
   CUOPT_DETERMINISM_LOG(
     settings_.log,
-    "Deterministic B&B final package: status=%d incumbent_obj=%.16e lower_bound=%.16e "
+    "1Deterministic B&B final package: status=%d incumbent_obj=%.16e lower_bound=%.16e "
     "incumbent_hash=0x%x final_hash=0x%x nodes=%d simplex_iterations=%d\n",
     (int)solver_status_.load(),
     solution.objective,
@@ -3440,10 +3440,12 @@ void branch_and_bound_t<i_t, f_t>::run_deterministic_coordinator(const csr_matri
 
   scoped_context_registrations_t context_registrations(*deterministic_scheduler_);
   for (auto& worker : *deterministic_workers_) {
+    worker.clock = pre_exploration_work_;
     context_registrations.add(worker.work_context);
   }
   if (deterministic_diving_workers_) {
     for (auto& worker : *deterministic_diving_workers_) {
+      worker.clock = pre_exploration_work_;
       context_registrations.add(worker.work_context);
     }
   }
@@ -3662,6 +3664,21 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sync_callback()
   }
 
   work_unit_context_.set_current_work(horizon_end, false);
+
+  {
+    std::string worker_clocks_str;
+    for (const auto& w : *deterministic_workers_) {
+      worker_clocks_str += std::to_string(w.worker_id) + ":" + std::to_string(w.clock) + "/" +
+                           std::to_string(w.integer_solutions.size()) + " ";
+    }
+    settings_.log.printf(
+      "Deterministic sync #%d: horizon=%.6f pre_expl=%.6f heur_q=%zu workers=[%s]\n",
+      deterministic_horizon_number_,
+      deterministic_current_horizon_,
+      pre_exploration_work_,
+      heuristic_solution_queue_.size(),
+      worker_clocks_str.c_str());
+  }
 
   bb_event_batch_t<i_t, f_t> all_events = deterministic_workers_->collect_and_sort_events();
   if (deterministic_current_horizon_ <= deterministic_horizon_step_ + 1e-9) {
@@ -4079,6 +4096,22 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
                 return a.solution < b.solution;
               });
 
+    if (!due_solutions.empty() || !heuristic_solution_queue_.empty()) {
+      settings_.log.printf(
+        "Deterministic sync retire: horizon=%.6f due=%zu future=%zu pre_expl=%.6f\n",
+        deterministic_current_horizon_,
+        due_solutions.size(),
+        heuristic_solution_queue_.size(),
+        pre_exploration_work_);
+      for (size_t i = 0; i < due_solutions.size(); ++i) {
+        settings_.log.printf(
+          "  due[%zu]: wut=%.6f obj=%g origin=%s\n",
+          i,
+          due_solutions[i].work_timestamp,
+          due_solutions[i].user_objective,
+          cuopt::internals::mip_solution_origin_to_string(due_solutions[i].origin));
+      }
+    }
     if (!due_solutions.empty()) {
       CUOPT_DETERMINISM_LOG(settings_.log,
                             "Deterministic sync: retiring %ld external solutions\n",
@@ -4231,6 +4264,15 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
         detail::compute_hash(sol.solution));
 
       if (improved) {
+        settings_.log.printf(
+          "Deterministic replay PUBLISH: horizon=%.6f wut=%.6f obj=%g origin=%s worker=%d "
+          "upper_after=%.16e\n",
+          deterministic_current_horizon_,
+          sol.work_timestamp,
+          compute_user_objective(original_lp_, sol.objective),
+          cuopt::internals::mip_solution_origin_to_string(sol.origin),
+          sol.worker_id,
+          current_upper);
         if (sol.origin == cuopt::internals::mip_solution_origin_t::BRANCH_AND_BOUND_NODE ||
             sol.origin == cuopt::internals::mip_solution_origin_t::BRANCH_AND_BOUND_DIVING) {
           report(feasible_solution_symbol(replay.strategy),
@@ -4607,7 +4649,7 @@ void branch_and_bound_t<i_t, f_t>::deterministic_dive(
     }
 
     worker.lp_iters_this_dive += node_iter;
-    worker.clock = worker.work_context.global_work_units_elapsed;
+    worker.clock = pre_exploration_work_ + worker.work_context.global_work_units_elapsed;
 
     if (lp_status == dual::status_t::TIME_LIMIT || lp_status == dual::status_t::WORK_LIMIT ||
         lp_status == dual::status_t::ITERATION_LIMIT) {
