@@ -108,7 +108,7 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
     } else {
       estim_iters = std::numeric_limits<int>::max();
     }
-    CUOPT_LOG_INFO("estimated iterations %d for work limit %f", estim_iters, settings.work_limit);
+    CUOPT_LOG_DEBUG("estimated iterations %d for work limit %f", estim_iters, settings.work_limit);
     pdlp_settings.iteration_limit  = estim_iters;
     pdlp_settings.time_limit       = std::numeric_limits<double>::infinity();
     pdlp_settings.pdlp_solver_mode = pdlp_solver_mode_t::Stable2;
