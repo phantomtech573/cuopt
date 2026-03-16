@@ -979,7 +979,7 @@ void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& 
   solution.simplex_iterations = exploration_stats_.total_lp_iters;
   CUOPT_DETERMINISM_LOG(
     settings_.log,
-    "1Deterministic B&B final package: status=%d incumbent_obj=%.16e lower_bound=%.16e "
+    "Deterministic B&B final package: status=%d incumbent_obj=%.16e lower_bound=%.16e "
     "incumbent_hash=0x%x final_hash=0x%x nodes=%d simplex_iterations=%d\n",
     (int)solver_status_.load(),
     solution.objective,
