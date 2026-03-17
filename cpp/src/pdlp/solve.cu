@@ -1146,12 +1146,10 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
     sol_barrier_ptr;
   auto barrier_thread = std::thread([&]() {
     auto call_barrier_thread = [&]() {
-      std::this_thread::sleep_for(std::chrono::seconds(2));
       rmm::cuda_stream_view barrier_stream = rmm::cuda_stream_per_thread;
       auto barrier_handle                  = raft::handle_t(barrier_stream);
       auto barrier_problem                 = dual_simplex_problem;
       barrier_problem.handle_ptr           = &barrier_handle;
-      std::this_thread::sleep_for(std::chrono::seconds(2));
       run_barrier_thread<i_t, f_t>(std::ref(barrier_problem),
                                    std::ref(settings_pdlp),
                                    std::ref(sol_barrier_ptr),
@@ -1185,7 +1183,6 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
   }
 
   // Wait for dual simplex thread to finish
-  // std::cout << "\n%%%%%%%%% B inside_mip: " << settings.inside_mip << std::endl;
   if (!settings.inside_mip) { dual_simplex_thread.join(); }
 
   barrier_thread.join();
