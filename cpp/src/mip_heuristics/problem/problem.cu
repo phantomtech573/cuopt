@@ -64,6 +64,10 @@ void problem_t<i_t, f_t>::op_problem_cstr_body(const optimization_problem_t<i_t,
   set_bounds_if_not_set(*this);
 
   set_variable_bounds(*this);
+  thrust::fill(handle_ptr->get_thrust_policy(),
+               integer_fixed_variable_map.begin(),
+               integer_fixed_variable_map.end(),
+               -1);
 
   const bool is_mip = original_problem_ptr->get_problem_category() != problem_category_t::LP;
   if (is_mip) {
@@ -136,7 +140,7 @@ problem_t<i_t, f_t>::problem_t(
     nonbinary_indices(0, problem_.get_handle_ptr()->get_stream()),
     is_binary_variable(0, problem_.get_handle_ptr()->get_stream()),
     related_variables(0, problem_.get_handle_ptr()->get_stream()),
-    related_variables_offsets(n_variables, problem_.get_handle_ptr()->get_stream()),
+    related_variables_offsets(0, problem_.get_handle_ptr()->get_stream()),
     var_names(problem_.get_variable_names()),
     row_names(problem_.get_row_names()),
     objective_name(problem_.get_objective_name()),
