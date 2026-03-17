@@ -231,6 +231,7 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit,
   if (termination_criterion_t::NO_UPDATE != term_crit) {
     ls.constraint_prop.bounds_update.set_updated_bounds(*problem_ptr);
   }
+  // tmp
   bool run_probing_cache = !fj_only_run;
   if (run_probing_cache) {
     // Run probing cache before trivial presolve to discover variable implications
@@ -284,6 +285,10 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit,
   }
   stats.presolve_time = presolve_timer.elapsed_time();
   lp_optimal_solution.resize(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream());
+  thrust::fill(problem_ptr->handle_ptr->get_thrust_policy(),
+               lp_optimal_solution.begin(),
+               lp_optimal_solution.end(),
+               f_t(0));
   lp_dual_optimal_solution.resize(problem_ptr->n_constraints,
                                   problem_ptr->handle_ptr->get_stream());
   problem_ptr->handle_ptr->sync_stream();

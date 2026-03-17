@@ -148,8 +148,9 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
                      lp_state.prev_dual.data(),
                      lp_state.prev_dual.data() + op_problem.n_constraints,
                      [prev_size, dual = make_span(lp_state.prev_dual)] __device__(i_t i) {
+                       if (i >= prev_size) { return 0.0; }
                        f_t x = dual[i];
-                       if (!isfinite(x) || i >= prev_size) { return 0.0; }
+                       if (!isfinite(x)) { return 0.0; }
                        return x;
                      });
     lp_solver.set_initial_primal_solution(assignment);
@@ -191,8 +192,6 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
                           ? detail::compute_hash(solver_response.get_primal_solution(),
                                                  op_problem.handle_ptr->get_stream())
                           : 0u);
-
-  // tmp
 
   if (determinism_mode && settings.work_context != nullptr) {
     double work_to_record = settings.work_limit;

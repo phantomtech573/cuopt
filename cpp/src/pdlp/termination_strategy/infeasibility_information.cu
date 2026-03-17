@@ -14,6 +14,7 @@
 #include <cuopt/linear_programming/utilities/segmented_sum_handler.cuh>
 
 #include <mip_heuristics/mip_constants.hpp>
+#include <utilities/cuda_helpers.cuh>
 
 #include <raft/sparse/detail/cusparse_wrappers.h>
 #include <raft/core/nvtx.hpp>
@@ -89,6 +90,19 @@ infeasibility_information_t<i_t, f_t>::infeasibility_information_t(
     climber_strategies_(climber_strategies),
     hyper_params_(hyper_params)
 {
+  cuopt::mark_memory_as_initialized(max_primal_ray_infeasibility_.data(),
+                                    max_primal_ray_infeasibility_.size() * sizeof(f_t),
+                                    stream_view_);
+  cuopt::mark_memory_as_initialized(primal_ray_linear_objective_.data(),
+                                    primal_ray_linear_objective_.size() * sizeof(f_t),
+                                    stream_view_);
+  cuopt::mark_memory_as_initialized(max_dual_ray_infeasibility_.data(),
+                                    max_dual_ray_infeasibility_.size() * sizeof(f_t),
+                                    stream_view_);
+  cuopt::mark_memory_as_initialized(dual_ray_linear_objective_.data(),
+                                    dual_ray_linear_objective_.size() * sizeof(f_t),
+                                    stream_view_);
+
   if (infeasibility_detection) {
     RAFT_CUDA_TRY(cudaMemsetAsync(homogenous_primal_residual_.data(),
                                   0.0,
@@ -131,24 +145,6 @@ infeasibility_information_t<i_t, f_t>::infeasibility_information_t(
 
     size_of_buffer_       = std::max({temp_storage_bytes_1, temp_storage_bytes_2});
     this->rmm_tmp_buffer_ = rmm::device_buffer{size_of_buffer_, stream_view_};
-
-    RAFT_CUDA_TRY(cudaMemsetAsync(dual_ray_linear_objective_.data(),
-                                  0,
-                                  sizeof(f_t) * dual_ray_linear_objective_.size(),
-                                  stream_view_));
-    RAFT_CUDA_TRY(cudaMemsetAsync(max_dual_ray_infeasibility_.data(),
-                                  0,
-                                  sizeof(f_t) * max_dual_ray_infeasibility_.size(),
-                                  stream_view_));
-
-    RAFT_CUDA_TRY(cudaMemsetAsync(primal_ray_linear_objective_.data(),
-                                  0,
-                                  sizeof(f_t) * primal_ray_linear_objective_.size(),
-                                  stream_view_));
-    RAFT_CUDA_TRY(cudaMemsetAsync(max_primal_ray_infeasibility_.data(),
-                                  0,
-                                  sizeof(f_t) * max_primal_ray_infeasibility_.size(),
-                                  stream_view_));
   }
 }
 

@@ -11,6 +11,7 @@
 #include <raft/core/handle.hpp>
 #include <raft/util/cudart_utils.hpp>
 
+#include <rmm/device_scalar.hpp>
 #include <rmm/device_uvector.hpp>
 #include <rmm/exec_policy.hpp>
 
@@ -335,6 +336,17 @@ raft::device_span<const T> make_span(rmm::device_uvector<T> const& container)
   return raft::device_span<const T>(container.data(), container.size());
 }
 
+template <typename T>
+raft::device_span<T> make_span(rmm::device_scalar<T>& scalar)
+{
+  return raft::device_span<T>(scalar.data(), 1);
+}
+
+template <typename T>
+raft::device_span<const T> make_span(rmm::device_scalar<T> const& scalar)
+{
+  return raft::device_span<const T>(scalar.data(), 1);
+}
 // resizes the device vector if it the std vector is larger
 template <typename T>
 inline void expand_device_copy(rmm::device_uvector<T>& device_vec,
