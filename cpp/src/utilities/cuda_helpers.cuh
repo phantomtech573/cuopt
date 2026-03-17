@@ -12,8 +12,8 @@
 #include <thrust/host_vector.h>
 #include <thrust/tuple.h>
 #include <mutex>
-#include <raft/common/nvtx.hpp>
 #include <raft/core/device_span.hpp>
+#include <raft/core/nvtx.hpp>
 #include <raft/util/cuda_utils.cuh>
 #include <raft/util/cudart_utils.hpp>
 #include <rmm/device_uvector.hpp>
