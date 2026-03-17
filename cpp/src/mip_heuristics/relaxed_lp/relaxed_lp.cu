@@ -164,6 +164,21 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   lp_solver.set_inside_mip(true);
   CUOPT_DETERMINISM_LOG(
     "prev solution sizes primal=%lu dual=%lu", assignment.size(), lp_state.prev_dual.size());
+  if (determinism_mode) {
+    auto scaling_hash = lp_solver.get_scaling_hash();
+    auto init_primal_hash =
+      detail::compute_hash(make_span(assignment), op_problem.handle_ptr->get_stream());
+    auto init_dual_hash =
+      settings.has_initial_primal
+        ? detail::compute_hash(make_span(lp_state.prev_dual), op_problem.handle_ptr->get_stream())
+        : 0u;
+    CUOPT_DETERMINISM_LOG(
+      "LP call %lu pre-solve state: scaling_hash=0x%x init_primal_hash=0x%x init_dual_hash=0x%x",
+      lp_call_id,
+      scaling_hash,
+      init_primal_hash,
+      init_dual_hash);
+  }
   auto solver_response = lp_solver.run_solver(start_time);
   CUOPT_DETERMINISM_LOG("post LP primal size %lu", solver_response.get_primal_solution().size());
   const int actual_iters =
@@ -176,6 +191,7 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
                           ? detail::compute_hash(solver_response.get_primal_solution(),
                                                  op_problem.handle_ptr->get_stream())
                           : 0u);
+
   if (determinism_mode && settings.work_context != nullptr) {
     double work_to_record = settings.work_limit;
     if (estim_iters > 0) {

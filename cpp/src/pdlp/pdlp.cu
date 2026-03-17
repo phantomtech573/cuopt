@@ -16,6 +16,10 @@
 #include <pdlp/utils.cuh>
 
 #include <mip_heuristics/mip_constants.hpp>
+#include <mip_heuristics/utils.cuh>
+#include <utilities/determinism_log.hpp>
+
+#include <cstring>
 #include "cuopt/linear_programming/pdlp/solver_solution.hpp"
 
 #include <utilities/copy_helpers.hpp>
@@ -2565,6 +2569,18 @@ optimization_problem_solution_t<i_t, f_t> pdlp_solver_t<i_t, f_t>::run_solver(co
     ++internal_solver_iterations_;
     if (settings_.hyper_params.never_restart_to_average)
       restart_strategy_.increment_iteration_since_last_restart();
+
+    if (inside_mip_ &&
+        (internal_solver_iterations_ % 10 == 0 || internal_solver_iterations_ <= 3)) {
+      auto primal_hash = detail::compute_hash(
+        make_span(pdhg_solver_.get_potential_next_primal_solution()), stream_view_);
+      auto dual_hash = detail::compute_hash(
+        make_span(pdhg_solver_.get_potential_next_dual_solution()), stream_view_);
+      CUOPT_DETERMINISM_LOG("PDLP iter %d: primal_hash=0x%x dual_hash=0x%x",
+                            internal_solver_iterations_,
+                            primal_hash,
+                            dual_hash);
+    }
   }
   return optimization_problem_solution_t<i_t, f_t>{pdlp_termination_status_t::NumericalError,
                                                    stream_view_};
@@ -2969,6 +2985,24 @@ detail::pdlp_termination_strategy_t<i_t, f_t>&
 pdlp_solver_t<i_t, f_t>::get_current_termination_strategy()
 {
   return current_termination_strategy_;
+}
+
+template <typename i_t, typename f_t>
+uint32_t pdlp_solver_t<i_t, f_t>::get_scaling_hash()
+{
+  auto stream = handle_ptr_->get_stream();
+  auto v      = initial_scaling_strategy_.view();
+  uint32_t h  = 0;
+  h ^= detail::compute_hash(v.cummulative_constraint_matrix_scaling, stream);
+  h ^= detail::compute_hash(v.cummulative_variable_scaling, stream) * 2654435761u;
+  auto bound_val = initial_scaling_strategy_.get_h_bound_rescaling();
+  auto obj_val   = initial_scaling_strategy_.get_h_objective_rescaling();
+  uint32_t bh, oh;
+  std::memcpy(&bh, &bound_val, std::min(sizeof(bh), sizeof(bound_val)));
+  std::memcpy(&oh, &obj_val, std::min(sizeof(oh), sizeof(obj_val)));
+  h ^= bh * 2246822519u;
+  h ^= oh * 3266489917u;
+  return h;
 }
 
 #if MIP_INSTANTIATE_FLOAT || PDLP_INSTANTIATE_FLOAT

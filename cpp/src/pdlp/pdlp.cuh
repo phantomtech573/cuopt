@@ -97,6 +97,8 @@ class pdlp_solver_t {
 
   void set_inside_mip(bool inside_mip);
 
+  uint32_t get_scaling_hash();
+
   void compute_initial_step_size();
   void compute_initial_primal_weight();
 
