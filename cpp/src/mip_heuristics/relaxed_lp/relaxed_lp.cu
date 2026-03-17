@@ -192,6 +192,8 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
                                                  op_problem.handle_ptr->get_stream())
                           : 0u);
 
+  // tmp
+
   if (determinism_mode && settings.work_context != nullptr) {
     double work_to_record = settings.work_limit;
     if (estim_iters > 0) {
