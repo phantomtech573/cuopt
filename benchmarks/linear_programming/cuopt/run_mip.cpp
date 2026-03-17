@@ -605,7 +605,7 @@ int main(int argc, char* argv[])
         sleep(1);
       }
       int remaining = paths.size() - tests_ran;
-      // wait for all processes to finish
+      // Wait for all processes to finish
       for (int i = 0; i < remaining; ++i) {
         return_gpu_to_the_queue(pid_gpu_map, pid_file_map, gpu_queue);
       }
