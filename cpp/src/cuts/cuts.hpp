@@ -288,13 +288,14 @@ class knapsack_generation_t {
                         const std::vector<i_t>& new_slacks,
                         const std::vector<variable_type_t>& var_types);
 
-  i_t generate_knapsack_cuts(const lp_problem_t<i_t, f_t>& lp,
+  i_t generate_knapsack_cut(const lp_problem_t<i_t, f_t>& lp,
                              const simplex_solver_settings_t<i_t, f_t>& settings,
                              csr_matrix_t<i_t, f_t>& Arow,
                              const std::vector<i_t>& new_slacks,
                              const std::vector<variable_type_t>& var_types,
                              const std::vector<f_t>& xstar,
                              i_t knapsack_row,
+                             std::vector<i_t>& is_complemented,
                              inequality_t<i_t, f_t>& cut);
 
   i_t num_knapsack_constraints() const { return knapsack_constraints_.size(); }

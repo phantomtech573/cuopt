@@ -697,6 +697,7 @@ knapsack_generation_t<i_t, f_t>::knapsack_generation_t(
     if (row_len < 3) { continue; }
     bool is_knapsack = true;
     f_t sum_pos      = 0.0;
+    f_t sum_neg      = 0.0;
     for (i_t p = row_start; p < row_end; p++) {
       const i_t j = Arow.j[p];
       if (is_slack_[j]) { continue; }
@@ -710,22 +711,24 @@ knapsack_generation_t<i_t, f_t>::knapsack_generation_t(
         break;
       }
       if (aj < 0.0) {
-        is_knapsack = false;
-        break;
+        sum_pos += -aj;
+        sum_neg += -aj;
+      } else {
+        sum_pos += aj;
       }
-      sum_pos += aj;
     }
 
     if (is_knapsack) {
-      const f_t beta = lp.rhs[i];
+      const f_t beta = lp.rhs[i] + sum_neg;
       if (std::abs(beta - std::round(beta)) <= settings.integer_tol) {
         if (beta > 0.0 && beta <= sum_pos && std::abs(sum_pos / (row_len - 1) - beta) > 1e-3) {
-          if (verbose) {
+          if (1) {
             settings.log.printf(
-              "Knapsack constraint %d row len %d beta %e sum_pos %e sum_pos / (row_len - 1) %e\n",
+              "Knapsack constraint %d row len %d beta %e sum_neg %e sum_pos %e sum_pos / (row_len - 1) %e\n",
               i,
               row_len,
               beta,
+              sum_neg,
               sum_pos,
               sum_pos / (row_len - 1));
           }
@@ -735,14 +738,14 @@ knapsack_generation_t<i_t, f_t>::knapsack_generation_t(
     }
   }
 
-#ifdef PRINT_KNAPSACK_INFO
+#if 1
   i_t num_knapsack_constraints = knapsack_constraints_.size();
   settings.log.printf("Number of knapsack constraints %d\n", num_knapsack_constraints);
 #endif
 }
 
 template <typename i_t, typename f_t>
-i_t knapsack_generation_t<i_t, f_t>::generate_knapsack_cuts(
+i_t knapsack_generation_t<i_t, f_t>::generate_knapsack_cut(
   const lp_problem_t<i_t, f_t>& lp,
   const simplex_solver_settings_t<i_t, f_t>& settings,
   csr_matrix_t<i_t, f_t>& Arow,
@@ -750,6 +753,7 @@ i_t knapsack_generation_t<i_t, f_t>::generate_knapsack_cuts(
   const std::vector<variable_type_t>& var_types,
   const std::vector<f_t>& xstar,
   i_t knapsack_row,
+  std::vector<i_t>& is_complemented,
   inequality_t<i_t, f_t>& cut)
 {
   const bool verbose = false;
@@ -760,11 +764,20 @@ i_t knapsack_generation_t<i_t, f_t>::generate_knapsack_cuts(
   // Remove the slacks from the inequality
   f_t seperation_rhs = 0.0;
   if (verbose) { settings.log.printf(" Knapsack : "); }
+  std::vector<i_t> complemented_variables;
+  complemented_variables.reserve(knapsack_inequality.i.size());
   for (i_t k = 0; k < knapsack_inequality.i.size(); k++) {
     const i_t j = knapsack_inequality.i[k];
     if (is_slack_[j]) {
       knapsack_inequality.x[k] = 0.0;
     } else {
+      const f_t aj = knapsack_inequality.x[k];
+      if (aj < 0.0) {
+        knapsack_rhs -= aj;
+        knapsack_inequality.x[k] *= -1.0;
+        complemented_variables.push_back(j);
+        is_complemented[j] = 1;
+      }
       if (verbose) { settings.log.printf(" %g x%d +", knapsack_inequality.x[k], j); }
       seperation_rhs += knapsack_inequality.x[k];
     }
@@ -784,7 +797,15 @@ i_t knapsack_generation_t<i_t, f_t>::generate_knapsack_cuts(
 
     settings.log.printf("seperation_rhs %g\n", seperation_rhs);
   }
-  if (seperation_rhs <= 0.0) { return -1; }
+  auto restore_complemented = [&complemented_variables, &is_complemented]() {
+    for (i_t j : complemented_variables) {
+      is_complemented[j] = 0;
+    }
+  };
+  if (seperation_rhs <= 0.0) {
+    restore_complemented();
+    return -1;
+  }
 
   std::vector<f_t> values;
   values.resize(knapsack_inequality.i.size() - 1);
@@ -795,7 +816,8 @@ i_t knapsack_generation_t<i_t, f_t>::generate_knapsack_cuts(
   for (i_t k = 0; k < knapsack_inequality.i.size(); k++) {
     const i_t j = knapsack_inequality.i[k];
     if (!is_slack_[j]) {
-      const f_t vj = std::min(1.0, std::max(0.0, 1.0 - xstar[j]));
+      const f_t xstar_j = is_complemented[j] ? 1.0 - xstar[j] : xstar[j];
+      const f_t vj = std::min(1.0, std::max(0.0, 1.0 - xstar_j));
       objective_constant += vj;
       values[h]  = vj;
       weights[h] = knapsack_inequality.x[k];
@@ -807,14 +829,14 @@ i_t knapsack_generation_t<i_t, f_t>::generate_knapsack_cuts(
 
   if (verbose) { settings.log.printf("Calling solve_knapsack_problem\n"); }
   f_t objective = solve_knapsack_problem(values, weights, seperation_rhs, solution);
-  if (std::isnan(objective)) { return -1; }
+  if (std::isnan(objective)) { restore_complemented(); return -1; }
   if (verbose) {
     settings.log.printf("objective %e objective_constant %e\n", objective, objective_constant);
   }
   f_t seperation_value = -objective + objective_constant;
   if (verbose) { settings.log.printf("seperation_value %e\n", seperation_value); }
   const f_t tol = 1e-6;
-  if (seperation_value >= 1.0 - tol) { return -1; }
+  if (seperation_value >= 1.0 - tol) { restore_complemented(); return -1; }
 
   i_t cover_size = 0;
   for (i_t k = 0; k < solution.size(); k++) {
@@ -833,6 +855,14 @@ i_t knapsack_generation_t<i_t, f_t>::generate_knapsack_cuts(
     }
   }
   cut.rhs = -cover_size + 1;
+
+  for (i_t k = 0; k < cut.size(); k++) {
+    const i_t j = cut.index(k);
+    if (is_complemented[j]) {
+      cut.vector.x[k] *= -1.0;
+      cut.rhs += 1.0;
+    }
+  }
   cut.sort();
 
   // The cut is in the form: - sum_{j in cover} x_j >= -cover_size + 1
@@ -845,6 +875,7 @@ i_t knapsack_generation_t<i_t, f_t>::generate_knapsack_cuts(
     settings.log.printf("Knapsack cut %d violation %e < 0\n", knapsack_row, violation);
   }
 
+  restore_complemented();
   if (violation >= -tol) { return -1; }
   return 0;
 }
@@ -1086,10 +1117,11 @@ void cut_generation_t<i_t, f_t>::generate_knapsack_cuts(
   const std::vector<f_t>& xstar)
 {
   if (knapsack_generation_.num_knapsack_constraints() > 0) {
+    std::vector<i_t> is_complemented(lp.num_cols, 0);
     for (i_t knapsack_row : knapsack_generation_.get_knapsack_constraints()) {
       inequality_t<i_t, f_t> cut(lp.num_cols);
-      i_t knapsack_status = knapsack_generation_.generate_knapsack_cuts(
-        lp, settings, Arow, new_slacks, var_types, xstar, knapsack_row, cut);
+      i_t knapsack_status = knapsack_generation_.generate_knapsack_cut(
+        lp, settings, Arow, new_slacks, var_types, xstar, knapsack_row, is_complemented, cut);
       if (knapsack_status == 0) { cut_pool_.add_cut(cut_type_t::KNAPSACK, cut); }
     }
   }
