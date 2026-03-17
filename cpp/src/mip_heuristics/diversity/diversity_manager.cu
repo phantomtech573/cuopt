@@ -231,7 +231,7 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit,
   if (termination_criterion_t::NO_UPDATE != term_crit) {
     ls.constraint_prop.bounds_update.set_updated_bounds(*problem_ptr);
   }
-  // tmp
+
   bool run_probing_cache = !fj_only_run;
   if (run_probing_cache) {
     // Run probing cache before trivial presolve to discover variable implications
