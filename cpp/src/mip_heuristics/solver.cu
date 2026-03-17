@@ -84,6 +84,7 @@ struct branch_and_bound_solution_helper_t {
     cuopt_assert(std::isfinite(objective), "Deterministic B&B callback objective must be finite");
     solution_t<i_t, f_t> temp_sol(*dm->context.problem_ptr);
     temp_sol.copy_new_assignment(solution);
+    temp_sol.compute_feasibility();
     const auto payload =
       make_solution_callback_payload_from_solution<i_t, f_t>(dm->context.problem_ptr,
                                                              dm->context.settings,
