@@ -316,8 +316,13 @@ population_t<i_t, f_t>::get_external_solutions()
 template <typename i_t, typename f_t>
 bool population_t<i_t, f_t>::is_better_than_best_feasible(solution_t<i_t, f_t>& sol)
 {
-  bool obj_better = sol.get_objective() < best_feasible_objective;
-  return obj_better && sol.get_feasible();
+  if (!sol.get_feasible()) { return false; }
+  f_t threshold = best_feasible_objective;
+  if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
+      context.branch_and_bound_ptr != nullptr) {
+    threshold = context.branch_and_bound_ptr->get_upper_bound();
+  }
+  return sol.get_objective() < threshold;
 }
 
 template <typename i_t, typename f_t>
@@ -333,15 +338,11 @@ void population_t<i_t, f_t>::run_solution_callbacks(
     if (deterministic_callback_owner_is_bb) {
       cuopt_assert(sol.get_feasible(),
                    "Deterministic heuristic posting requires a feasible solution");
-      cuopt_assert(sol.get_objective() < best_feasible_objective,
-                   "Deterministic heuristic posting must strictly improve best feasible objective");
       const double work_timestamp = context.gpu_heur_loop.current_producer_work();
       cuopt_assert(std::isfinite(work_timestamp),
                    "Deterministic heuristic work timestamp must be finite");
       context.branch_and_bound_ptr->queue_external_solution_deterministic(
         sol.get_host_assignment(), sol.get_user_objective(), work_timestamp, callback_origin);
-      // In deterministic mode, B&B replay is the single owner of GET_SOLUTION callback ordering.
-      best_feasible_objective = sol.get_objective();
     } else {
       if (problem_ptr->branch_and_bound_callback != nullptr) {
         problem_ptr->branch_and_bound_callback(sol.get_host_assignment());

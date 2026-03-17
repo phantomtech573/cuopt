@@ -112,10 +112,11 @@ class sub_mip_recombiner_t : public recombiner_t<i_t, f_t> {
       branch_and_bound_settings.max_cut_passes        = 0;
       branch_and_bound_settings.clique_cuts           = 0;
       branch_and_bound_settings.sub_mip               = 1;
-      branch_and_bound_settings.solution_callback     = [this](std::vector<f_t>& solution,
-                                                           f_t objective) {
-        this->solution_callback(solution, objective);
-      };
+      branch_and_bound_settings.new_incumbent_callback =
+        [this](std::vector<f_t>& solution,
+               f_t objective,
+               const cuopt::internals::mip_solution_callback_info_t&,
+               double) { this->solution_callback(solution, objective); };
 
       // disable B&B logs, so that it is not interfering with the main B&B thread
       branch_and_bound_settings.log.log = false;

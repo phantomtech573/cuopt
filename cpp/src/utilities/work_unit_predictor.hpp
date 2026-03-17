@@ -35,7 +35,8 @@ struct cpu_work_unit_scaler_t {
   {
     constexpr double baseline_max_clock = 3800.0;
     double max_clock                    = get_cpu_max_clock_mhz();
-    scaling_factor_                     = baseline_max_clock / max_clock;
+    if (max_clock <= 0.0) { max_clock = baseline_max_clock; }
+    scaling_factor_ = baseline_max_clock / max_clock;
   }
 
   double scale_work_units(double work_units) const { return work_units * scaling_factor_; }

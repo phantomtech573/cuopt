@@ -65,19 +65,10 @@ struct branch_and_bound_solution_helper_t {
                                      dual_simplex::simplex_solver_settings_t<i_t, f_t>& settings)
     : dm(dm), settings_(settings) {};
 
-  void solution_callback(std::vector<f_t>& solution, f_t objective)
-  {
-    if (!settings_.deterministic) {
-      dm->population.add_external_solution(
-        solution, objective, internals::mip_solution_origin_t::BRANCH_AND_BOUND_NODE);
-      dm->rins.new_best_incumbent_callback(solution);
-    }
-  }
-
-  void solution_callback_ext(std::vector<f_t>& solution,
-                             f_t objective,
-                             const internals::mip_solution_callback_info_t& callback_info,
-                             double work_timestamp)
+  void new_incumbent_callback(std::vector<f_t>& solution,
+                              f_t objective,
+                              const internals::mip_solution_callback_info_t& callback_info,
+                              double work_timestamp)
   {
     if (!settings_.deterministic) {
       dm->population.add_external_solution(
@@ -91,14 +82,16 @@ struct branch_and_bound_solution_helper_t {
     cuopt_assert(solution.size() == (size_t)dm->context.problem_ptr->n_variables,
                  "Deterministic B&B callback solution size mismatch");
     cuopt_assert(std::isfinite(objective), "Deterministic B&B callback objective must be finite");
+    solution_t<i_t, f_t> temp_sol(*dm->context.problem_ptr);
+    temp_sol.copy_new_assignment(solution);
     const auto payload =
-      make_solution_callback_payload_from_host_solution<i_t, f_t>(dm->context.problem_ptr,
-                                                                  dm->context.settings,
-                                                                  dm->context.gpu_heur_loop,
-                                                                  solution,
-                                                                  objective,
-                                                                  callback_info.origin,
-                                                                  work_timestamp);
+      make_solution_callback_payload_from_solution<i_t, f_t>(dm->context.problem_ptr,
+                                                             dm->context.settings,
+                                                             dm->context.scaling,
+                                                             dm->context.gpu_heur_loop,
+                                                             temp_sol,
+                                                             callback_info.origin,
+                                                             work_timestamp);
     dm->context.solution_publication.publish_new_best_feasible(payload, dm->timer.elapsed_time());
   }
 
@@ -294,14 +287,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     }
     CUOPT_LOG_INFO("Using %d CPU threads for B&B", branch_and_bound_settings.num_threads);
 
-    // Set the branch and bound -> primal heuristics callback
-    branch_and_bound_settings.solution_callback =
-      std::bind(&branch_and_bound_solution_helper_t<i_t, f_t>::solution_callback,
-                &solution_helper,
-                std::placeholders::_1,
-                std::placeholders::_2);
-    branch_and_bound_settings.solution_callback_ext =
-      std::bind(&branch_and_bound_solution_helper_t<i_t, f_t>::solution_callback_ext,
+    branch_and_bound_settings.new_incumbent_callback =
+      std::bind(&branch_and_bound_solution_helper_t<i_t, f_t>::new_incumbent_callback,
                 &solution_helper,
                 std::placeholders::_1,
                 std::placeholders::_2,
@@ -465,7 +452,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
           }
         }
       }
-      sol = std::move(bb_sol);
+      if (bb_feasible) { sol = std::move(bb_sol); }
     } else if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       CUOPT_DETERMINISM_LOG(
         "Deterministic B&B overwrite skipped: bb_obj=%.16e bb_obj_finite=%d bb_has_incumbent=%d",

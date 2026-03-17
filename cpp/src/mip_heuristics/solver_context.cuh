@@ -82,27 +82,6 @@ solution_callback_payload_t<i_t, f_t> make_solution_callback_payload_from_soluti
 }
 
 template <typename i_t, typename f_t>
-solution_callback_payload_t<i_t, f_t> make_solution_callback_payload_from_host_solution(
-  problem_t<i_t, f_t>* problem_ptr,
-  const mip_solver_settings_t<i_t, f_t>& settings,
-  work_limit_context_t& gpu_heur_loop,
-  const std::vector<f_t>& assignment,
-  f_t solver_objective,
-  internals::mip_solution_origin_t callback_origin,
-  double work_timestamp)
-{
-  cuopt_assert(problem_ptr != nullptr, "Callback payload problem pointer must not be null");
-  cuopt_assert(work_timestamp >= 0.0, "work_timestamp must not be negative");
-  solution_callback_payload_t<i_t, f_t> payload{};
-  payload.assignment           = assignment;
-  payload.user_objective       = problem_ptr->get_user_obj_from_solver_obj(solver_objective);
-  payload.solver_objective     = solver_objective;
-  payload.callback_info.origin = callback_origin;
-  payload.callback_info.work_timestamp = work_timestamp;
-  return payload;
-}
-
-template <typename i_t, typename f_t>
 class solution_publication_t {
  public:
   solution_publication_t(const mip_solver_settings_t<i_t, f_t>& settings_,

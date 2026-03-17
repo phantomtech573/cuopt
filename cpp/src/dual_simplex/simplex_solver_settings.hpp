@@ -110,8 +110,7 @@ struct simplex_solver_settings_t {
       reliability_branching(-1),
       inside_mip(0),
       sub_mip(0),
-      solution_callback(nullptr),
-      solution_callback_ext(nullptr),
+      new_incumbent_callback(nullptr),
       heuristic_preemption_callback(nullptr),
       dual_simplex_objective_callback(nullptr),
       concurrent_halt(nullptr)
@@ -205,10 +204,9 @@ struct simplex_solver_settings_t {
   i_t inside_mip;  // 0 if outside MIP, 1 if inside MIP at root node, 2 if inside MIP at leaf node
   i_t sub_mip;     // 0 if in regular MIP solve, 1 if in sub-MIP solve
 
-  std::function<void(std::vector<f_t>&, f_t)> solution_callback;
   std::function<void(
     std::vector<f_t>&, f_t, const cuopt::internals::mip_solution_callback_info_t&, double)>
-    solution_callback_ext;
+    new_incumbent_callback;
   std::function<void(const std::vector<f_t>&, f_t)> node_processed_callback;
   std::function<void()> heuristic_preemption_callback;
   std::function<void(std::vector<f_t>&, std::vector<f_t>&, f_t)> set_simplex_solution_callback;

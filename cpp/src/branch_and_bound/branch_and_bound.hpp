@@ -162,6 +162,7 @@ class branch_and_bound_t {
                        std::vector<f_t>& repaired_solution) const;
 
   f_t get_lower_bound();
+  f_t get_upper_bound() const { return upper_bound_; }
   bool enable_concurrent_lp_root_solve() const { return enable_concurrent_lp_root_solve_; }
   std::atomic<int>* get_root_concurrent_halt() { return &root_concurrent_halt_; }
   void set_root_concurrent_halt(int value) { root_concurrent_halt_ = value; }

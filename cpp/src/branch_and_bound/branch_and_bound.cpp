@@ -494,20 +494,15 @@ void branch_and_bound_t<i_t, f_t>::emit_solution_callback(
   double work_timestamp)
 {
   cuopt_assert(work_timestamp >= 0.0, "work_timestamp must not be negative");
-  const size_t callback_count = (settings_.solution_callback != nullptr ? 1UL : 0UL) +
-                                (settings_.solution_callback_ext != nullptr ? 1UL : 0UL);
-  settings_.log.debug("Publishing incumbent: obj=%g wut=%.6f origin=%s callbacks=%zu\n",
-                      compute_user_objective(original_lp_, objective),
-                      work_timestamp,
-                      cuopt::internals::mip_solution_origin_to_string(origin),
-                      callback_count);
-  if (settings_.solution_callback_ext != nullptr) {
+  if (settings_.new_incumbent_callback != nullptr) {
+    settings_.log.debug("Publishing incumbent: obj=%g wut=%.6f origin=%s\n",
+                        compute_user_objective(original_lp_, objective),
+                        work_timestamp,
+                        cuopt::internals::mip_solution_origin_to_string(origin));
     cuopt::internals::mip_solution_callback_info_t callback_info{};
     callback_info.origin         = origin;
     callback_info.work_timestamp = work_timestamp;
-    settings_.solution_callback_ext(original_x, objective, callback_info, work_timestamp);
-  } else if (settings_.solution_callback != nullptr) {
-    settings_.solution_callback(original_x, objective);
+    settings_.new_incumbent_callback(original_x, objective, callback_info, work_timestamp);
   }
 }
 
@@ -518,9 +513,7 @@ void branch_and_bound_t<i_t, f_t>::emit_solution_callback_from_crushed(
   cuopt::internals::mip_solution_origin_t origin,
   double work_timestamp)
 {
-  if (settings_.solution_callback == nullptr && settings_.solution_callback_ext == nullptr) {
-    return;
-  }
+  if (settings_.new_incumbent_callback == nullptr) { return; }
   std::vector<f_t> original_x;
   uncrush_primal_solution(original_problem_, original_lp_, crushed_solution, original_x);
   emit_solution_callback(original_x, objective, origin, work_timestamp);
@@ -941,8 +934,8 @@ void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& 
   }
 
   // Drain any pending heuristic solutions that B&B never got to retire during exploration
-  // (e.g., root solve consumed the entire time limit before tree exploration started).
-  if (settings_.deterministic && !incumbent_.has_incumbent) {
+  // (e.g., root solve consumed the entire budget, or exploration ended between sync horizons).
+  if (settings_.deterministic) {
     const double current_work = work_unit_context_.current_work();
     mutex_heuristic_queue_.lock();
     std::vector<queued_external_solution_t> pending;
