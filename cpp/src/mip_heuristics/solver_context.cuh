@@ -54,7 +54,7 @@ struct mip_solver_context_t {
     cuopt_assert(settings.cpufj_work_unit_scale > 0.0, "CPUFJ work-unit scale must be positive");
     cuopt_assert(settings.gpu_heur_work_unit_scale > 0.0,
                  "GPU heuristic work-unit scale must be positive");
-    gpu_heur_loop.work_unit_scale = settings.gpu_heur_work_unit_scale;
+    gpu_heur_loop.work_unit_scale = GPU_HEUR_BASE_WORK_SCALE * settings.gpu_heur_work_unit_scale;
   }
 
   mip_solver_context_t(const mip_solver_context_t&)            = delete;

@@ -305,7 +305,18 @@ void population_t<i_t, f_t>::run_solution_callbacks(
     sol,
     [this](
       const std::vector<f_t>& assignment, f_t objective, internals::mip_solution_origin_t origin) {
-      add_external_solution(assignment, objective, origin);
+      const bool deterministic_bb = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
+                                    context.branch_and_bound_ptr != nullptr;
+      if (deterministic_bb) {
+        const double work_timestamp = context.gpu_heur_loop.current_producer_work();
+        context.branch_and_bound_ptr->queue_external_solution_deterministic(
+          assignment,
+          context.problem_ptr->get_user_obj_from_solver_obj(objective),
+          work_timestamp,
+          origin);
+      } else {
+        add_external_solution(assignment, objective, origin);
+      }
     });
 }
 

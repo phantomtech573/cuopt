@@ -82,7 +82,7 @@ struct bb_observer_adapter_t {
     }
     if (context->diversity_manager_ptr != nullptr) {
       context->diversity_manager_ptr->population.add_external_solution(
-        solution, objective, internals::mip_solution_origin_t::BRANCH_AND_BOUND_NODE);
+        solution, objective, info.origin);
       context->diversity_manager_ptr->rins.new_best_incumbent_callback(solution);
     }
   }
@@ -250,7 +250,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       context.settings.reduced_cost_strengthening == -1
         ? 2
         : context.settings.reduced_cost_strengthening;
-    branch_and_bound_settings.bnb_work_unit_scale = solver_settings_.bnb_work_unit_scale;
+    branch_and_bound_settings.bb_work_unit_scale = solver_settings_.bb_work_unit_scale;
     branch_and_bound_settings.gpu_heur_wait_for_exploration =
       solver_settings_.gpu_heur_wait_for_exploration;
 
@@ -365,7 +365,11 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       solution_t<i_t, f_t> bb_sol(*context.problem_ptr);
       bb_sol.copy_new_assignment(branch_and_bound_solution.x);
       bool bb_feasible = bb_sol.compute_feasibility();
-      if (bb_feasible) { sol = std::move(bb_sol); }
+      if (bb_feasible) {
+        sol = std::move(bb_sol);
+      } else {
+        sol = solution_t<i_t, f_t>(*context.problem_ptr);
+      }
     } else if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       // In deterministic mode, only solutions formally retired by B&B are valid output.
       // Discard the GPU heuristic incumbent that B&B never processed.
@@ -378,8 +382,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       double bnb_work  = branch_and_bound->get_work_unit_context().current_work();
       double gpu_work  = context.gpu_heur_loop.current_work();
-      double bnb_scale = solver_settings_.bnb_work_unit_scale;
-      double gpu_scale = solver_settings_.gpu_heur_work_unit_scale;
+      double bnb_scale = BB_BASE_WORK_SCALE * solver_settings_.bb_work_unit_scale;
+      double gpu_scale = GPU_HEUR_BASE_WORK_SCALE * solver_settings_.gpu_heur_work_unit_scale;
       CUOPT_LOG_INFO(
         "Work unit summary: B&B=%.2f (scale=%.3f, raw=%.2f) GPU_heur=%.2f (scale=%.3f, raw=%.2f) "
         "ratio=%.2fx",

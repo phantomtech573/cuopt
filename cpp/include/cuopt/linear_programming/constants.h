@@ -79,9 +79,8 @@
 
 /* @brief MIP determinism mode flags (bitset) */
 #define CUOPT_DETERMINISM_NONE 0x0
-#define CUOPT_DETERMINISM_BB \
-  0x1  // matches the previous value of '1' which was for B&B-only determinism in the previous
-       // rleease
+// matches the previous value of '1' which was for B&B-only determinism in the previous release
+#define CUOPT_DETERMINISM_BB             0x1
 #define CUOPT_DETERMINISM_GPU_HEURISTICS 0x2
 #define CUOPT_DETERMINISM_FULL           (CUOPT_DETERMINISM_BB | CUOPT_DETERMINISM_GPU_HEURISTICS)
 

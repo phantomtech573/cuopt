@@ -10,6 +10,7 @@
 #include <branch_and_bound/branch_and_bound.hpp>
 #include <branch_and_bound/mip_node.hpp>
 #include <branch_and_bound/pseudo_costs.hpp>
+#include <mip_heuristics/mip_constants.hpp>
 
 #include <cuts/cuts.hpp>
 #include <mip_heuristics/presolve/conflict_graph/clique_table.cuh>
@@ -2383,14 +2384,15 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   work_unit_scheduler_t* saved_scheduler = work_unit_context_.scheduler;
   if (settings_.deterministic) {
     work_unit_context_.deterministic = true;
-    cuopt_assert(settings_.bnb_work_unit_scale > 0.0, "B&B work-unit scale must be positive");
+    cuopt_assert(settings_.bb_work_unit_scale > 0.0, "B&B work-unit scale must be positive");
     if (settings_.gpu_heur_wait_for_exploration) {
       // Scale=0 during pre-exploration: root LP/cuts/SB don't advance the deterministic timeline.
       // GPU heuristics start after exploration, so both timelines begin at 0 together.
       work_unit_context_.work_unit_scale = 0.0;
     } else {
       // GPU heuristics race with B&B pre-exploration, so B&B work must advance normally.
-      work_unit_context_.work_unit_scale = settings_.bnb_work_unit_scale;
+      work_unit_context_.work_unit_scale =
+        detail::BB_BASE_WORK_SCALE * settings_.bb_work_unit_scale;
     }
 
     // Detach the scheduler during the serial root/cuts/SB phase.
@@ -3162,7 +3164,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       work_unit_context_.work_unit_scale,
       (int)work_unit_context_.deterministic);
     work_unit_context_.scheduler       = saved_scheduler;
-    work_unit_context_.work_unit_scale = settings_.bnb_work_unit_scale;
+    work_unit_context_.work_unit_scale = detail::BB_BASE_WORK_SCALE * settings_.bb_work_unit_scale;
     settings_.log.printf(
       " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node "
       "|   Gap    |  Work |  Time  |\n");

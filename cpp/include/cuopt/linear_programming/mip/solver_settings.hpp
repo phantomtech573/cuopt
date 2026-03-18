@@ -101,13 +101,11 @@ class mip_solver_settings_t {
   i_t mip_batch_pdlp_strong_branching = 0;
   i_t num_gpus                        = 1;
   bool log_to_console                 = true;
-  // Scales deterministic CPUFJ producer work units before they are exposed to B&B replay/sync.
-  f_t cpufj_work_unit_scale = 1.0;
-  // Scales deterministic GPU heuristic producer work units/timestamps exposed to B&B replay/sync.
+  // User-facing multipliers on top of internal baseline work-unit scales.
+  // 1.0 = use internally calibrated default. Values > 1 make that component appear to do more work.
+  f_t cpufj_work_unit_scale    = 1.0;
   f_t gpu_heur_work_unit_scale = 1.0;
-  // Scales deterministic B&B work units (LP iterations) exposed to the shared deterministic
-  // timeline.
-  f_t bnb_work_unit_scale = 1.0;
+  f_t bb_work_unit_scale       = 1.0;
   // When true, GPU heuristics wait for B&B to finish root solve before starting.
   bool gpu_heur_wait_for_exploration = true;
 

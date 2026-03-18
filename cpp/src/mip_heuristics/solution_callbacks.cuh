@@ -101,22 +101,25 @@ class solution_publication_t {
                     internals::mip_solution_origin_to_string(payload.callback_info.origin),
                     user_callbacks.size());
 
-    std::vector<f_t> user_objective_vec(1);
-    std::vector<f_t> user_bound_vec(1);
-    user_objective_vec[0] = payload.user_objective;
-    user_bound_vec[0]     = stats.get_solution_bound();
-
     for (auto callback : user_callbacks) {
+      if (callback->get_type() != internals::base_solution_callback_type::GET_SOLUTION_EXT &&
+          callback->get_type() != internals::base_solution_callback_type::GET_SOLUTION) {
+        continue;
+      }
+
+      std::vector<f_t> user_assignment(payload.assignment);
+      std::vector<f_t> user_objective_vec(1, payload.user_objective);
+      std::vector<f_t> user_bound_vec(1, stats.get_solution_bound());
       if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION_EXT) {
         auto get_sol_callback_ext = static_cast<internals::get_solution_callback_ext_t*>(callback);
-        get_sol_callback_ext->get_solution(const_cast<f_t*>(payload.assignment.data()),
+        get_sol_callback_ext->get_solution(user_assignment.data(),
                                            user_objective_vec.data(),
                                            user_bound_vec.data(),
                                            &payload.callback_info,
                                            get_sol_callback_ext->get_user_data());
       } else if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION) {
         auto get_sol_callback = static_cast<internals::get_solution_callback_t*>(callback);
-        get_sol_callback->get_solution(const_cast<f_t*>(payload.assignment.data()),
+        get_sol_callback->get_solution(user_assignment.data(),
                                        user_objective_vec.data(),
                                        user_bound_vec.data(),
                                        get_sol_callback->get_user_data());
@@ -173,9 +176,9 @@ class solution_injection_t {
                  h_incumbent_assignment.data(),
                  incumbent_assignment.size(),
                  current_incumbent.handle_ptr->get_stream());
-      if (settings.mip_scaling) { scaling.scale_solutions(incumbent_assignment); }
       bool is_valid = problem_ptr->pre_process_assignment(incumbent_assignment);
       if (!is_valid) { continue; }
+      if (settings.mip_scaling) { scaling.scale_solutions(incumbent_assignment); }
 
       solution_t<i_t, f_t> outside_sol(current_incumbent);
       cuopt_assert(outside_sol.assignment.size() == incumbent_assignment.size(),
@@ -194,7 +197,7 @@ class solution_injection_t {
                    "External solution objective mismatch");
       on_injected(outside_sol.get_host_assignment(),
                   outside_sol.get_objective(),
-                  internals::mip_solution_origin_t::USER_INITIAL);
+                  internals::mip_solution_origin_t::USER_INJECTED);
     }
   }
 

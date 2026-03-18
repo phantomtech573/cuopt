@@ -113,8 +113,11 @@ void presolve_data_t<i_t, f_t>::post_process_assignment(
   raft::common::nvtx::range fun_scope("post_process_assignment");
   const auto* h = handle_override ? handle_override : problem.handle_ptr;
   cuopt_assert(current_assignment.size() == variable_mapping.size(), "size mismatch");
+  rmm::device_uvector<f_t> local_fixed(fixed_var_assignment.size(), h->get_stream());
+  raft::copy(
+    local_fixed.data(), fixed_var_assignment.data(), fixed_var_assignment.size(), h->get_stream());
   auto assgn       = make_span(current_assignment);
-  auto fixed_assgn = make_span(fixed_var_assignment);
+  auto fixed_assgn = make_span(local_fixed);
   auto var_map     = make_span(variable_mapping);
   if (current_assignment.size() > 0) {
     thrust::for_each(h->get_thrust_policy(),
@@ -124,7 +127,7 @@ void presolve_data_t<i_t, f_t>::post_process_assignment(
                        fixed_assgn[var_map[idx]] = assgn[idx];
                      });
   }
-  expand_device_copy(current_assignment, fixed_var_assignment, h->get_stream());
+  expand_device_copy(current_assignment, local_fixed, h->get_stream());
   auto h_assignment = cuopt::host_copy(current_assignment, h->get_stream());
   cuopt_assert(additional_var_id_per_var.size() == h_assignment.size(), "Size mismatch");
   cuopt_assert(additional_var_used.size() == h_assignment.size(), "Size mismatch");

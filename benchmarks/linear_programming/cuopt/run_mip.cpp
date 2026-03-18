@@ -281,8 +281,8 @@ int run_single_file(std::string file_path,
   settings.reliability_branching         = reliability_branching;
   settings.clique_cuts                   = -1;
   settings.seed                          = 42;
-  settings.bnb_work_unit_scale           = 1;
-  settings.gpu_heur_work_unit_scale      = 0.4;
+  settings.bb_work_unit_scale            = 1.0;
+  settings.gpu_heur_work_unit_scale      = 1.0;
   settings.mip_scaling                   = false;
   settings.gpu_heur_wait_for_exploration = false;
   cuopt::linear_programming::benchmark_info_t benchmark_info;
