@@ -18,12 +18,16 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
                    const cuopt::remote::SubmitJobRequest* request,
                    cuopt::remote::SubmitJobResponse* response) override
   {
-    bool is_lp = request->has_lp_request();
-    if (!is_lp && !request->has_mip_request()) {
+    uint32_t problem_type;
+    if (request->has_lp_request()) {
+      problem_type = cuopt::remote::LP;
+    } else if (request->has_mip_request()) {
+      problem_type = cuopt::remote::MIP;
+    } else {
       return Status(StatusCode::INVALID_ARGUMENT, "No problem data provided");
     }
 
-    if (config.verbose && is_lp) {
+    if (config.verbose && problem_type == cuopt::remote::LP) {
       const auto& lp_req = request->lp_request();
       SERVER_LOG_DEBUG(
         "[gRPC] SubmitJob LP fields: bytes=%zu objective_scaling_factor=%f objective_offset=%f "
@@ -38,18 +42,20 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     auto job_data = serialize_submit_request_to_pipe(*request);
     if (config.verbose) {
       SERVER_LOG_DEBUG("[gRPC] SubmitJob: UNARY %s, pipe payload=%zu bytes",
-                       is_lp ? "LP" : "MIP",
+                       problem_type == cuopt::remote::LP ? "LP" : "MIP",
                        job_data.size());
     }
 
-    auto [ok, job_id] = submit_job_async(std::move(job_data), !is_lp);
+    auto [ok, job_id] = submit_job_async(std::move(job_data), problem_type);
     if (!ok) { return Status(StatusCode::RESOURCE_EXHAUSTED, job_id); }
 
     response->set_job_id(job_id);
     response->set_message("Job submitted successfully");
 
     if (config.verbose) {
-      SERVER_LOG_DEBUG("[gRPC] Job submitted: %s (type=%s)", job_id.c_str(), is_lp ? "LP" : "MIP");
+      SERVER_LOG_DEBUG("[gRPC] Job submitted: %s (type=%s)",
+                       job_id.c_str(),
+                       problem_type == cuopt::remote::LP ? "LP" : "MIP");
     }
 
     return Status::OK;
@@ -67,11 +73,11 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
 
     std::string upload_id = generate_job_id();
     const auto& header    = request->problem_header();
-    bool is_mip           = (header.header().problem_type() == cuopt::remote::MIP);
+    uint32_t problem_type = header.header().problem_type();
 
     if (config.verbose) {
       SERVER_LOG_DEBUG(
-        "[gRPC] StartChunkedUpload upload_id=%s is_mip=%d", upload_id.c_str(), is_mip);
+        "[gRPC] StartChunkedUpload upload_id=%s problem_type=%u", upload_id.c_str(), problem_type);
     }
 
     {
@@ -82,7 +88,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
                         std::to_string(kMaxChunkedSessions) + ")");
       }
       auto& state         = chunked_uploads[upload_id];
-      state.is_mip        = is_mip;
+      state.problem_type  = problem_type;
       state.header        = header;
       state.total_chunks  = 0;
       state.last_activity = std::chrono::steady_clock::now();
@@ -221,7 +227,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
         upload_id.c_str());
     }
 
-    auto [ok, job_id] = submit_chunked_job_async(std::move(pending), state.is_mip);
+    auto [ok, job_id] = submit_chunked_job_async(std::move(pending), state.problem_type);
     if (!ok) { return Status(StatusCode::RESOURCE_EXHAUSTED, job_id); }
 
     response->set_job_id(job_id);
@@ -230,7 +236,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     if (config.verbose) {
       SERVER_LOG_DEBUG("[gRPC] FinishChunkedUpload enqueued job: %s (type=%s)",
                        job_id.c_str(),
-                       state.is_mip ? "MIP" : "LP");
+                       state.problem_type == cuopt::remote::MIP ? "MIP" : "LP");
     }
 
     return Status::OK;
@@ -314,7 +320,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
 
     // Build the full protobuf solution from the raw arrays that were read
     // back from the worker pipe by the result retrieval thread.
-    if (it->second.is_mip) {
+    if (it->second.problem_type == cuopt::remote::MIP) {
       cuopt::remote::MIPSolution mip_solution;
       build_mip_solution_proto<int, double>(
         it->second.result_header, it->second.result_arrays, &mip_solution);
@@ -352,7 +358,6 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
 
     // Copy the result data into a download session. This snapshot lets the
     // client fetch chunks at its own pace without holding the tracker lock.
-    bool is_mip = false;
     ChunkedDownloadState state;
     {
       std::lock_guard<std::mutex> lock(tracker_mutex);
@@ -363,8 +368,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       if (it->second.status != JobStatus::COMPLETED) {
         return Status(StatusCode::FAILED_PRECONDITION, "Result not ready for job: " + job_id);
       }
-      is_mip              = it->second.is_mip;
-      state.is_mip        = is_mip;
+      state.problem_type  = it->second.problem_type;
       state.created       = std::chrono::steady_clock::now();
       state.result_header = it->second.result_header;
       state.raw_arrays    = it->second.result_arrays;
@@ -389,11 +393,11 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     if (config.verbose) {
       SERVER_LOG_DEBUG(
         "[gRPC] StartChunkedDownload: CHUNKED response for job %s, download_id=%s, arrays=%d, "
-        "is_mip=%d",
+        "problem_type=%u",
         job_id.c_str(),
         download_id.c_str(),
         response->header().arrays_size(),
-        is_mip);
+        state.problem_type);
     }
 
     return Status::OK;

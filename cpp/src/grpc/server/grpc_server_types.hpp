@@ -82,7 +82,7 @@ void copy_cstr(char (&dst)[N], const char* src)
 
 struct JobQueueEntry {
   char job_id[64];
-  uint32_t problem_type;          // 0 = LP, 1 = MIP
+  uint32_t problem_type;          // cuopt::remote::ProblemType (LP, MIP, ...)
   uint64_t data_size;             // Size of problem data (uint64 for large problems)
   std::atomic<bool> ready;        // Job is ready to be processed
   std::atomic<bool> claimed;      // Worker has claimed this job
@@ -132,7 +132,7 @@ struct JobInfo {
   JobStatus status;
   std::chrono::steady_clock::time_point submit_time;
   std::vector<IncumbentEntry> incumbents;
-  bool is_mip;
+  uint32_t problem_type = cuopt::remote::LP;
   std::string error_message;
   bool is_blocking;
   cuopt::remote::ChunkedResultHeader result_header;
@@ -185,7 +185,7 @@ struct WorkerPipes {
 
 // Chunked download session state (raw arrays from worker)
 struct ChunkedDownloadState {
-  bool is_mip = false;
+  uint32_t problem_type = cuopt::remote::LP;
   std::chrono::steady_clock::time_point created;
   cuopt::remote::ChunkedResultHeader result_header;
   std::map<int32_t, std::vector<uint8_t>> raw_arrays;  // ResultFieldId -> raw bytes
@@ -201,7 +201,7 @@ static constexpr size_t kMaxChunkedSessions = 16;
 static constexpr int kSessionTimeoutSeconds = 300;
 
 struct ChunkedUploadState {
-  bool is_mip = false;
+  uint32_t problem_type = cuopt::remote::LP;
   cuopt::remote::ChunkedProblemHeader header;
   struct FieldMeta {
     int64_t total_elements = 0;
@@ -345,11 +345,11 @@ void worker_process(int worker_id);
 pid_t spawn_single_worker(int worker_id);
 void mark_worker_jobs_failed(pid_t dead_worker_pid);
 
-std::pair<bool, std::string> submit_job_async(std::vector<uint8_t>&& request_data, bool is_mip);
+std::pair<bool, std::string> submit_job_async(std::vector<uint8_t>&& request_data,
+                                              uint32_t problem_type);
 std::pair<bool, std::string> submit_chunked_job_async(PendingChunkedUpload&& chunked_data,
-                                                      bool is_mip);
+                                                      uint32_t problem_type);
 JobStatus check_job_status(const std::string& job_id, std::string& message);
-bool get_job_is_mip(const std::string& job_id);
 int cancel_job(const std::string& job_id, JobStatus& job_status_out, std::string& message);
 
 #endif  // CUOPT_ENABLE_GRPC
