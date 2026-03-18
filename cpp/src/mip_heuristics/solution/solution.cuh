@@ -25,6 +25,7 @@ template <typename i_t, typename f_t>
 class solution_t {
  public:
   solution_t(problem_t<i_t, f_t>& problem);
+  solution_t(problem_t<i_t, f_t>& problem, const raft::handle_t* handle_override);
   solution_t(const solution_t<i_t, f_t>& other);
   solution_t& operator=(solution_t<i_t, f_t>&& other) noexcept = default;
   solution_t(solution_t<i_t, f_t>&& other)                     = default;

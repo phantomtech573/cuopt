@@ -70,10 +70,13 @@ struct bb_observer_adapter_t {
                               double work_timestamp)
   {
     if (context->settings.determinism_mode & CUOPT_DETERMINISM_BB) {
-      solution_t<i_t, f_t> temp_sol(*context->problem_ptr);
+      // B&B calls this from its own thread. Use a dedicated per-thread stream
+      // to avoid racing on the heuristic thread's stream.
+      raft::handle_t callback_handle(rmm::cuda_stream_per_thread);
+      solution_t<i_t, f_t> temp_sol(*context->problem_ptr, &callback_handle);
       temp_sol.copy_new_assignment(solution);
       temp_sol.compute_feasibility();
-      const auto payload = context->solution_publication.build_payload(
+      const auto payload = context->solution_publication.build_callback_payload(
         context->problem_ptr, context->scaling, temp_sol, info.origin, work_timestamp);
       context->solution_publication.publish_new_best_feasible(payload, dm->timer.elapsed_time());
     }
@@ -116,8 +119,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     CUOPT_LOG_INFO("Problem fully reduced in presolve");
     solution_t<i_t, f_t> sol(*context.problem_ptr);
     sol.set_problem_fully_reduced();
-    const auto payload = context.solution_publication.build_payload(
-      context.problem_ptr, context.scaling, sol, internals::mip_solution_origin_t::UNKNOWN, 0.0);
+    const auto payload = context.solution_publication.build_callback_payload(
+      context.problem_ptr, context.scaling, sol, internals::mip_solution_origin_t::PRESOLVE, 0.0);
     context.solution_publication.publish_terminal_solution(payload);
     context.problem_ptr->post_process_solution(sol);
     return sol;
@@ -148,8 +151,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     CUOPT_LOG_INFO("Problem full reduced in presolve");
     solution_t<i_t, f_t> sol(*context.problem_ptr);
     sol.set_problem_fully_reduced();
-    const auto payload = context.solution_publication.build_payload(
-      context.problem_ptr, context.scaling, sol, internals::mip_solution_origin_t::UNKNOWN, 0.0);
+    const auto payload = context.solution_publication.build_callback_payload(
+      context.problem_ptr, context.scaling, sol, internals::mip_solution_origin_t::PRESOLVE, 0.0);
     context.solution_publication.publish_terminal_solution(payload);
     context.problem_ptr->post_process_solution(sol);
     return sol;
@@ -183,8 +186,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       sol.set_problem_fully_reduced();
     }
     if (opt_sol.get_termination_status() == pdlp_termination_status_t::Optimal) {
-      const auto payload = context.solution_publication.build_payload(
-        context.problem_ptr, context.scaling, sol, internals::mip_solution_origin_t::UNKNOWN, 0.0);
+      const auto payload = context.solution_publication.build_callback_payload(
+        context.problem_ptr, context.scaling, sol, internals::mip_solution_origin_t::PRESOLVE, 0.0);
       context.solution_publication.publish_terminal_solution(payload);
     }
     context.problem_ptr->post_process_solution(sol);
@@ -300,7 +303,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       context.problem_ptr->branch_and_bound_callback =
         std::bind(&dual_simplex::branch_and_bound_t<i_t, f_t>::set_new_solution,
                   branch_and_bound.get(),
-                  std::placeholders::_1);
+                  std::placeholders::_1,
+                  std::placeholders::_2);
     } else if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       branch_and_bound->set_concurrent_lp_root_solve(false);
       // TODO once deterministic GPU heuristics are integrated

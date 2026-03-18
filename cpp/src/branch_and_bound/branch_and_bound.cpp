@@ -493,7 +493,8 @@ void branch_and_bound_t<i_t, f_t>::emit_solution_callback(
   cuopt::internals::mip_solution_origin_t origin,
   double work_timestamp)
 {
-  cuopt_assert(work_timestamp >= 0.0, "work_timestamp must not be negative");
+  cuopt_assert(!settings_.deterministic || work_timestamp >= 0.0,
+               "work_timestamp must not be negative in deterministic mode");
   if (settings_.new_incumbent_callback != nullptr) {
     settings_.log.debug("Publishing incumbent: obj=%g wut=%.6f origin=%s\n",
                         compute_user_objective(original_lp_, objective),
@@ -520,8 +521,11 @@ void branch_and_bound_t<i_t, f_t>::emit_solution_callback_from_crushed(
 }
 
 template <typename i_t, typename f_t>
-void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solution)
+void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solution,
+                                                    cuopt::internals::mip_solution_origin_t origin)
 {
+  cuopt_assert(!settings_.deterministic, "set_new_solution is for opportunistic B&B only");
+
   mutex_original_lp_.lock();
   if (solution.size() != original_problem_.num_cols) {
     settings_.log.printf(
@@ -586,7 +590,7 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
   if (is_feasible) { report_heuristic(obj); }
   if (attempt_repair) {
     mutex_repair_.lock();
-    repair_queue_.push_back({solution, cuopt::internals::mip_solution_origin_t::UNKNOWN});
+    repair_queue_.push_back({solution, origin});
     mutex_repair_.unlock();
   }
 }

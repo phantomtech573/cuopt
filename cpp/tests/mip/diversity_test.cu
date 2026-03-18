@@ -251,7 +251,8 @@ static uint32_t test_recombiners_determinism(std::string path,
                            CUOPT_MODE_DETERMINISTIC)
                       .solution;
     printf("population %d hash: 0x%x\n", i, solution.get_hash());
-    diversity_manager.population.add_solution(std::move(solution));
+    diversity_manager.population.add_solution(std::move(solution),
+                                              internals::mip_solution_origin_t::FEASIBILITY_JUMP);
   }
 
   auto pop_vector = diversity_manager.get_population_pointer()->population_to_vector();

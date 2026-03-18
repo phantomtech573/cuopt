@@ -2146,9 +2146,11 @@ bool problem_t<i_t, f_t>::pre_process_assignment(rmm::device_uvector<f_t>& assig
 
 template <typename i_t, typename f_t>
 void problem_t<i_t, f_t>::post_process_assignment(rmm::device_uvector<f_t>& current_assignment,
-                                                  bool resize_to_original_problem)
+                                                  bool resize_to_original_problem,
+                                                  const raft::handle_t* handle_override)
 {
-  presolve_data.post_process_assignment(*this, current_assignment, resize_to_original_problem);
+  presolve_data.post_process_assignment(
+    *this, current_assignment, resize_to_original_problem, handle_override);
 }
 
 template <typename i_t, typename f_t>
@@ -2171,9 +2173,11 @@ void problem_t<i_t, f_t>::set_papilo_presolve_data(
 }
 
 template <typename i_t, typename f_t>
-void problem_t<i_t, f_t>::papilo_uncrush_assignment(rmm::device_uvector<f_t>& assignment) const
+void problem_t<i_t, f_t>::papilo_uncrush_assignment(rmm::device_uvector<f_t>& assignment,
+                                                    const raft::handle_t* handle_override) const
 {
-  presolve_data.papilo_uncrush_assignment(const_cast<problem_t&>(*this), assignment);
+  presolve_data.papilo_uncrush_assignment(
+    const_cast<problem_t&>(*this), assignment, handle_override);
 }
 
 template <typename i_t, typename f_t>

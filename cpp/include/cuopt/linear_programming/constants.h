@@ -105,6 +105,7 @@
 #define CUOPT_MIP_SOLUTION_ORIGIN_USER_INITIAL            10
 #define CUOPT_MIP_SOLUTION_ORIGIN_USER_INJECTED           11
 #define CUOPT_MIP_SOLUTION_ORIGIN_RINS                    12
+#define CUOPT_MIP_SOLUTION_ORIGIN_PRESOLVE                13
 
 /* @brief LP/MIP termination status constants */
 #define CUOPT_TERIMINATION_STATUS_NO_TERMINATION   0

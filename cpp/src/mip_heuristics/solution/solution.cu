@@ -56,6 +56,22 @@ solution_t<i_t, f_t>::solution_t(problem_t<i_t, f_t>& problem_)
 }
 
 template <typename i_t, typename f_t>
+solution_t<i_t, f_t>::solution_t(problem_t<i_t, f_t>& problem_,
+                                 const raft::handle_t* handle_override)
+  : problem_ptr(&problem_),
+    handle_ptr(handle_override),
+    assignment(std::move(get_lower_bounds<f_t>(problem_.variable_bounds, handle_ptr))),
+    lower_excess(problem_.n_constraints, handle_ptr->get_stream()),
+    upper_excess(problem_.n_constraints, handle_ptr->get_stream()),
+    constraint_value(problem_.n_constraints, handle_ptr->get_stream()),
+    obj_val(handle_ptr->get_stream()),
+    n_feasible_constraints(handle_ptr->get_stream()),
+    lp_state(problem_, handle_ptr->get_stream())
+{
+  clamp_within_var_bounds(assignment, problem_ptr, handle_ptr);
+}
+
+template <typename i_t, typename f_t>
 solution_t<i_t, f_t>::solution_t(const solution_t<i_t, f_t>& other)
   : problem_ptr(other.problem_ptr),
     handle_ptr(other.handle_ptr),

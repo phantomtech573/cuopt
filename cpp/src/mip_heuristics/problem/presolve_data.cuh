@@ -89,7 +89,8 @@ class presolve_data_t {
   bool pre_process_assignment(problem_t<i_t, f_t>& problem, rmm::device_uvector<f_t>& assignment);
   void post_process_assignment(problem_t<i_t, f_t>& problem,
                                rmm::device_uvector<f_t>& current_assignment,
-                               bool resize_to_original_problem = true);
+                               bool resize_to_original_problem       = true,
+                               const raft::handle_t* handle_override = nullptr);
   void post_process_solution(problem_t<i_t, f_t>& problem, solution_t<i_t, f_t>& solution);
 
   void set_papilo_presolve_data(const third_party_presolve_t<i_t, f_t>* presolver_ptr,
@@ -99,7 +100,8 @@ class presolve_data_t {
   bool has_papilo_presolve_data() const { return papilo_presolve_ptr != nullptr; }
   i_t get_papilo_original_num_variables() const { return papilo_original_num_variables; }
   void papilo_uncrush_assignment(problem_t<i_t, f_t>& problem,
-                                 rmm::device_uvector<f_t>& assignment) const;
+                                 rmm::device_uvector<f_t>& assignment,
+                                 const raft::handle_t* handle_override = nullptr) const;
 
   presolve_data_t(presolve_data_t&&)                 = default;
   presolve_data_t& operator=(presolve_data_t&&)      = default;

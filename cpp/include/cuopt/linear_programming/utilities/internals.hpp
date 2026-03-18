@@ -38,6 +38,7 @@ enum class mip_solution_origin_t : uint32_t {
   USER_INITIAL            = CUOPT_MIP_SOLUTION_ORIGIN_USER_INITIAL,
   USER_INJECTED           = CUOPT_MIP_SOLUTION_ORIGIN_USER_INJECTED,
   RINS                    = CUOPT_MIP_SOLUTION_ORIGIN_RINS,
+  PRESOLVE                = CUOPT_MIP_SOLUTION_ORIGIN_PRESOLVE,
 };
 
 constexpr const char* mip_solution_origin_to_string(mip_solution_origin_t origin)
@@ -56,6 +57,7 @@ constexpr const char* mip_solution_origin_to_string(mip_solution_origin_t origin
     case mip_solution_origin_t::CPU_FEASIBILITY_JUMP: return "cpu_feasibility_jump";
     case mip_solution_origin_t::USER_INJECTED: return "user_injected";
     case mip_solution_origin_t::RINS: return "rins";
+    case mip_solution_origin_t::PRESOLVE: return "presolve";
     default: return "unknown";
   }
 }

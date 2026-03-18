@@ -286,13 +286,13 @@ void population_t<i_t, f_t>::run_solution_callbacks(
         sol.get_host_assignment(), sol.get_user_objective(), work_timestamp, callback_origin);
     } else {
       const double work_timestamp = context.gpu_heur_loop.current_work();
-      const auto payload          = context.solution_publication.build_payload(
+      const auto payload          = context.solution_publication.build_callback_payload(
         context.problem_ptr, context.scaling, sol, callback_origin, work_timestamp);
       context.solution_publication.publish_new_best_feasible(payload, timer.elapsed_time());
 
       if (context.branch_and_bound_ptr != nullptr &&
           context.problem_ptr->branch_and_bound_callback != nullptr) {
-        context.problem_ptr->branch_and_bound_callback(sol.get_host_assignment());
+        context.problem_ptr->branch_and_bound_callback(sol.get_host_assignment(), callback_origin);
       }
     }
 
@@ -650,7 +650,7 @@ void population_t<i_t, f_t>::halve_the_population()
     clear_except_best_feasible();
     var_threshold = std::max(var_threshold * 0.97, 0.5 * problem_ptr->n_integer_vars);
     for (auto& sol : sol_vec) {
-      add_solution(solution_t<i_t, f_t>(sol));
+      add_solution(solution_t<i_t, f_t>(sol), internals::mip_solution_origin_t::LOCAL_SEARCH);
     }
     if (counter++ > max_adjustments) break;
   }
@@ -662,7 +662,7 @@ void population_t<i_t, f_t>::halve_the_population()
       max_var_threshold,
       std::min((size_t)(var_threshold * 1.02), (size_t)(0.995 * problem_ptr->n_integer_vars)));
     for (auto& sol : sol_vec) {
-      add_solution(solution_t<i_t, f_t>(sol));
+      add_solution(solution_t<i_t, f_t>(sol), internals::mip_solution_origin_t::LOCAL_SEARCH);
     }
     if (counter++ > max_adjustments) break;
   }

@@ -106,14 +106,15 @@ class branch_and_bound_t {
   }
 
   // Set a solution based on the user problem during the course of the solve
-  void set_new_solution(const std::vector<f_t>& solution);
+  void set_new_solution(const std::vector<f_t>& solution,
+                        cuopt::internals::mip_solution_origin_t origin =
+                          cuopt::internals::mip_solution_origin_t::UNKNOWN);
 
   // This queues the solution to be processed at the correct work unit timestamp
   void queue_external_solution_deterministic(const std::vector<f_t>& solution,
                                              f_t user_objective,
                                              double work_unit_ts,
-                                             cuopt::internals::mip_solution_origin_t origin =
-                                               cuopt::internals::mip_solution_origin_t::UNKNOWN);
+                                             cuopt::internals::mip_solution_origin_t origin);
 
   void set_user_bound_callback(std::function<void(f_t)> callback)
   {

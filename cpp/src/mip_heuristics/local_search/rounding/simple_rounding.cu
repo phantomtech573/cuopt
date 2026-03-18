@@ -42,7 +42,8 @@ bool check_brute_force_rounding(solution_t<i_t, f_t>& solution)
     rmm::device_uvector<i_t> var_map(n_integers_to_round, solution.handle_ptr->get_stream());
     rmm::device_uvector<f_t> constraint_buf(n_configs * solution.problem_ptr->n_constraints,
                                             solution.handle_ptr->get_stream());
-    rmm::device_scalar<i_t> best_config(-1, solution.handle_ptr->get_stream());
+    rmm::device_scalar<i_t> best_config(std::numeric_limits<i_t>::max(),
+                                        solution.handle_ptr->get_stream());
     thrust::copy_if(
       solution.handle_ptr->get_thrust_policy(),
       solution.problem_ptr->integer_indices.begin(),
@@ -58,7 +59,7 @@ bool check_brute_force_rounding(solution_t<i_t, f_t>& solution)
                                                                 cuopt::make_span(var_map),
                                                                 cuopt::make_span(constraint_buf),
                                                                 best_config.data());
-    if (best_config.value(solution.handle_ptr->get_stream()) != -1) {
+    if (best_config.value(solution.handle_ptr->get_stream()) != std::numeric_limits<i_t>::max()) {
       CUOPT_LOG_DEBUG("Feasible found during brute force rounding!");
       // apply the feasible rounding
       apply_feasible_rounding_kernel<i_t, f_t><<<1, TPB, 0, solution.handle_ptr->get_stream()>>>(

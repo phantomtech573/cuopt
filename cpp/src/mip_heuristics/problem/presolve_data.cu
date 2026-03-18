@@ -107,23 +107,25 @@ template <typename i_t, typename f_t>
 void presolve_data_t<i_t, f_t>::post_process_assignment(
   problem_t<i_t, f_t>& problem,
   rmm::device_uvector<f_t>& current_assignment,
-  bool resize_to_original_problem)
+  bool resize_to_original_problem,
+  const raft::handle_t* handle_override)
 {
   raft::common::nvtx::range fun_scope("post_process_assignment");
+  const auto* h = handle_override ? handle_override : problem.handle_ptr;
   cuopt_assert(current_assignment.size() == variable_mapping.size(), "size mismatch");
   auto assgn       = make_span(current_assignment);
   auto fixed_assgn = make_span(fixed_var_assignment);
   auto var_map     = make_span(variable_mapping);
   if (current_assignment.size() > 0) {
-    thrust::for_each(problem.handle_ptr->get_thrust_policy(),
+    thrust::for_each(h->get_thrust_policy(),
                      thrust::make_counting_iterator<i_t>(0),
                      thrust::make_counting_iterator<i_t>(current_assignment.size()),
                      [fixed_assgn, var_map, assgn] __device__(auto idx) {
                        fixed_assgn[var_map[idx]] = assgn[idx];
                      });
   }
-  expand_device_copy(current_assignment, fixed_var_assignment, problem.handle_ptr->get_stream());
-  auto h_assignment = cuopt::host_copy(current_assignment, problem.handle_ptr->get_stream());
+  expand_device_copy(current_assignment, fixed_var_assignment, h->get_stream());
+  auto h_assignment = cuopt::host_copy(current_assignment, h->get_stream());
   cuopt_assert(additional_var_id_per_var.size() == h_assignment.size(), "Size mismatch");
   cuopt_assert(additional_var_used.size() == h_assignment.size(), "Size mismatch");
   for (i_t i = 0; i < (i_t)h_assignment.size(); ++i) {
@@ -133,8 +135,6 @@ void presolve_data_t<i_t, f_t>::post_process_assignment(
     }
   }
 
-  // Apply variable substitutions from probing: x_substituted = offset + coefficient *
-  // x_substituting
   for (const auto& sub : variable_substitutions) {
     cuopt_assert(sub.substituted_var < (i_t)h_assignment.size(), "substituted_var out of bounds");
     cuopt_assert(sub.substituting_var < (i_t)h_assignment.size(), "substituting_var out of bounds");
@@ -148,14 +148,9 @@ void presolve_data_t<i_t, f_t>::post_process_assignment(
                     h_assignment[sub.substituted_var]);
   }
 
-  raft::copy(current_assignment.data(),
-             h_assignment.data(),
-             h_assignment.size(),
-             problem.handle_ptr->get_stream());
-  // this separate resizing is needed because of the callback
+  raft::copy(current_assignment.data(), h_assignment.data(), h_assignment.size(), h->get_stream());
   if (resize_to_original_problem) {
-    current_assignment.resize(problem.original_problem_ptr->get_n_variables(),
-                              problem.handle_ptr->get_stream());
+    current_assignment.resize(problem.original_problem_ptr->get_n_variables(), h->get_stream());
   }
 }
 
@@ -226,23 +221,23 @@ void presolve_data_t<i_t, f_t>::set_papilo_presolve_data(
 
 template <typename i_t, typename f_t>
 void presolve_data_t<i_t, f_t>::papilo_uncrush_assignment(
-  problem_t<i_t, f_t>& problem, rmm::device_uvector<f_t>& assignment) const
+  problem_t<i_t, f_t>& problem,
+  rmm::device_uvector<f_t>& assignment,
+  const raft::handle_t* handle_override) const
 {
   if (papilo_presolve_ptr == nullptr) {
     CUOPT_LOG_INFO("Papilo presolve data not set, skipping uncrushing assignment");
     return;
   }
+  const auto* h = handle_override ? handle_override : problem.handle_ptr;
   cuopt_assert(assignment.size() == papilo_reduced_to_original_map.size(),
                "Papilo uncrush assignment size mismatch");
-  auto h_assignment = cuopt::host_copy(assignment, problem.handle_ptr->get_stream());
+  auto h_assignment = cuopt::host_copy(assignment, h->get_stream());
   std::vector<f_t> full_assignment;
   papilo_presolve_ptr->uncrush_primal_solution(h_assignment, full_assignment);
-  assignment.resize(full_assignment.size(), problem.handle_ptr->get_stream());
-  raft::copy(assignment.data(),
-             full_assignment.data(),
-             full_assignment.size(),
-             problem.handle_ptr->get_stream());
-  problem.handle_ptr->sync_stream();
+  assignment.resize(full_assignment.size(), h->get_stream());
+  raft::copy(assignment.data(), full_assignment.data(), full_assignment.size(), h->get_stream());
+  h->sync_stream();
 }
 
 #if MIP_INSTANTIATE_FLOAT || PDLP_INSTANTIATE_FLOAT
