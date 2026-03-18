@@ -588,7 +588,6 @@ if(Doxygen_FOUND)
 endif()
 
 
-if(NOT BUILD_LP_ONLY)
 rapids_cpm_find(
   argparse 3.2.0
   GLOBAL_TARGETS argparse::argparse
@@ -598,6 +597,7 @@ rapids_cpm_find(
   GIT_SHALLOW TRUE
 )
 
+if(NOT BUILD_LP_ONLY)
 add_executable(cuopt_cli cuopt_cli.cpp)
 
 set_target_properties(cuopt_cli
@@ -716,6 +716,7 @@ endif()
 
 add_executable(cuopt_grpc_server
   src/grpc/server/grpc_server_main.cpp
+  src/grpc/server/grpc_server_logger.cpp
   src/grpc/server/grpc_worker.cpp
   src/grpc/server/grpc_worker_infra.cpp
   src/grpc/server/grpc_server_threads.cpp
@@ -758,6 +759,7 @@ target_link_libraries(cuopt_grpc_server
   protobuf::libprotobuf
   gRPC::grpc++
   ${UUID_LIBRARY}
+  argparse::argparse
 )
 
 # Use RUNPATH when building locally

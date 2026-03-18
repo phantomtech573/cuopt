@@ -31,7 +31,7 @@ bool recv_job_data_pipe(int fd, uint64_t expected_size, std::vector<uint8_t>& da
   uint64_t size;
   if (!read_from_pipe(fd, &size, sizeof(size))) return false;
   if (size != expected_size) {
-    std::cerr << "[Worker] Size mismatch: expected " << expected_size << ", got " << size << "\n";
+    SERVER_LOG_ERROR("[Worker] Size mismatch: expected %lu, got %lu", expected_size, size);
     return false;
   }
   data.resize(size);
@@ -107,7 +107,7 @@ std::pair<bool, std::string> submit_job_async(std::vector<uint8_t>&& request_dat
   job_queue[slot].ready.store(true, std::memory_order_release);
   job_queue[slot].claimed.store(false, std::memory_order_release);
 
-  if (config.verbose) { std::cout << "[Server] Job submitted (async): " << job_id << "\n"; }
+  if (config.verbose) { SERVER_LOG_DEBUG("[Server] Job submitted (async): %s", job_id.c_str()); }
 
   return {true, job_id};
 }
@@ -154,7 +154,9 @@ std::pair<bool, std::string> submit_chunked_job_async(PendingChunkedUpload&& chu
   job_queue[slot].ready.store(true, std::memory_order_release);
   job_queue[slot].claimed.store(false, std::memory_order_release);
 
-  if (config.verbose) { std::cout << "[Server] Chunked job submitted (async): " << job_id << "\n"; }
+  if (config.verbose) {
+    SERVER_LOG_DEBUG("[Server] Chunked job submitted (async): %s", job_id.c_str());
+  }
 
   return {true, job_id};
 }
@@ -258,13 +260,13 @@ int cancel_job(const std::string& job_id, JobStatus& job_status_out, std::string
 
     if (worker_pid > 0 && job_queue[i].claimed.load(std::memory_order_relaxed)) {
       if (config.verbose) {
-        std::cout << "[Server] Cancelling running job " << job_id << " (killing worker "
-                  << worker_pid << ")\n";
+        SERVER_LOG_DEBUG(
+          "[Server] Cancelling running job %s (killing worker %d)", job_id.c_str(), worker_pid);
       }
       job_queue[i].cancelled.store(true, std::memory_order_release);
       kill(worker_pid, SIGKILL);
     } else {
-      if (config.verbose) { std::cout << "[Server] Cancelling queued job " << job_id << "\n"; }
+      if (config.verbose) { SERVER_LOG_DEBUG("[Server] Cancelling queued job %s", job_id.c_str()); }
       job_queue[i].cancelled.store(true, std::memory_order_release);
     }
 

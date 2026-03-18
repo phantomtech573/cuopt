@@ -11,8 +11,7 @@
 
 void worker_monitor_thread()
 {
-  std::cout << "[Server] Worker monitor thread started\n";
-  std::cout.flush();
+  SERVER_LOG_INFO("[Server] Worker monitor thread started");
 
   while (keep_running) {
     for (size_t i = 0; i < worker_pids.size(); ++i) {
@@ -28,18 +27,15 @@ void worker_monitor_thread()
         int signal_num = signaled ? WTERMSIG(status) : 0;
 
         if (signaled) {
-          std::cerr << "[Server] Worker " << pid << " killed by signal " << signal_num << "\n";
-          std::cerr.flush();
+          SERVER_LOG_ERROR("[Server] Worker %d killed by signal %d", pid, signal_num);
         } else if (exit_code != 0) {
-          std::cerr << "[Server] Worker " << pid << " exited with code " << exit_code << "\n";
-          std::cerr.flush();
+          SERVER_LOG_ERROR("[Server] Worker %d exited with code %d", pid, exit_code);
         } else {
           if (shm_ctrl && shm_ctrl->shutdown_requested) {
             worker_pids[i] = 0;
             continue;
           }
-          std::cerr << "[Server] Worker " << pid << " exited unexpectedly\n";
-          std::cerr.flush();
+          SERVER_LOG_ERROR("[Server] Worker %d exited unexpectedly", pid);
         }
 
         mark_worker_jobs_failed(pid);
@@ -48,8 +44,7 @@ void worker_monitor_thread()
           pid_t new_pid = spawn_single_worker(static_cast<int>(i));
           if (new_pid > 0) {
             worker_pids[i] = new_pid;
-            std::cout << "[Server] Restarted worker " << i << " with PID " << new_pid << "\n";
-            std::cout.flush();
+            SERVER_LOG_INFO("[Server] Restarted worker %zu with PID %d", i, new_pid);
           } else {
             worker_pids[i] = 0;
           }
@@ -62,14 +57,12 @@ void worker_monitor_thread()
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
-  std::cout << "[Server] Worker monitor thread stopped\n";
-  std::cout.flush();
+  SERVER_LOG_INFO("[Server] Worker monitor thread stopped");
 }
 
 void result_retrieval_thread()
 {
-  std::cout << "[Server] Result retrieval thread started\n";
-  std::cout.flush();
+  SERVER_LOG_INFO("[Server] Result retrieval thread started");
 
   while (keep_running) {
     bool found = false;
@@ -108,11 +101,13 @@ void result_retrieval_thread()
                 auto pipe_us = std::chrono::duration_cast<std::chrono::microseconds>(
                                  std::chrono::steady_clock::now() - pipe_t0)
                                  .count();
-                std::cout << "[THROUGHPUT] phase=pipe_chunked_send chunks=" << chunked.chunks.size()
-                          << " elapsed_ms=" << std::fixed << std::setprecision(1)
-                          << (pipe_us / 1000.0) << "\n";
-                std::cout << "[Server] Streamed " << chunked.chunks.size() << " chunks to worker "
-                          << worker_idx << " for job " << job_id << "\n";
+                SERVER_LOG_DEBUG("[THROUGHPUT] phase=pipe_chunked_send chunks=%zu elapsed_ms=%.1f",
+                                 chunked.chunks.size(),
+                                 pipe_us / 1000.0);
+                SERVER_LOG_DEBUG("[Server] Streamed %zu chunks to worker %d for job %s",
+                                 chunked.chunks.size(),
+                                 worker_idx,
+                                 job_id.c_str());
               }
             }
           } else {
@@ -136,12 +131,15 @@ void result_retrieval_thread()
                 double pipe_sec = pipe_us / 1e6;
                 double pipe_mb  = static_cast<double>(job_data.size()) / (1024.0 * 1024.0);
                 double pipe_mbs = (pipe_sec > 0.0) ? (pipe_mb / pipe_sec) : 0.0;
-                std::cout << "[THROUGHPUT] phase=pipe_job_send bytes=" << job_data.size()
-                          << " elapsed_ms=" << std::fixed << std::setprecision(1)
-                          << (pipe_us / 1000.0) << " throughput_mb_s=" << std::setprecision(1)
-                          << pipe_mbs << "\n";
-                std::cout << "[Server] Sent " << job_data.size() << " bytes to worker "
-                          << worker_idx << " for job " << job_id << "\n";
+                SERVER_LOG_DEBUG(
+                  "[THROUGHPUT] phase=pipe_job_send bytes=%zu elapsed_ms=%.1f throughput_mb_s=%.1f",
+                  job_data.size(),
+                  pipe_us / 1000.0,
+                  pipe_mbs);
+                SERVER_LOG_DEBUG("[Server] Sent %zu bytes to worker %d for job %s",
+                                 job_data.size(),
+                                 worker_idx,
+                                 job_id.c_str());
               }
             }
           }
@@ -150,7 +148,7 @@ void result_retrieval_thread()
             if (send_ok) {
               job_queue[i].data_sent = true;
             } else {
-              std::cerr << "[Server] Failed to send job data to worker " << worker_idx << "\n";
+              SERVER_LOG_ERROR("[Server] Failed to send job data to worker %d", worker_idx);
               job_queue[i].cancelled = true;
             }
             found = true;
@@ -167,10 +165,14 @@ void result_retrieval_thread()
         bool cancelled             = (result_status == RESULT_CANCELLED);
         int worker_idx             = result_queue[i].worker_index;
         if (config.verbose) {
-          std::cout << "[Server] Detected ready result_slot=" << i << " for job " << job_id
-                    << " status=" << result_status << " data_size=" << result_queue[i].data_size
-                    << " worker_idx=" << worker_idx << "\n";
-          std::cout.flush();
+          SERVER_LOG_DEBUG(
+            "[Server] Detected ready result_slot=%zu for job %s status=%d data_size=%lu "
+            "worker_idx=%d",
+            i,
+            job_id.c_str(),
+            static_cast<int>(result_status),
+            result_queue[i].data_size,
+            worker_idx);
         }
 
         std::string error_message;
@@ -180,9 +182,8 @@ void result_retrieval_thread()
 
         if (success && result_queue[i].data_size > 0) {
           if (config.verbose) {
-            std::cout << "[Server] Reading streamed result from worker pipe for job " << job_id
-                      << "\n";
-            std::cout.flush();
+            SERVER_LOG_DEBUG("[Server] Reading streamed result from worker pipe for job %s",
+                             job_id.c_str());
           }
           int from_fd;
           {
@@ -206,10 +207,11 @@ void result_retrieval_thread()
             double pipe_sec = pipe_us / 1e6;
             double pipe_mb  = static_cast<double>(total_bytes) / (1024.0 * 1024.0);
             double pipe_mbs = (pipe_sec > 0.0) ? (pipe_mb / pipe_sec) : 0.0;
-            std::cout << "[THROUGHPUT] phase=pipe_result_recv bytes=" << total_bytes
-                      << " elapsed_ms=" << std::fixed << std::setprecision(1) << (pipe_us / 1000.0)
-                      << " throughput_mb_s=" << std::setprecision(1) << pipe_mbs << "\n";
-            std::cout.flush();
+            SERVER_LOG_DEBUG(
+              "[THROUGHPUT] phase=pipe_result_recv bytes=%ld elapsed_ms=%.1f throughput_mb_s=%.1f",
+              static_cast<long>(total_bytes),
+              pipe_us / 1000.0,
+              pipe_mbs);
           }
         } else if (!success) {
           error_message = result_queue[i].error_message;
@@ -230,26 +232,28 @@ void result_retrieval_thread()
               it->second.result_size_bytes = total_bytes;
 
               if (config.verbose) {
-                std::cout << "[Server] Marked job COMPLETED in job_tracker: " << job_id
-                          << " result_arrays=" << it->second.result_arrays.size()
-                          << " result_size_bytes=" << it->second.result_size_bytes << "\n";
-                std::cout.flush();
+                SERVER_LOG_DEBUG(
+                  "[Server] Marked job COMPLETED in job_tracker: %s result_arrays=%zu "
+                  "result_size_bytes=%ld",
+                  job_id.c_str(),
+                  it->second.result_arrays.size(),
+                  it->second.result_size_bytes);
               }
             } else if (cancelled) {
               it->second.status        = JobStatus::CANCELLED;
               it->second.error_message = error_message;
               if (config.verbose) {
-                std::cout << "[Server] Marked job CANCELLED in job_tracker: " << job_id
-                          << " msg=" << error_message << "\n";
-                std::cout.flush();
+                SERVER_LOG_DEBUG("[Server] Marked job CANCELLED in job_tracker: %s msg=%s",
+                                 job_id.c_str(),
+                                 error_message.c_str());
               }
             } else {
               it->second.status        = JobStatus::FAILED;
               it->second.error_message = error_message;
               if (config.verbose) {
-                std::cout << "[Server] Marked job FAILED in job_tracker: " << job_id
-                          << " msg=" << error_message << "\n";
-                std::cout.flush();
+                SERVER_LOG_DEBUG("[Server] Marked job FAILED in job_tracker: %s msg=%s",
+                                 job_id.c_str(),
+                                 error_message.c_str());
               }
             }
           }
@@ -287,14 +291,12 @@ void result_retrieval_thread()
     result_cv.notify_all();
   }
 
-  std::cout << "[Server] Result retrieval thread stopped\n";
-  std::cout.flush();
+  SERVER_LOG_INFO("[Server] Result retrieval thread stopped");
 }
 
 void incumbent_retrieval_thread()
 {
-  std::cout << "[Server] Incumbent retrieval thread started\n";
-  std::cout.flush();
+  SERVER_LOG_INFO("[Server] Incumbent retrieval thread started");
 
   while (keep_running) {
     std::vector<pollfd> pfds;
@@ -320,7 +322,7 @@ void incumbent_retrieval_thread()
     int poll_result = poll(pfds.data(), pfds.size(), 100);
     if (poll_result < 0) {
       if (errno == EINTR) continue;
-      std::cerr << "[Server] poll() failed in incumbent thread: " << strerror(errno) << "\n";
+      SERVER_LOG_ERROR("[Server] poll() failed in incumbent thread: %s", strerror(errno));
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
       continue;
     }
@@ -336,7 +338,7 @@ void incumbent_retrieval_thread()
       double objective = 0.0;
       std::vector<double> assignment;
       if (!parse_incumbent_proto(data.data(), data.size(), job_id, objective, assignment)) {
-        std::cerr << "[Server] Failed to parse incumbent payload\n";
+        SERVER_LOG_ERROR("[Server] Failed to parse incumbent payload");
         continue;
       }
 
@@ -352,25 +354,24 @@ void incumbent_retrieval_thread()
         auto it = job_tracker.find(job_id);
         if (it != job_tracker.end()) {
           it->second.incumbents.push_back(std::move(entry));
-          std::cout << "[Server] Stored incumbent job_id=" << job_id
-                    << " idx=" << (it->second.incumbents.size() - 1) << " obj=" << objective
-                    << " vars=" << num_vars << "\n";
-          std::cout.flush();
+          SERVER_LOG_INFO("[Server] Stored incumbent job_id=%s idx=%zu obj=%f vars=%zu",
+                          job_id.c_str(),
+                          it->second.incumbents.size() - 1,
+                          objective,
+                          num_vars);
         }
       }
     }
   }
 
-  std::cout << "[Server] Incumbent retrieval thread stopped\n";
-  std::cout.flush();
+  SERVER_LOG_INFO("[Server] Incumbent retrieval thread stopped");
 }
 
 void session_reaper_thread()
 {
   if (config.verbose) {
-    std::cout << "[Server] Session reaper thread started (timeout=" << kSessionTimeoutSeconds
-              << "s)\n";
-    std::cout.flush();
+    SERVER_LOG_DEBUG("[Server] Session reaper thread started (timeout=%ds)",
+                     kSessionTimeoutSeconds);
   }
 
   const auto timeout = std::chrono::seconds(kSessionTimeoutSeconds);
@@ -388,8 +389,7 @@ void session_reaper_thread()
       for (auto it = chunked_uploads.begin(); it != chunked_uploads.end();) {
         if (now - it->second.last_activity > timeout) {
           if (config.verbose) {
-            std::cout << "[Server] Reaping stale upload session: " << it->first << "\n";
-            std::cout.flush();
+            SERVER_LOG_DEBUG("[Server] Reaping stale upload session: %s", it->first.c_str());
           }
           it = chunked_uploads.erase(it);
         } else {
@@ -403,8 +403,7 @@ void session_reaper_thread()
       for (auto it = chunked_downloads.begin(); it != chunked_downloads.end();) {
         if (now - it->second.created > timeout) {
           if (config.verbose) {
-            std::cout << "[Server] Reaping stale download session: " << it->first << "\n";
-            std::cout.flush();
+            SERVER_LOG_DEBUG("[Server] Reaping stale download session: %s", it->first.c_str());
           }
           it = chunked_downloads.erase(it);
         } else {
@@ -414,10 +413,7 @@ void session_reaper_thread()
     }
   }
 
-  if (config.verbose) {
-    std::cout << "[Server] Session reaper thread stopped\n";
-    std::cout.flush();
-  }
+  if (config.verbose) { SERVER_LOG_DEBUG("[Server] Session reaper thread stopped"); }
 }
 
 #endif  // CUOPT_ENABLE_GRPC

@@ -75,8 +75,8 @@ class IncumbentPipeCallback : public cuopt::internals::get_solution_callback_t {
 
     auto buffer = build_incumbent_proto(job_id_, objective, assignment);
     if (!send_incumbent_pipe(fd_, buffer)) {
-      std::cerr << "[Worker] Incumbent pipe write failed for job " << job_id_
-                << ", disabling further sends\n";
+      SERVER_LOG_ERROR("[Worker] Incumbent pipe write failed for job %s, disabling further sends",
+                       job_id_.c_str());
       fd_ = -1;
       return;
     }
@@ -114,10 +114,11 @@ static void log_pipe_throughput(const char* phase,
   double pipe_sec = pipe_us / 1e6;
   double pipe_mb  = static_cast<double>(total_bytes) / (1024.0 * 1024.0);
   double pipe_mbs = (pipe_sec > 0.0) ? (pipe_mb / pipe_sec) : 0.0;
-  std::cout << "[THROUGHPUT] phase=" << phase << " bytes=" << total_bytes
-            << " elapsed_ms=" << std::fixed << std::setprecision(1) << (pipe_us / 1000.0)
-            << " throughput_mb_s=" << std::setprecision(1) << pipe_mbs << "\n";
-  std::cout.flush();
+  SERVER_LOG_INFO("[THROUGHPUT] phase=%s bytes=%ld elapsed_ms=%.1f throughput_mb_s=%.1f",
+                  phase,
+                  total_bytes,
+                  pipe_us / 1000.0,
+                  pipe_mbs);
 }
 
 // Copy a device vector of T to a newly allocated host std::vector<T>.
@@ -225,9 +226,8 @@ static DeserializedJob read_problem_from_pipe(int worker_id, const JobQueueEntry
         total_bytes += data.size();
       }
       log_pipe_throughput("pipe_job_recv", total_bytes, pipe_recv_t0);
-      std::cout << "[Worker] IPC path: CHUNKED (" << arrays.size() << " arrays, " << total_bytes
-                << " bytes)\n";
-      std::cout.flush();
+      SERVER_LOG_INFO(
+        "[Worker] IPC path: CHUNKED (%zu arrays, %ld bytes)", arrays.size(), total_bytes);
     }
     if (chunked_header.has_lp_settings()) {
       map_proto_to_pdlp_settings(chunked_header.lp_settings(), dj.lp_settings);
@@ -254,14 +254,12 @@ static DeserializedJob read_problem_from_pipe(int worker_id, const JobQueueEntry
     }
     if (submit_request.has_lp_request()) {
       const auto& req = submit_request.lp_request();
-      std::cout << "[Worker] IPC path: UNARY LP (" << request_data.size() << " bytes)\n"
-                << std::flush;
+      SERVER_LOG_INFO("[Worker] IPC path: UNARY LP (%zu bytes)", request_data.size());
       map_proto_to_problem(req.problem(), dj.problem);
       map_proto_to_pdlp_settings(req.settings(), dj.lp_settings);
     } else {
       const auto& req = submit_request.mip_request();
-      std::cout << "[Worker] IPC path: UNARY MIP (" << request_data.size() << " bytes)\n"
-                << std::flush;
+      SERVER_LOG_INFO("[Worker] IPC path: UNARY MIP (%zu bytes)", request_data.size());
       map_proto_to_problem(req.problem(), dj.problem);
       map_proto_to_mip_settings(req.settings(), dj.mip_settings);
       dj.enable_incumbents = req.has_enable_incumbents() ? req.enable_incumbents() : true;
@@ -296,19 +294,19 @@ static SolveResult run_mip_solve(DeserializedJob& dj,
                                                 dj.problem.get_n_variables(),
                                                 false);
       dj.mip_settings.set_mip_callback(incumbent_cb.get());
-      std::cout << "[Worker] Registered incumbent callback for job_id=" << job_id
-                << " n_vars=" << dj.problem.get_n_variables() << "\n";
-      std::cout.flush();
+      SERVER_LOG_INFO("[Worker] Registered incumbent callback for job_id=%s n_vars=%d",
+                      job_id.c_str(),
+                      dj.problem.get_n_variables());
     }
 
-    std::cout << "[Worker] Converting CPU problem to GPU problem...\n" << std::flush;
+    SERVER_LOG_INFO("[Worker] Converting CPU problem to GPU problem...");
     auto gpu_problem = dj.problem.to_optimization_problem(&handle);
 
-    std::cout << "[Worker] Calling solve_mip...\n" << std::flush;
+    SERVER_LOG_INFO("[Worker] Calling solve_mip...");
     auto gpu_solution = solve_mip(*gpu_problem, dj.mip_settings);
-    std::cout << "[Worker] solve_mip done\n" << std::flush;
+    SERVER_LOG_INFO("[Worker] solve_mip done");
 
-    std::cout << "[Worker] Converting solution to CPU format...\n" << std::flush;
+    SERVER_LOG_INFO("[Worker] Converting solution to CPU format...");
 
     auto host_solution = device_to_host<double>(gpu_solution.get_solution());
 
@@ -327,11 +325,12 @@ static SolveResult run_mip_solve(DeserializedJob& dj,
 
     populate_chunked_result_header_mip(cpu_solution, &sr.header);
     sr.arrays = collect_mip_solution_arrays(cpu_solution);
-    std::cout << "[Worker] Result path: MIP solution -> " << sr.arrays.size() << " array(s)\n"
-              << std::flush;
+    SERVER_LOG_INFO("[Worker] Result path: MIP solution -> %zu array(s)", sr.arrays.size());
     sr.success = true;
+  } catch (const cuopt::logic_error& e) {
+    sr.error_message = format_cuopt_error(e);
   } catch (const std::exception& e) {
-    sr.error_message = std::string("Exception: ") + e.what();
+    sr.error_message = std::string("RuntimeError: ") + e.what();
   }
   return sr;
 }
@@ -348,14 +347,14 @@ static SolveResult run_lp_solve(DeserializedJob& dj,
     dj.lp_settings.log_file       = log_file;
     dj.lp_settings.log_to_console = config.log_to_console;
 
-    std::cout << "[Worker] Converting CPU problem to GPU problem...\n" << std::flush;
+    SERVER_LOG_INFO("[Worker] Converting CPU problem to GPU problem...");
     auto gpu_problem = dj.problem.to_optimization_problem(&handle);
 
-    std::cout << "[Worker] Calling solve_lp...\n" << std::flush;
+    SERVER_LOG_INFO("[Worker] Calling solve_lp...");
     auto gpu_solution = solve_lp(*gpu_problem, dj.lp_settings);
-    std::cout << "[Worker] solve_lp done\n" << std::flush;
+    SERVER_LOG_INFO("[Worker] solve_lp done");
 
-    std::cout << "[Worker] Converting solution to CPU format...\n" << std::flush;
+    SERVER_LOG_INFO("[Worker] Converting solution to CPU format...");
 
     auto host_primal       = device_to_host<double>(gpu_solution.get_primal_solution());
     auto host_dual         = device_to_host<double>(gpu_solution.get_dual_solution());
@@ -384,11 +383,12 @@ static SolveResult run_lp_solve(DeserializedJob& dj,
 
     populate_chunked_result_header_lp(cpu_solution, &sr.header);
     sr.arrays = collect_lp_solution_arrays(cpu_solution);
-    std::cout << "[Worker] Result path: LP solution -> " << sr.arrays.size() << " array(s)\n"
-              << std::flush;
+    SERVER_LOG_INFO("[Worker] Result path: LP solution -> %zu array(s)", sr.arrays.size());
     sr.success = true;
+  } catch (const cuopt::logic_error& e) {
+    sr.error_message = format_cuopt_error(e);
   } catch (const std::exception& e) {
-    sr.error_message = std::string("Exception: ") + e.what();
+    sr.error_message = std::string("RuntimeError: ") + e.what();
   }
   return sr;
 }
@@ -429,10 +429,13 @@ static void publish_result(const SolveResult& sr, const std::string& job_id, int
     result.ready.store(true, std::memory_order_release);
     result.claimed.store(false, std::memory_order_release);
     if (config.verbose) {
-      std::cout << "[Worker " << worker_id << "] Enqueued result metadata for job " << job_id
-                << " in result_slot=" << result_slot << " status=" << result.status
-                << " data_size=" << result.data_size << "\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG(
+        "[Worker %d] Enqueued result metadata for job %s in result_slot=%d status=%d data_size=%lu",
+        worker_id,
+        job_id.c_str(),
+        result_slot,
+        static_cast<int>(result.status),
+        result.data_size);
     }
     break;
   }
@@ -443,10 +446,11 @@ static void publish_result(const SolveResult& sr, const std::string& job_id, int
   if (sr.success && result_slot >= 0) {
     int write_fd = worker_pipes[worker_id].worker_write_fd;
     if (config.verbose) {
-      std::cout << "[Worker " << worker_id << "] Streaming result (" << sr.arrays.size()
-                << " arrays, " << result_total_bytes << " bytes) to pipe for job " << job_id
-                << "\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG("[Worker %d] Streaming result (%zu arrays, %ld bytes) to pipe for job %s",
+                       worker_id,
+                       sr.arrays.size(),
+                       result_total_bytes,
+                       job_id.c_str());
     }
     auto pipe_result_t0 = std::chrono::steady_clock::now();
     bool write_success  = write_result_to_pipe(write_fd, sr.header, sr.arrays);
@@ -454,20 +458,22 @@ static void publish_result(const SolveResult& sr, const std::string& job_id, int
       log_pipe_throughput("pipe_result_send", result_total_bytes, pipe_result_t0);
     }
     if (!write_success) {
-      std::cerr << "[Worker " << worker_id << "] Failed to write result to pipe\n";
-      std::cerr.flush();
+      SERVER_LOG_ERROR("[Worker %d] Failed to write result to pipe", worker_id);
       result_queue[result_slot].status = RESULT_ERROR;
       copy_cstr(result_queue[result_slot].error_message, "Failed to write result to pipe");
     } else if (config.verbose) {
-      std::cout << "[Worker " << worker_id << "] Finished writing result payload for job " << job_id
-                << "\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG(
+        "[Worker %d] Finished writing result payload for job %s", worker_id, job_id.c_str());
     }
   } else if (config.verbose) {
-    std::cout << "[Worker " << worker_id << "] No result payload write needed for job " << job_id
-              << " (success=" << sr.success << ", result_slot=" << result_slot
-              << ", payload_bytes=" << result_total_bytes << ")\n";
-    std::cout.flush();
+    SERVER_LOG_DEBUG(
+      "[Worker %d] No result payload write needed for job %s (success=%d, result_slot=%d, "
+      "payload_bytes=%ld)",
+      worker_id,
+      job_id.c_str(),
+      static_cast<int>(sr.success),
+      result_slot,
+      result_total_bytes);
   }
 }
 
@@ -478,7 +484,7 @@ static void publish_result(const SolveResult& sr, const std::string& job_id, int
 
 void worker_process(int worker_id)
 {
-  std::cout << "[Worker " << worker_id << "] Started (PID: " << getpid() << ")\n";
+  SERVER_LOG_INFO("[Worker %d] Started (PID: %d)", worker_id, getpid());
 
   shm_ctrl->active_workers++;
 
@@ -494,30 +500,29 @@ void worker_process(int worker_id)
     bool is_mip = (job.problem_type == 1);
 
     if (job.cancelled) {
-      std::cout << "[Worker " << worker_id << "] Job cancelled before processing: " << job_id
-                << "\n"
-                << std::flush;
+      SERVER_LOG_INFO("[Worker %d] Job cancelled before processing: %s", worker_id, job_id.c_str());
       store_simple_result(job_id, worker_id, RESULT_CANCELLED, "Job was cancelled");
       reset_job_slot(job);
       continue;
     }
 
-    std::cout << "[Worker " << worker_id << "] Processing job: " << job_id
-              << " (type: " << (is_mip ? "MIP" : "LP") << ")\n"
-              << std::flush;
+    SERVER_LOG_INFO("[Worker %d] Processing job: %s (type: %s)",
+                    worker_id,
+                    job_id.c_str(),
+                    is_mip ? "MIP" : "LP");
 
     auto deserialized = read_problem_from_pipe(worker_id, job);
     if (!deserialized.success) {
-      std::cerr << "[Worker " << worker_id << "] Failed to read job data from pipe\n";
+      SERVER_LOG_ERROR("[Worker %d] Failed to read job data from pipe", worker_id);
       store_simple_result(job_id, worker_id, RESULT_ERROR, "Failed to read job data");
       reset_job_slot(job);
       continue;
     }
 
-    std::cout << "[Worker] Problem reconstructed: " << deserialized.problem.get_n_constraints()
-              << " constraints, " << deserialized.problem.get_n_variables() << " variables, "
-              << deserialized.problem.get_nnz() << " nonzeros\n"
-              << std::flush;
+    SERVER_LOG_INFO("[Worker] Problem reconstructed: %d constraints, %d variables, %d nonzeros",
+                    deserialized.problem.get_n_constraints(),
+                    deserialized.problem.get_n_variables(),
+                    deserialized.problem.get_nnz());
 
     std::string log_file = get_log_file_path(job_id);
     raft::handle_t handle;
@@ -528,12 +533,14 @@ void worker_process(int worker_id)
     publish_result(result, job_id, worker_id);
     reset_job_slot(job);
 
-    std::cout << "[Worker " << worker_id << "] Completed job: " << job_id
-              << " (success: " << result.success << ")\n";
+    SERVER_LOG_INFO("[Worker %d] Completed job: %s (success: %d)",
+                    worker_id,
+                    job_id.c_str(),
+                    static_cast<int>(result.success));
   }
 
   shm_ctrl->active_workers--;
-  std::cout << "[Worker " << worker_id << "] Stopped\n";
+  SERVER_LOG_INFO("[Worker %d] Stopped", worker_id);
   // _exit() instead of exit() to avoid running atexit handlers or flushing
   // parent-inherited stdio buffers a second time in the forked child.
   _exit(0);

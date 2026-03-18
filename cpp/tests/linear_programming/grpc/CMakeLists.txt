@@ -51,6 +51,7 @@ install(
 add_executable(GRPC_PIPE_SERIALIZATION_TEST
     ${CMAKE_CURRENT_SOURCE_DIR}/grpc_pipe_serialization_test.cpp
     "${CUOPT_SOURCE_DIR}/src/grpc/server/grpc_pipe_io.cpp"
+    "${CUOPT_SOURCE_DIR}/src/grpc/server/grpc_server_logger.cpp"
 )
 
 target_include_directories(GRPC_PIPE_SERIALIZATION_TEST

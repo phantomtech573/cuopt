@@ -16,6 +16,7 @@
 #include <cuopt/linear_programming/solve.hpp>
 #include <cuopt/linear_programming/utilities/internals.hpp>
 #include "grpc_problem_mapper.hpp"
+#include "grpc_server_logger.hpp"
 #include "grpc_settings_mapper.hpp"
 #include "grpc_solution_mapper.hpp"
 
@@ -170,6 +171,7 @@ struct ServerConfig {
   std::string tls_cert_path;
   std::string tls_key_path;
   std::string tls_root_path;
+  std::string server_log_file;
 };
 
 struct WorkerPipes {
@@ -271,6 +273,23 @@ constexpr int64_t kServerMaxMessageBytes = 2LL * 1024 * 1024 * 1024 - 1LL * 1024
 // =============================================================================
 // Inline utility functions
 // =============================================================================
+
+// Extract a human-readable "ErrorType: message" string from a cuopt::logic_error.
+// The what() string is JSON: {"CUOPT_ERROR_TYPE": "...", "msg": "..."}
+// This avoids exposing raw JSON to operators and clients.
+inline std::string format_cuopt_error(const cuopt::logic_error& e)
+{
+  std::string s = e.what();
+  std::string msg;
+  auto pos = s.find("\"msg\": \"");
+  if (pos != std::string::npos) {
+    pos += 8;
+    auto end = s.rfind('"');
+    if (end > pos) { msg = s.substr(pos, end - pos); }
+  }
+  if (msg.empty()) { msg = s; }
+  return cuopt::error_to_string(e.get_error_type()) + ": " + msg;
+}
 
 inline std::string get_log_file_path(const std::string& job_id)
 {

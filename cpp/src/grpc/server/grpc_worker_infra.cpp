@@ -53,7 +53,7 @@ bool create_worker_pipes(int worker_id)
   int fds[2];
 
   if (pipe(fds) < 0) {
-    std::cerr << "[Server] Failed to create input pipe for worker " << worker_id << "\n";
+    SERVER_LOG_ERROR("[Server] Failed to create input pipe for worker %d", worker_id);
     return false;
   }
   wp.worker_read_fd = fds[0];
@@ -61,7 +61,7 @@ bool create_worker_pipes(int worker_id)
   fcntl(wp.to_worker_fd, F_SETPIPE_SZ, kPipeBufferSize);
 
   if (pipe(fds) < 0) {
-    std::cerr << "[Server] Failed to create output pipe for worker " << worker_id << "\n";
+    SERVER_LOG_ERROR("[Server] Failed to create output pipe for worker %d", worker_id);
     close_all_worker_pipes(wp);
     return false;
   }
@@ -70,7 +70,7 @@ bool create_worker_pipes(int worker_id)
   fcntl(wp.worker_write_fd, F_SETPIPE_SZ, kPipeBufferSize);
 
   if (pipe(fds) < 0) {
-    std::cerr << "[Server] Failed to create incumbent pipe for worker " << worker_id << "\n";
+    SERVER_LOG_ERROR("[Server] Failed to create incumbent pipe for worker %d", worker_id);
     close_all_worker_pipes(wp);
     return false;
   }
@@ -107,15 +107,17 @@ pid_t spawn_worker(int worker_id, bool is_replacement)
   if (is_replacement) { close_worker_pipes_server(worker_id); }
 
   if (!create_worker_pipes(worker_id)) {
-    std::cerr << "[Server] Failed to create pipes for "
-              << (is_replacement ? "replacement worker " : "worker ") << worker_id << "\n";
+    SERVER_LOG_ERROR("[Server] Failed to create pipes for %s%d",
+                     is_replacement ? "replacement worker " : "worker ",
+                     worker_id);
     return -1;
   }
 
   pid_t pid = fork();
   if (pid < 0) {
-    std::cerr << "[Server] Failed to fork " << (is_replacement ? "replacement worker " : "worker ")
-              << worker_id << "\n";
+    SERVER_LOG_ERROR("[Server] Failed to fork %s%d",
+                     is_replacement ? "replacement worker " : "worker ",
+                     worker_id);
     close_all_worker_pipes(worker_pipes[worker_id]);
     return -1;
   } else if (pid == 0) {
@@ -171,11 +173,11 @@ void mark_worker_jobs_failed(pid_t dead_worker_pid)
       bool was_cancelled = job_queue[i].cancelled;
 
       if (was_cancelled) {
-        std::cerr << "[Server] Worker " << dead_worker_pid
-                  << " killed for cancelled job: " << job_id << "\n";
+        SERVER_LOG_WARN(
+          "[Server] Worker %d killed for cancelled job: %s", dead_worker_pid, job_id.c_str());
       } else {
-        std::cerr << "[Server] Worker " << dead_worker_pid
-                  << " died while processing job: " << job_id << "\n";
+        SERVER_LOG_ERROR(
+          "[Server] Worker %d died while processing job: %s", dead_worker_pid, job_id.c_str());
       }
 
       // 1. Drop the buffered request data (no longer needed).

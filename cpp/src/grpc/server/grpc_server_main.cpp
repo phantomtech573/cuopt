@@ -19,260 +19,269 @@
 
 #include "grpc_server_types.hpp"
 
+#include <argparse/argparse.hpp>
+#include <cuopt/version_config.hpp>
+
 // Defined in grpc_service_impl.cpp
 std::unique_ptr<grpc::Service> create_cuopt_grpc_service();
 
-void print_usage(const char* prog)
+// Open, size, and mmap a POSIX shared memory segment.  Throws on failure.
+static void* create_shared_memory(const char* name, size_t size)
 {
-  std::cout
-    << "Usage: " << prog << " [options]\n"
-    << "Options:\n"
-    << "  -p, --port PORT         Listen port (default: 8765)\n"
-    << "  -w, --workers NUM       Number of worker processes (default: 1)\n"
-    << "      --max-message-mb N  gRPC max send/recv message size in MiB (default: 256)\n"
-    << "      --max-message-bytes N  Set max message size in exact bytes (min 4096, for testing)\n"
-    << "      --chunk-timeout N   Per-chunk timeout in seconds for streaming (default: 60, "
-       "0=disabled)\n"
-    << "      --enable-transfer-hash  Log data hashes for streaming transfers (for testing)\n"
-    << "      --tls               Enable TLS (requires --tls-cert and --tls-key)\n"
-    << "      --tls-cert PATH     Path to PEM-encoded server certificate\n"
-    << "      --tls-key PATH      Path to PEM-encoded server private key\n"
-    << "      --tls-root PATH     Path to PEM root certs for client verification\n"
-    << "      --require-client-cert  Require and verify client certs (mTLS)\n"
-    << "      --log-to-console    Enable solver log output to console (default: off)\n"
-    << "  -v, --verbose           Increase verbosity (default: on)\n"
-    << "  -q, --quiet             Reduce verbosity\n"
-    << "  -h, --help              Show this help\n";
+  using cuopt::cuopt_expects;
+  using cuopt::error_type_t;
+
+  int fd = shm_open(name, O_CREAT | O_RDWR, 0600);
+  cuopt_expects(fd >= 0,
+                error_type_t::RuntimeError,
+                "Failed to create shared memory '%s': %s",
+                name,
+                strerror(errno));
+  if (ftruncate(fd, static_cast<off_t>(size)) < 0) {
+    int saved = errno;
+    close(fd);
+    cuopt_expects(false,
+                  error_type_t::RuntimeError,
+                  "Failed to size shared memory '%s': %s",
+                  name,
+                  strerror(saved));
+  }
+  void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  int saved = errno;
+  close(fd);
+  cuopt_expects(ptr != MAP_FAILED,
+                error_type_t::RuntimeError,
+                "Failed to mmap shared memory '%s': %s",
+                name,
+                strerror(saved));
+  return ptr;
 }
 
 int main(int argc, char** argv)
 {
-  auto require_arg = [&](int i, const std::string& flag) -> bool {
-    if (i + 1 >= argc) {
-      std::cerr << "Error: " << flag << " requires a value\n";
-      print_usage(argv[0]);
-      return false;
-    }
-    return true;
-  };
+  const std::string version_string =
+    std::string("cuOpt gRPC Server ") + std::to_string(CUOPT_VERSION_MAJOR) + "." +
+    std::to_string(CUOPT_VERSION_MINOR) + "." + std::to_string(CUOPT_VERSION_PATCH);
 
-  for (int i = 1; i < argc; i++) {
-    std::string arg = argv[i];
-    if (arg == "-p" || arg == "--port") {
-      if (!require_arg(i, arg)) return 1;
-      config.port = std::stoi(argv[++i]);
-    } else if (arg == "-w" || arg == "--workers") {
-      if (!require_arg(i, arg)) return 1;
-      config.num_workers = std::stoi(argv[++i]);
-    } else if (arg == "--max-message-mb") {
-      if (!require_arg(i, arg)) return 1;
-      config.max_message_bytes = static_cast<int64_t>(std::stoi(argv[++i])) * kMiB;
-    } else if (arg == "--max-message-bytes") {
-      if (!require_arg(i, arg)) return 1;
-      config.max_message_bytes = std::max(4096LL, std::stoll(argv[++i]));
-    } else if (arg == "--chunk-timeout") {
-      if (!require_arg(i, arg)) return 1;
-      config.chunk_timeout_seconds = std::max(0, std::stoi(argv[++i]));
-    } else if (arg == "--enable-transfer-hash") {
-      config.enable_transfer_hash = true;
-    } else if (arg == "--tls") {
-      config.enable_tls = true;
-    } else if (arg == "--tls-cert") {
-      if (!require_arg(i, arg)) return 1;
-      config.tls_cert_path = argv[++i];
-    } else if (arg == "--tls-key") {
-      if (!require_arg(i, arg)) return 1;
-      config.tls_key_path = argv[++i];
-    } else if (arg == "--tls-root") {
-      if (!require_arg(i, arg)) return 1;
-      config.tls_root_path = argv[++i];
-    } else if (arg == "--require-client-cert") {
-      config.require_client = true;
-    } else if (arg == "--log-to-console") {
-      config.log_to_console = true;
-    } else if (arg == "-v" || arg == "--verbose") {
-      config.verbose = true;
-    } else if (arg == "-q" || arg == "--quiet") {
-      config.verbose = false;
-    } else if (arg == "-h" || arg == "--help") {
-      print_usage(argv[0]);
-      return 0;
-    } else {
-      std::cerr << "Unknown option: " << arg << "\n";
-      print_usage(argv[0]);
-      return 1;
-    }
-  }
+  argparse::ArgumentParser program("cuopt_grpc_server", version_string);
 
-  // Validate numeric ranges.
-  if (config.port < 1 || config.port > 65535) {
-    std::cerr << "Error: --port must be in range 1-65535\n";
-    print_usage(argv[0]);
+  program.add_argument("-p", "--port").help("Listen port").default_value(8765).scan<'i', int>();
+
+  program.add_argument("-w", "--workers")
+    .help("Number of worker processes")
+    .default_value(1)
+    .scan<'i', int>();
+
+  program.add_argument("--max-message-mb")
+    .help("gRPC max send/recv message size in MiB")
+    .default_value(256)
+    .scan<'i', int>();
+
+  program.add_argument("--max-message-bytes")
+    .help("Set max message size in exact bytes (min 4096, for testing)")
+    .scan<'i', int64_t>();
+
+  program.add_argument("--chunk-timeout")
+    .help("Per-chunk timeout in seconds for streaming (0=disabled)")
+    .default_value(60)
+    .scan<'i', int>();
+
+  program.add_argument("--enable-transfer-hash")
+    .help("Log data hashes for streaming transfers (for testing)")
+    .default_value(false)
+    .implicit_value(true);
+
+  program.add_argument("--tls")
+    .help("Enable TLS (requires --tls-cert and --tls-key)")
+    .default_value(false)
+    .implicit_value(true);
+
+  program.add_argument("--tls-cert").help("Path to PEM-encoded server certificate");
+
+  program.add_argument("--tls-key").help("Path to PEM-encoded server private key");
+
+  program.add_argument("--tls-root").help("Path to PEM root certs for client verification");
+
+  program.add_argument("--require-client-cert")
+    .help("Require and verify client certs (mTLS)")
+    .default_value(false)
+    .implicit_value(true);
+
+  program.add_argument("--log-to-console")
+    .help("Enable solver log output to console")
+    .default_value(false)
+    .implicit_value(true);
+
+  program.add_argument("-v", "--verbose")
+    .help("Increase verbosity (default: on)")
+    .default_value(false)
+    .implicit_value(true);
+
+  program.add_argument("-q", "--quiet")
+    .help("Reduce verbosity")
+    .default_value(false)
+    .implicit_value(true);
+
+  program.add_argument("--server-log")
+    .help("Path to server operational log file (in addition to console)");
+
+  try {
+    program.parse_args(argc, argv);
+  } catch (const std::exception& e) {
+    std::cerr << e.what() << "\n";
+    std::cerr << program;
     return 1;
   }
-  if (config.num_workers < 1) {
-    std::cerr << "Error: --workers must be >= 1\n";
-    print_usage(argv[0]);
-    return 1;
-  }
-  if (config.chunk_timeout_seconds < 0) {
-    std::cerr << "Error: --chunk-timeout must be >= 0\n";
-    print_usage(argv[0]);
-    return 1;
-  }
 
-  config.max_message_bytes =
-    std::clamp(config.max_message_bytes, kServerMinMessageBytes, kServerMaxMessageBytes);
+  config.port        = program.get<int>("--port");
+  config.num_workers = program.get<int>("--workers");
 
-  std::cout << "cuOpt gRPC Remote Solve Server\n"
-            << "==============================\n"
-            << "Port: " << config.port << "\n"
-            << "Workers: " << config.num_workers << "\n"
-            << std::endl;
-  std::cout.flush();
-
-  signal(SIGINT, signal_handler);
-  signal(SIGTERM, signal_handler);
-
-  ensure_log_dir_exists();
-
-  shm_unlink(SHM_JOB_QUEUE);
-  shm_unlink(SHM_RESULT_QUEUE);
-  shm_unlink(SHM_CONTROL);
-
-  int shm_fd = shm_open(SHM_JOB_QUEUE, O_CREAT | O_RDWR, 0600);
-  if (shm_fd < 0) {
-    std::cerr << "[Server] Failed to create shared memory for job queue: " << strerror(errno)
-              << "\n";
-    return 1;
-  }
-  if (ftruncate(shm_fd, sizeof(JobQueueEntry) * MAX_JOBS) < 0) {
-    std::cerr << "[Server] Failed to ftruncate job queue: " << strerror(errno) << "\n";
-    close(shm_fd);
-    return 1;
-  }
-  job_queue = static_cast<JobQueueEntry*>(
-    mmap(nullptr, sizeof(JobQueueEntry) * MAX_JOBS, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0));
-  close(shm_fd);
-
-  if (job_queue == MAP_FAILED) {
-    std::cerr << "[Server] Failed to mmap job queue: " << strerror(errno) << "\n";
-    return 1;
-  }
-  int result_shm_fd = shm_open(SHM_RESULT_QUEUE, O_CREAT | O_RDWR, 0600);
-  if (result_shm_fd < 0) {
-    std::cerr << "[Server] Failed to create result queue shm: " << strerror(errno) << "\n";
-    return 1;
-  }
-  if (ftruncate(result_shm_fd, sizeof(ResultQueueEntry) * MAX_RESULTS) < 0) {
-    std::cerr << "[Server] Failed to ftruncate result queue: " << strerror(errno) << "\n";
-    close(result_shm_fd);
-    return 1;
-  }
-  result_queue = static_cast<ResultQueueEntry*>(mmap(nullptr,
-                                                     sizeof(ResultQueueEntry) * MAX_RESULTS,
-                                                     PROT_READ | PROT_WRITE,
-                                                     MAP_SHARED,
-                                                     result_shm_fd,
-                                                     0));
-  close(result_shm_fd);
-  if (result_queue == MAP_FAILED) {
-    std::cerr << "[Server] Failed to mmap result queue: " << strerror(errno) << "\n";
-    return 1;
-  }
-  int ctrl_shm_fd = shm_open(SHM_CONTROL, O_CREAT | O_RDWR, 0600);
-  if (ctrl_shm_fd < 0) {
-    std::cerr << "[Server] Failed to create control shm: " << strerror(errno) << "\n";
-    return 1;
-  }
-  if (ftruncate(ctrl_shm_fd, sizeof(SharedMemoryControl)) < 0) {
-    std::cerr << "[Server] Failed to ftruncate control: " << strerror(errno) << "\n";
-    close(ctrl_shm_fd);
-    return 1;
-  }
-  shm_ctrl = static_cast<SharedMemoryControl*>(
-    mmap(nullptr, sizeof(SharedMemoryControl), PROT_READ | PROT_WRITE, MAP_SHARED, ctrl_shm_fd, 0));
-  close(ctrl_shm_fd);
-  if (shm_ctrl == MAP_FAILED) {
-    std::cerr << "[Server] Failed to mmap control: " << strerror(errno) << "\n";
-    return 1;
-  }
-  new (shm_ctrl) SharedMemoryControl{};
-
-  for (size_t i = 0; i < MAX_JOBS; ++i) {
-    new (&job_queue[i]) JobQueueEntry{};
-    job_queue[i].ready.store(false);
-    job_queue[i].claimed.store(false);
-    job_queue[i].cancelled.store(false);
-    job_queue[i].worker_index.store(-1);
-  }
-
-  for (size_t i = 0; i < MAX_RESULTS; ++i) {
-    new (&result_queue[i]) ResultQueueEntry{};
-    result_queue[i].claimed.store(false);
-    result_queue[i].ready.store(false);
-    result_queue[i].retrieved.store(false);
-  }
-
-  shm_ctrl->shutdown_requested.store(false);
-  shm_ctrl->active_workers.store(0);
-
-  // Build credentials before spawning workers so TLS validation failures
-  // don't leak worker processes or background threads.
-  std::string server_address = "0.0.0.0:" + std::to_string(config.port);
-  std::shared_ptr<grpc::ServerCredentials> creds;
-  if (config.enable_tls) {
-    if (config.tls_cert_path.empty() || config.tls_key_path.empty()) {
-      std::cerr << "[Server] TLS enabled but --tls-cert/--tls-key not provided\n";
-      cleanup_shared_memory();
-      return 1;
-    }
-    grpc::SslServerCredentialsOptions ssl_opts;
-    grpc::SslServerCredentialsOptions::PemKeyCertPair key_cert;
-    key_cert.cert_chain  = read_file_to_string(config.tls_cert_path);
-    key_cert.private_key = read_file_to_string(config.tls_key_path);
-    if (key_cert.cert_chain.empty() || key_cert.private_key.empty()) {
-      std::cerr << "[Server] Failed to read TLS cert/key files\n";
-      cleanup_shared_memory();
-      return 1;
-    }
-    ssl_opts.pem_key_cert_pairs.push_back(key_cert);
-
-    if (!config.tls_root_path.empty()) {
-      ssl_opts.pem_root_certs = read_file_to_string(config.tls_root_path);
-      if (ssl_opts.pem_root_certs.empty()) {
-        std::cerr << "[Server] Failed to read TLS root cert file\n";
-        cleanup_shared_memory();
-        return 1;
-      }
-    }
-
-    if (config.require_client) {
-      if (ssl_opts.pem_root_certs.empty()) {
-        std::cerr << "[Server] --require-client-cert requires --tls-root\n";
-        cleanup_shared_memory();
-        return 1;
-      }
-      ssl_opts.client_certificate_request =
-        GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_AND_VERIFY;
-    } else if (!ssl_opts.pem_root_certs.empty()) {
-      ssl_opts.client_certificate_request = GRPC_SSL_REQUEST_CLIENT_CERTIFICATE_AND_VERIFY;
-    }
-
-    creds = grpc::SslServerCredentials(ssl_opts);
+  if (program.is_used("--max-message-bytes")) {
+    config.max_message_bytes =
+      std::max(static_cast<int64_t>(4096), program.get<int64_t>("--max-message-bytes"));
   } else {
-    creds = grpc::InsecureServerCredentials();
+    config.max_message_bytes = static_cast<int64_t>(program.get<int>("--max-message-mb")) * kMiB;
   }
 
-  signal(SIGPIPE, SIG_IGN);
-  spawn_workers();
+  config.chunk_timeout_seconds = program.get<int>("--chunk-timeout");
+  config.enable_transfer_hash  = program.get<bool>("--enable-transfer-hash");
+  config.enable_tls            = program.get<bool>("--tls");
+  config.require_client        = program.get<bool>("--require-client-cert");
+  config.log_to_console        = program.get<bool>("--log-to-console");
 
-  if (worker_pids.empty()) {
-    std::cerr << "[Server] No workers started; exiting\n";
+  if (auto val = program.present("--tls-cert")) config.tls_cert_path = *val;
+  if (auto val = program.present("--tls-key")) config.tls_key_path = *val;
+  if (auto val = program.present("--tls-root")) config.tls_root_path = *val;
+
+  config.verbose = !program.get<bool>("--quiet");
+
+  if (auto val = program.present("--server-log")) config.server_log_file = *val;
+
+  init_server_logger(config.server_log_file, /*to_console=*/true, config.verbose);
+
+  // ---------------------------------------------------------------------------
+  // Startup validation and resource allocation.
+  // cuopt_expects throws cuopt::logic_error on failure; the catch block
+  // prints a clean message and tears down any shared memory created so far.
+  // ---------------------------------------------------------------------------
+  using cuopt::cuopt_expects;
+  using cuopt::error_type_t;
+
+  std::string server_address;
+  std::shared_ptr<grpc::ServerCredentials> creds;
+
+  try {
+    cuopt_expects(config.port >= 1 && config.port <= 65535,
+                  error_type_t::ValidationError,
+                  "--port must be in range 1-65535");
+    cuopt_expects(config.num_workers >= 1, error_type_t::ValidationError, "--workers must be >= 1");
+    cuopt_expects(config.chunk_timeout_seconds >= 0,
+                  error_type_t::ValidationError,
+                  "--chunk-timeout must be >= 0");
+
+    config.max_message_bytes =
+      std::clamp(config.max_message_bytes, kServerMinMessageBytes, kServerMaxMessageBytes);
+
+    SERVER_LOG_INFO("cuOpt gRPC Remote Solve Server");
+    SERVER_LOG_INFO("==============================");
+    SERVER_LOG_INFO("Port: %d", config.port);
+    SERVER_LOG_INFO("Workers: %d", config.num_workers);
+
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    ensure_log_dir_exists();
+
+    shm_unlink(SHM_JOB_QUEUE);
+    shm_unlink(SHM_RESULT_QUEUE);
+    shm_unlink(SHM_CONTROL);
+
+    job_queue = static_cast<JobQueueEntry*>(
+      create_shared_memory(SHM_JOB_QUEUE, sizeof(JobQueueEntry) * MAX_JOBS));
+    result_queue = static_cast<ResultQueueEntry*>(
+      create_shared_memory(SHM_RESULT_QUEUE, sizeof(ResultQueueEntry) * MAX_RESULTS));
+    shm_ctrl = static_cast<SharedMemoryControl*>(
+      create_shared_memory(SHM_CONTROL, sizeof(SharedMemoryControl)));
+    new (shm_ctrl) SharedMemoryControl{};
+
+    for (size_t i = 0; i < MAX_JOBS; ++i) {
+      new (&job_queue[i]) JobQueueEntry{};
+      job_queue[i].ready.store(false);
+      job_queue[i].claimed.store(false);
+      job_queue[i].cancelled.store(false);
+      job_queue[i].worker_index.store(-1);
+    }
+
+    for (size_t i = 0; i < MAX_RESULTS; ++i) {
+      new (&result_queue[i]) ResultQueueEntry{};
+      result_queue[i].claimed.store(false);
+      result_queue[i].ready.store(false);
+      result_queue[i].retrieved.store(false);
+    }
+
+    shm_ctrl->shutdown_requested.store(false);
+    shm_ctrl->active_workers.store(0);
+
+    // Build credentials before spawning workers so TLS validation failures
+    // don't leak worker processes or background threads.
+    server_address = "0.0.0.0:" + std::to_string(config.port);
+    if (config.enable_tls) {
+      cuopt_expects(!config.tls_cert_path.empty() && !config.tls_key_path.empty(),
+                    error_type_t::ValidationError,
+                    "TLS enabled but --tls-cert/--tls-key not provided");
+
+      grpc::SslServerCredentialsOptions ssl_opts;
+      grpc::SslServerCredentialsOptions::PemKeyCertPair key_cert;
+      key_cert.cert_chain  = read_file_to_string(config.tls_cert_path);
+      key_cert.private_key = read_file_to_string(config.tls_key_path);
+      cuopt_expects(!key_cert.cert_chain.empty() && !key_cert.private_key.empty(),
+                    error_type_t::RuntimeError,
+                    "Failed to read TLS cert/key files");
+      ssl_opts.pem_key_cert_pairs.push_back(key_cert);
+
+      if (!config.tls_root_path.empty()) {
+        ssl_opts.pem_root_certs = read_file_to_string(config.tls_root_path);
+        cuopt_expects(!ssl_opts.pem_root_certs.empty(),
+                      error_type_t::RuntimeError,
+                      "Failed to read TLS root cert file");
+      }
+
+      cuopt_expects(!config.require_client || !ssl_opts.pem_root_certs.empty(),
+                    error_type_t::ValidationError,
+                    "--require-client-cert requires --tls-root");
+
+      if (config.require_client) {
+        ssl_opts.client_certificate_request =
+          GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_AND_VERIFY;
+      } else if (!ssl_opts.pem_root_certs.empty()) {
+        ssl_opts.client_certificate_request = GRPC_SSL_REQUEST_CLIENT_CERTIFICATE_AND_VERIFY;
+      }
+
+      creds = grpc::SslServerCredentials(ssl_opts);
+    } else {
+      creds = grpc::InsecureServerCredentials();
+    }
+
+    signal(SIGPIPE, SIG_IGN);
+    spawn_workers();
+
+    cuopt_expects(!worker_pids.empty(), error_type_t::RuntimeError, "No workers started");
+
+  } catch (const cuopt::logic_error& e) {
+    SERVER_LOG_ERROR("[Server] %s", format_cuopt_error(e));
+    cleanup_shared_memory();
+    return 1;
+  } catch (const std::exception& e) {
+    SERVER_LOG_ERROR("[Server] %s", e.what());
     cleanup_shared_memory();
     return 1;
   }
 
+  // ---------------------------------------------------------------------------
+  // Server is initialized.  Start background threads and the gRPC listener.
+  // From here, shutdown requires joining threads and killing workers, so
+  // errors use explicit checks with shutdown_all().
+  // ---------------------------------------------------------------------------
   std::thread result_thread(result_retrieval_thread);
   std::thread incumbent_thread(incumbent_retrieval_thread);
   std::thread monitor_thread(worker_monitor_thread);
@@ -305,16 +314,17 @@ int main(int argc, char** argv)
 
   std::unique_ptr<Server> server(builder.BuildAndStart());
   if (!server) {
-    std::cerr << "[Server] BuildAndStart() failed — could not bind to " << server_address << "\n";
+    SERVER_LOG_ERROR("[Server] Failed to bind to %s", server_address);
     shutdown_all();
     return 1;
   }
 
-  std::cout << "[gRPC Server] Listening on " << server_address << std::endl;
-  std::cout << "[gRPC Server] Workers: " << config.num_workers << std::endl;
-  std::cout << "[gRPC Server] Max message size: " << server_max_message_bytes() << " bytes ("
-            << (server_max_message_bytes() / kMiB) << " MiB)" << std::endl;
-  std::cout << "[gRPC Server] Press Ctrl+C to shutdown" << std::endl;
+  SERVER_LOG_INFO("[gRPC Server] Listening on %s", server_address);
+  SERVER_LOG_INFO("[gRPC Server] Workers: %d", config.num_workers);
+  SERVER_LOG_INFO("[gRPC Server] Max message size: %ld bytes (%ld MiB)",
+                  server_max_message_bytes(),
+                  server_max_message_bytes() / kMiB);
+  SERVER_LOG_INFO("[gRPC Server] Press Ctrl+C to shutdown");
 
   std::thread shutdown_thread([&server]() {
     while (keep_running.load()) {
@@ -326,10 +336,10 @@ int main(int argc, char** argv)
   server->Wait();
   if (shutdown_thread.joinable()) shutdown_thread.join();
 
-  std::cout << "\n[Server] Shutting down..." << std::endl;
+  SERVER_LOG_INFO("[Server] Shutting down...");
   shutdown_all();
 
-  std::cout << "[Server] Shutdown complete" << std::endl;
+  SERVER_LOG_INFO("[Server] Shutdown complete");
   return 0;
 }
 

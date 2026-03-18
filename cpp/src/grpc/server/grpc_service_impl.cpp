@@ -25,18 +25,21 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
 
     if (config.verbose && is_lp) {
       const auto& lp_req = request->lp_request();
-      std::cerr << "[gRPC] SubmitJob LP fields: bytes=" << lp_req.ByteSizeLong()
-                << " objective_scaling_factor=" << lp_req.problem().objective_scaling_factor()
-                << " objective_offset=" << lp_req.problem().objective_offset()
-                << " iteration_limit=" << lp_req.settings().iteration_limit()
-                << " method=" << lp_req.settings().method() << std::endl;
+      SERVER_LOG_DEBUG(
+        "[gRPC] SubmitJob LP fields: bytes=%zu objective_scaling_factor=%f objective_offset=%f "
+        "iteration_limit=%d method=%d",
+        lp_req.ByteSizeLong(),
+        lp_req.problem().objective_scaling_factor(),
+        lp_req.problem().objective_offset(),
+        lp_req.settings().iteration_limit(),
+        lp_req.settings().method());
     }
 
     auto job_data = serialize_submit_request_to_pipe(*request);
     if (config.verbose) {
-      std::cout << "[gRPC] SubmitJob: UNARY " << (is_lp ? "LP" : "MIP")
-                << ", pipe payload=" << job_data.size() << " bytes\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG("[gRPC] SubmitJob: UNARY %s, pipe payload=%zu bytes",
+                       is_lp ? "LP" : "MIP",
+                       job_data.size());
     }
 
     auto [ok, job_id] = submit_job_async(std::move(job_data), !is_lp);
@@ -46,8 +49,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     response->set_message("Job submitted successfully");
 
     if (config.verbose) {
-      std::cout << "[gRPC] Job submitted: " << job_id << " (type=" << (is_lp ? "LP" : "MIP") << ")"
-                << std::endl;
+      SERVER_LOG_DEBUG("[gRPC] Job submitted: %s (type=%s)", job_id.c_str(), is_lp ? "LP" : "MIP");
     }
 
     return Status::OK;
@@ -68,9 +70,8 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     bool is_mip           = (header.header().problem_type() == cuopt::remote::MIP);
 
     if (config.verbose) {
-      std::cout << "[gRPC] StartChunkedUpload upload_id=" << upload_id << " is_mip=" << is_mip
-                << "\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG(
+        "[gRPC] StartChunkedUpload upload_id=%s is_mip=%d", upload_id.c_str(), is_mip);
     }
 
     {
@@ -199,10 +200,10 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     }
 
     if (config.verbose) {
-      std::cout << "[gRPC] FinishChunkedUpload upload_id=" << upload_id
-                << " chunks=" << state.total_chunks << " fields=" << state.field_meta.size()
-                << "\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG("[gRPC] FinishChunkedUpload upload_id=%s chunks=%d fields=%zu",
+                       upload_id.c_str(),
+                       state.total_chunks,
+                       state.field_meta.size());
     }
 
     // Package the header and chunks for the dispatch thread. Field metadata
@@ -213,9 +214,11 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     state.field_meta.clear();
 
     if (config.verbose) {
-      std::cout << "[gRPC] FinishChunkedUpload: CHUNKED path, " << state.total_chunks << " chunks, "
-                << state.total_bytes << " bytes, upload_id=" << upload_id << "\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG(
+        "[gRPC] FinishChunkedUpload: CHUNKED path, %d chunks, %ld bytes, upload_id=%s",
+        state.total_chunks,
+        state.total_bytes,
+        upload_id.c_str());
     }
 
     auto [ok, job_id] = submit_chunked_job_async(std::move(pending), state.is_mip);
@@ -225,9 +228,9 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     response->set_message("Job submitted via chunked arrays");
 
     if (config.verbose) {
-      std::cout << "[gRPC] FinishChunkedUpload enqueued job: " << job_id
-                << " (type=" << (state.is_mip ? "MIP" : "LP") << ")\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG("[gRPC] FinishChunkedUpload enqueued job: %s (type=%s)",
+                       job_id.c_str(),
+                       state.is_mip ? "MIP" : "LP");
     }
 
     return Status::OK;
@@ -304,8 +307,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
                         " bytes) exceeds max message size (" + std::to_string(max_bytes) +
                         " bytes). Use StartChunkedDownload/GetResultChunk RPCs instead.";
       if (config.verbose) {
-        std::cout << "[gRPC] GetResult rejected for job " << job_id << ": " << msg << "\n";
-        std::cout.flush();
+        SERVER_LOG_DEBUG("[gRPC] GetResult rejected for job %s: %s", job_id.c_str(), msg.c_str());
       }
       return Status(StatusCode::RESOURCE_EXHAUSTED, msg);
     }
@@ -326,10 +328,10 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
 
     response->set_status(cuopt::remote::SUCCESS);
     if (config.verbose) {
-      std::cout << "[gRPC] GetResult: UNARY response for job " << job_id << " ("
-                << total_result_bytes << " bytes, " << it->second.result_arrays.size()
-                << " arrays)\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG("[gRPC] GetResult: UNARY response for job %s (%ld bytes, %zu arrays)",
+                       job_id.c_str(),
+                       total_result_bytes,
+                       it->second.result_arrays.size());
     }
 
     return Status::OK;
@@ -385,10 +387,13 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     }
 
     if (config.verbose) {
-      std::cout << "[gRPC] StartChunkedDownload: CHUNKED response for job " << job_id
-                << ", download_id=" << download_id
-                << ", arrays=" << response->header().arrays_size() << ", is_mip=" << is_mip << "\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG(
+        "[gRPC] StartChunkedDownload: CHUNKED response for job %s, download_id=%s, arrays=%d, "
+        "is_mip=%d",
+        job_id.c_str(),
+        download_id.c_str(),
+        response->header().arrays_size(),
+        is_mip);
     }
 
     return Status::OK;
@@ -464,9 +469,9 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                           std::chrono::steady_clock::now() - it->second.created)
                           .count();
-      std::cout << "[gRPC] FinishChunkedDownload: download_id=" << download_id
-                << " elapsed_ms=" << elapsed_ms << "\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG("[gRPC] FinishChunkedDownload: download_id=%s elapsed_ms=%ld",
+                       download_id.c_str(),
+                       elapsed_ms);
     }
 
     chunked_downloads.erase(it);
@@ -493,7 +498,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
       response->set_status(cuopt::remote::ERROR_NOT_FOUND);
       response->set_message("Job not found: " + job_id);
       if (config.verbose) {
-        std::cout << "[gRPC] DeleteResult job not found: " << job_id << std::endl;
+        SERVER_LOG_DEBUG("[gRPC] DeleteResult job not found: %s", job_id.c_str());
       }
       return Status::OK;
     }
@@ -503,7 +508,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     response->set_status(cuopt::remote::SUCCESS);
     response->set_message("Result deleted");
 
-    if (config.verbose) { std::cout << "[gRPC] Result deleted for job: " << job_id << std::endl; }
+    if (config.verbose) { SERVER_LOG_DEBUG("[gRPC] Result deleted for job: %s", job_id.c_str()); }
 
     return Status::OK;
   }
@@ -541,9 +546,11 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     }
 
     if (config.verbose) {
-      std::cout << "[gRPC] CancelJob job_id=" << job_id << " rc=" << rc
-                << " status=" << static_cast<int>(pb_status) << " msg=" << message << "\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG("[gRPC] CancelJob job_id=%s rc=%d status=%d msg=%s",
+                       job_id.c_str(),
+                       rc,
+                       static_cast<int>(pb_status),
+                       message.c_str());
     }
 
     return Status::OK;
@@ -632,8 +639,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
 
     if (client_cancelled) {
       if (config.verbose) {
-        std::cout << "[gRPC] WaitForCompletion cancelled by client, job_id=" << job_id << "\n";
-        std::cout.flush();
+        SERVER_LOG_DEBUG("[gRPC] WaitForCompletion cancelled by client, job_id=%s", job_id.c_str());
       }
       return Status(StatusCode::CANCELLED, "Client cancelled WaitForCompletion");
     }
@@ -681,8 +687,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
     }
 
     if (config.verbose) {
-      std::cout << "[gRPC] WaitForCompletion finished job_id=" << job_id << "\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG("[gRPC] WaitForCompletion finished job_id=%s", job_id.c_str());
     }
 
     return Status::OK;
@@ -716,7 +721,7 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
         JobStatus s = check_job_status(job_id, msg);
         if (s == JobStatus::NOT_FOUND) {
           if (config.verbose) {
-            std::cout << "[gRPC] StreamLogs job not found: " << job_id << std::endl;
+            SERVER_LOG_DEBUG("[gRPC] StreamLogs job not found: %s", job_id.c_str());
           }
           return Status(grpc::StatusCode::NOT_FOUND, "Job not found: " + job_id);
         }
@@ -860,10 +865,12 @@ class CuOptRemoteServiceImpl final : public cuopt::remote::CuOptRemoteService::S
        it->second.status == JobStatus::CANCELLED);
     response->set_job_complete(done);
     if (config.verbose) {
-      std::cout << "[gRPC] GetIncumbents job_id=" << job_id << " from=" << from_index
-                << " returned=" << response->incumbents_size() << " next=" << (from_index + count)
-                << " done=" << (done ? 1 : 0) << "\n";
-      std::cout.flush();
+      SERVER_LOG_DEBUG("[gRPC] GetIncumbents job_id=%s from=%ld returned=%d next=%ld done=%d",
+                       job_id.c_str(),
+                       from_index,
+                       response->incumbents_size(),
+                       from_index + count,
+                       done ? 1 : 0);
     }
     return Status::OK;
   }

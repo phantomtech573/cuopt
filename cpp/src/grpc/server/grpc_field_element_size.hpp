@@ -17,6 +17,16 @@
 inline int64_t array_field_element_size(cuopt::remote::ArrayFieldId field_id)
 {
   switch (field_id) {
+    case cuopt::remote::FIELD_A_VALUES:
+    case cuopt::remote::FIELD_C:
+    case cuopt::remote::FIELD_B:
+    case cuopt::remote::FIELD_VARIABLE_LOWER_BOUNDS:
+    case cuopt::remote::FIELD_VARIABLE_UPPER_BOUNDS:
+    case cuopt::remote::FIELD_CONSTRAINT_LOWER_BOUNDS:
+    case cuopt::remote::FIELD_CONSTRAINT_UPPER_BOUNDS:
+    case cuopt::remote::FIELD_Q_VALUES:
+    case cuopt::remote::FIELD_INITIAL_PRIMAL:
+    case cuopt::remote::FIELD_INITIAL_DUAL: return 8;
     case cuopt::remote::FIELD_A_INDICES:
     case cuopt::remote::FIELD_A_OFFSETS:
     case cuopt::remote::FIELD_Q_INDICES:
@@ -25,8 +35,8 @@ inline int64_t array_field_element_size(cuopt::remote::ArrayFieldId field_id)
     case cuopt::remote::FIELD_VARIABLE_TYPES:
     case cuopt::remote::FIELD_VARIABLE_NAMES:
     case cuopt::remote::FIELD_ROW_NAMES: return 1;
-    default: return 8;
   }
+  return -1;
 }
 
 #endif  // CUOPT_ENABLE_GRPC

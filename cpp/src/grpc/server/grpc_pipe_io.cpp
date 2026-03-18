@@ -5,10 +5,11 @@
 
 #ifdef CUOPT_ENABLE_GRPC
 
+#include "grpc_server_logger.hpp"
+
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
-#include <iostream>
 
 #include <poll.h>
 #include <unistd.h>
@@ -44,15 +45,15 @@ bool read_from_pipe(int fd, void* data, size_t size, int timeout_ms)
     pr = poll(&pfd, 1, timeout_ms);
   } while (pr < 0 && errno == EINTR);
   if (pr < 0) {
-    std::cerr << "[Server] poll() failed on pipe: " << strerror(errno) << "\n";
+    SERVER_LOG_ERROR("[Server] poll() failed on pipe: %s", strerror(errno));
     return false;
   }
   if (pr == 0) {
-    std::cerr << "[Server] Timeout waiting for pipe data (waited " << timeout_ms << "ms)\n";
+    SERVER_LOG_ERROR("[Server] Timeout waiting for pipe data (waited %dms)", timeout_ms);
     return false;
   }
   if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-    std::cerr << "[Server] Pipe error/hangup detected\n";
+    SERVER_LOG_ERROR("[Server] Pipe error/hangup detected");
     return false;
   }
 
@@ -64,11 +65,11 @@ bool read_from_pipe(int fd, void* data, size_t size, int timeout_ms)
       continue;
     }
     if (nread == 0) {
-      std::cerr << "[Server] Pipe EOF (writer closed)\n";
+      SERVER_LOG_ERROR("[Server] Pipe EOF (writer closed)");
       return false;
     }
     if (errno == EINTR) continue;
-    std::cerr << "[Server] Pipe read error: " << strerror(errno) << "\n";
+    SERVER_LOG_ERROR("[Server] Pipe read error: %s", strerror(errno));
     return false;
   }
   return true;
