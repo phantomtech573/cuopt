@@ -1194,12 +1194,6 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
 
   barrier_thread.join();
 
-  // TODO: Active Issue: PDLP throws an Exception interminttently.
-  if (pdlp_exception) {
-    printf("Rethrowing PDLP exception from concurrent mode\n");
-    std::rethrow_exception(pdlp_exception);
-  }
-
   // copy the dual simplex solution to the device
   auto sol_dual_simplex =
     !settings.inside_mip
