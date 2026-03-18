@@ -28,6 +28,23 @@ namespace cg = cooperative_groups;
 
 namespace cuopt::linear_programming::detail {
 
+template <typename i_t, typename f_t>
+DI void charge_deterministic_iteration_work(typename fj_t<i_t, f_t>::climber_data_t::view_t fj,
+                                            bool full_score_refresh)
+{
+  if (!fj.deterministic_work_accounting || !FIRST_THREAD) { return; }
+
+  const i_t selected_var = *fj.selected_var;
+
+  double work = fj.deterministic_refresh_work;
+  if (!full_score_refresh && selected_var >= 0 &&
+      selected_var < static_cast<i_t>(fj.deterministic_frontier_work_by_var.size())) {
+    work = fj.deterministic_frontier_work_by_var[selected_var];
+  }
+
+  *fj.deterministic_batch_work += work;
+}
+
 template <typename move_score_t, typename i_t>
 struct score_with_tiebreaker_comparator {
   DI auto operator()(const thrust::pair<move_score_t, i_t>& a,
@@ -1029,6 +1046,8 @@ __device__ void compute_mtm_moves(typename fj_t<i_t, f_t>::climber_data_t::view_
     split_begin = range.first;
     split_end   = range.second;
   }
+
+  charge_deterministic_iteration_work<i_t, f_t>(fj, full_refresh);
 
   if (FIRST_THREAD) *fj.relvar_count_last_update = split_end - split_begin;
 

@@ -262,6 +262,8 @@ static bool run_fj_check_determinism(std::string test_instance, int iter_limit)
 
 TEST(mip_solve, feasibility_jump_determinism)
 {
+  cuopt::init_logger_t log("", true);
+
   int seed =
     std::getenv("CUOPT_SEED") ? std::stoi(std::getenv("CUOPT_SEED")) : std::random_device{}();
 

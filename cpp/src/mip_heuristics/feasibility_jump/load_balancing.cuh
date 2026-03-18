@@ -120,6 +120,7 @@ __global__ void load_balancing_prepare_iteration(const __grid_constant__
                                                  typename fj_t<i_t, f_t>::climber_data_t::view_t fj)
 {
   bool full_refresh = needs_full_refresh<i_t, f_t>(fj);
+  charge_deterministic_iteration_work<i_t, f_t>(fj, full_refresh);
 
   // alternate codepath in the case of a small related_var/total_var ratio
   if (!full_refresh && fj.pb.related_variables.size() > 0 &&

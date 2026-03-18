@@ -67,7 +67,8 @@ fj_t<i_t, f_t>::fj_t(mip_solver_context_t<i_t, f_t>& context_, fj_settings_t in_
     work_id_to_nonbin_var_idx(pb_ptr->coefficients.size(), pb_ptr->handle_ptr->get_stream()),
     row_size_bin_prefix_sum(pb_ptr->binary_indices.size(), pb_ptr->handle_ptr->get_stream()),
     row_size_nonbin_prefix_sum(pb_ptr->nonbinary_indices.size(), pb_ptr->handle_ptr->get_stream()),
-    work_ids_for_related_vars(pb_ptr->n_variables, pb_ptr->handle_ptr->get_stream())
+    work_ids_for_related_vars(pb_ptr->n_variables, pb_ptr->handle_ptr->get_stream()),
+    deterministic_frontier_work_by_var_d_(0, pb_ptr->handle_ptr->get_stream())
 {
   setval_launch_dims = get_launch_dims_max_occupancy(
     (void*)update_assignment_kernel<i_t, f_t>, TPB_setval, pb_ptr->handle_ptr);
@@ -113,6 +114,101 @@ void fj_t<i_t, f_t>::reset_cuda_graph()
 {
   if (graph_created) cudaGraphExecDestroy(graph_instance);
   graph_created = false;
+}
+
+template <typename i_t, typename f_t>
+bool fj_t<i_t, f_t>::use_load_balancing_codepath() const
+{
+  bool use_load_balancing = false;
+  if (settings.load_balancing_mode == fj_load_balancing_mode_t::ALWAYS_OFF) {
+    use_load_balancing = false;
+  } else if (settings.load_balancing_mode == fj_load_balancing_mode_t::ALWAYS_ON) {
+    use_load_balancing = true;
+  } else if (settings.load_balancing_mode == fj_load_balancing_mode_t::AUTO) {
+    use_load_balancing =
+      pb_ptr->n_variables > settings.parameters.load_balancing_codepath_min_varcount;
+  }
+  if (settings.mode == fj_mode_t::ROUNDING) { use_load_balancing = false; }
+  return use_load_balancing;
+}
+
+template <typename i_t, typename f_t>
+void fj_t<i_t, f_t>::initialize_deterministic_work_estimator()
+{
+  const size_t num_vars  = pb_ptr->n_variables;
+  const double total_nnz = static_cast<double>(pb_ptr->coefficients.size());
+
+  deterministic_frontier_work_by_var_.assign(num_vars, 1.0);
+  deterministic_refresh_work_          = total_nnz;
+  deterministic_average_frontier_work_ = total_nnz;
+  if (num_vars == 0) { return; }
+
+  auto h_reverse_offsets = cuopt::host_copy(pb_ptr->reverse_offsets, handle_ptr->get_stream());
+  std::vector<double> variable_work_by_var(num_vars, 0.0);
+  for (size_t var_idx = 0; var_idx < num_vars; ++var_idx) {
+    const i_t degree              = h_reverse_offsets[var_idx + 1] - h_reverse_offsets[var_idx];
+    variable_work_by_var[var_idx] = static_cast<double>(degree);
+  }
+
+  if (pb_ptr->related_variables_offsets.size() == 0 || pb_ptr->related_variables.size() == 0) {
+    auto h_offsets   = cuopt::host_copy(pb_ptr->offsets, handle_ptr->get_stream());
+    auto h_variables = cuopt::host_copy(pb_ptr->variables, handle_ptr->get_stream());
+    auto h_reverse_constraints =
+      cuopt::host_copy(pb_ptr->reverse_constraints, handle_ptr->get_stream());
+    std::vector<i_t> frontier_marks(num_vars, -1);
+    for (i_t var_idx = 0; var_idx < pb_ptr->n_variables; ++var_idx) {
+      double frontier_work    = variable_work_by_var[var_idx];
+      frontier_marks[var_idx] = var_idx;
+      for (i_t offset = h_reverse_offsets[var_idx]; offset < h_reverse_offsets[var_idx + 1];
+           ++offset) {
+        const i_t constraint_idx = h_reverse_constraints[offset];
+        for (i_t constraint_offset = h_offsets[constraint_idx];
+             constraint_offset < h_offsets[constraint_idx + 1];
+             ++constraint_offset) {
+          const i_t related_var = h_variables[constraint_offset];
+          if (frontier_marks[related_var] == var_idx) { continue; }
+          frontier_marks[related_var] = var_idx;
+          frontier_work += variable_work_by_var[related_var];
+        }
+      }
+      deterministic_frontier_work_by_var_[var_idx] = frontier_work;
+    }
+  } else {
+    auto h_related_offsets =
+      cuopt::host_copy(pb_ptr->related_variables_offsets, handle_ptr->get_stream());
+    auto h_related_vars = cuopt::host_copy(pb_ptr->related_variables, handle_ptr->get_stream());
+    for (size_t var_idx = 0; var_idx < num_vars; ++var_idx) {
+      double frontier_work = variable_work_by_var[var_idx];
+      for (i_t offset = h_related_offsets[var_idx]; offset < h_related_offsets[var_idx + 1];
+           ++offset) {
+        const i_t related_var = h_related_vars[offset];
+        if (related_var >= 0 && related_var < pb_ptr->n_variables) {
+          frontier_work += variable_work_by_var[related_var];
+        }
+      }
+      deterministic_frontier_work_by_var_[var_idx] = frontier_work;
+    }
+  }
+
+  double total_frontier_work = 0.0;
+  for (double work : deterministic_frontier_work_by_var_) {
+    total_frontier_work += work;
+  }
+  deterministic_average_frontier_work_ = total_frontier_work / static_cast<double>(num_vars);
+  deterministic_frontier_work_by_var_d_.resize(num_vars, handle_ptr->get_stream());
+  raft::copy(deterministic_frontier_work_by_var_d_.data(),
+             deterministic_frontier_work_by_var_.data(),
+             num_vars,
+             handle_ptr->get_stream());
+
+  CUOPT_LOG_DEBUG(
+    "FJ determ: initialized frontier work estimator avg_frontier_nnz=%.6f refresh_nnz=%.6f "
+    "vars=%zu nnz=%zu load_balancing=%d",
+    deterministic_average_frontier_work_,
+    deterministic_refresh_work_,
+    num_vars,
+    pb_ptr->coefficients.size(),
+    (int)use_load_balancing_codepath());
 }
 
 template <typename i_t, typename f_t>
@@ -193,38 +289,43 @@ fj_t<i_t, f_t>::climber_data_t::view_t fj_t<i_t, f_t>::climber_data_t::view()
   v.jump_candidates      = make_span(jump_candidates);
   v.jump_candidate_count = make_span(jump_candidate_count);
   v.jump_locks           = make_span(jump_locks);
-  v.candidate_arrived_workids         = make_span(candidate_arrived_workids);
-  v.grid_score_buf                    = make_span(grid_score_buf);
-  v.grid_delta_buf                    = make_span(grid_delta_buf);
-  v.grid_var_buf                      = make_span(grid_var_buf);
-  v.row_size_bin_prefix_sum           = make_span(fj.row_size_bin_prefix_sum);
-  v.row_size_nonbin_prefix_sum        = make_span(fj.row_size_nonbin_prefix_sum);
-  v.work_id_to_bin_var_idx            = make_span(fj.work_id_to_bin_var_idx);
-  v.work_id_to_nonbin_var_idx         = make_span(fj.work_id_to_nonbin_var_idx);
-  v.work_ids_for_related_vars         = make_span(fj.work_ids_for_related_vars);
-  v.fractional_variables              = fractional_variables.view();
-  v.saved_best_fractional_count       = saved_best_fractional_count.data();
-  v.handle_fractionals_only           = handle_fractionals_only.data();
-  v.selected_var                      = selected_var.data();
-  v.violation_score                   = violation_score.data();
-  v.weighted_violation_score          = weighted_violation_score.data();
-  v.constraints_changed_count         = constraints_changed_count.data();
-  v.local_minimums_reached            = local_minimums_reached.data();
-  v.iterations                        = iterations.data();
-  v.best_excess                       = best_excess.data();
-  v.best_objective                    = best_objective.data();
-  v.saved_solution_objective          = saved_solution_objective.data();
-  v.incumbent_quality                 = incumbent_quality.data();
-  v.incumbent_objective               = incumbent_objective.data();
-  v.weight_update_increment           = fj.weight_update_increment;
-  v.objective_weight                  = fj.objective_weight.data();
-  v.last_minimum_iteration            = last_minimum_iteration.data();
-  v.last_improving_minimum            = last_improving_minimum.data();
-  v.last_iter_candidates              = last_iter_candidates.data();
-  v.relvar_count_last_update          = relvar_count_last_update.data();
-  v.load_balancing_skip               = load_balancing_skip.data();
-  v.break_condition                   = break_condition.data();
-  v.temp_break_condition              = temp_break_condition.data();
+  v.candidate_arrived_workids          = make_span(candidate_arrived_workids);
+  v.grid_score_buf                     = make_span(grid_score_buf);
+  v.grid_delta_buf                     = make_span(grid_delta_buf);
+  v.grid_var_buf                       = make_span(grid_var_buf);
+  v.row_size_bin_prefix_sum            = make_span(fj.row_size_bin_prefix_sum);
+  v.row_size_nonbin_prefix_sum         = make_span(fj.row_size_nonbin_prefix_sum);
+  v.work_id_to_bin_var_idx             = make_span(fj.work_id_to_bin_var_idx);
+  v.work_id_to_nonbin_var_idx          = make_span(fj.work_id_to_nonbin_var_idx);
+  v.work_ids_for_related_vars          = make_span(fj.work_ids_for_related_vars);
+  v.deterministic_frontier_work_by_var = make_span(fj.deterministic_frontier_work_by_var_d_);
+  v.fractional_variables               = fractional_variables.view();
+  v.saved_best_fractional_count        = saved_best_fractional_count.data();
+  v.handle_fractionals_only            = handle_fractionals_only.data();
+  v.selected_var                       = selected_var.data();
+  v.violation_score                    = violation_score.data();
+  v.weighted_violation_score           = weighted_violation_score.data();
+  v.constraints_changed_count          = constraints_changed_count.data();
+  v.local_minimums_reached             = local_minimums_reached.data();
+  v.iterations                         = iterations.data();
+  v.best_excess                        = best_excess.data();
+  v.best_objective                     = best_objective.data();
+  v.saved_solution_objective           = saved_solution_objective.data();
+  v.incumbent_quality                  = incumbent_quality.data();
+  v.incumbent_objective                = incumbent_objective.data();
+  v.weight_update_increment            = fj.weight_update_increment;
+  v.objective_weight                   = fj.objective_weight.data();
+  v.last_minimum_iteration             = last_minimum_iteration.data();
+  v.last_improving_minimum             = last_improving_minimum.data();
+  v.last_iter_candidates               = last_iter_candidates.data();
+  v.relvar_count_last_update           = relvar_count_last_update.data();
+  v.load_balancing_skip                = load_balancing_skip.data();
+  v.break_condition                    = break_condition.data();
+  v.temp_break_condition               = temp_break_condition.data();
+  v.deterministic_batch_work           = deterministic_batch_work.data();
+  v.deterministic_refresh_work         = fj.deterministic_refresh_work_;
+  v.deterministic_work_accounting =
+    (fj.context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS);
   v.best_jump_idx                     = best_jump_idx.data();
   v.small_move_tabu                   = small_move_tabu.data();
   v.stop_threshold                    = fj.stop_threshold;
@@ -464,6 +565,7 @@ void fj_t<i_t, f_t>::climber_init(i_t climber_idx, const rmm::cuda_stream_view& 
   climber->last_iter_candidates.set_value_to_zero_async(climber_stream);
   climber->relvar_count_last_update.set_value_to_zero_async(climber_stream);
   climber->load_balancing_skip.set_value_to_zero_async(climber_stream);
+  climber->deterministic_batch_work.set_value_to_zero_async(climber_stream);
   climber->constraints_changed_count.set_value_to_zero_async(climber_stream);
   climber->iterations.set_value_to_zero_async(climber_stream);
   climber->full_refresh_iteration.set_value_to_zero_async(climber_stream);
@@ -675,17 +777,10 @@ void fj_t<i_t, f_t>::run_step_device(const rmm::cuda_stream_view& climber_stream
   // as it breaks assumptions in the binary_pb codepath
   if (settings.mode == fj_mode_t::ROUNDING) { is_binary_pb = false; }
 
-  bool use_load_balancing = false;
-  if (settings.load_balancing_mode == fj_load_balancing_mode_t::ALWAYS_OFF) {
-    use_load_balancing = false;
-  } else if (settings.load_balancing_mode == fj_load_balancing_mode_t::ALWAYS_ON) {
-    use_load_balancing = true;
-  } else if (settings.load_balancing_mode == fj_load_balancing_mode_t::AUTO) {
-    use_load_balancing =
-      pb_ptr->n_variables > settings.parameters.load_balancing_codepath_min_varcount;
+  bool use_load_balancing = use_load_balancing_codepath();
+  if (context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS) {
+    data.deterministic_batch_work.set_value_to_zero_async(climber_stream);
   }
-  // Load-balanced codepath not updated yet to handle rounding mode
-  if (settings.mode == fj_mode_t::ROUNDING) { use_load_balancing = false; }
 
   cudaGraph_t graph;
   void* kernel_args[]            = {&v};
@@ -923,16 +1018,7 @@ std::map<std::string, float> fj_t<i_t, f_t>::get_feature_vector(i_t climber_idx)
   // (float)data.weighted_violation_score.value(climber_stream);
 
   // Load balancing decision
-  bool use_load_balancing = false;
-  if (settings.load_balancing_mode == fj_load_balancing_mode_t::ALWAYS_OFF) {
-    use_load_balancing = false;
-  } else if (settings.load_balancing_mode == fj_load_balancing_mode_t::ALWAYS_ON) {
-    use_load_balancing = true;
-  } else if (settings.load_balancing_mode == fj_load_balancing_mode_t::AUTO) {
-    use_load_balancing =
-      pb_ptr->n_variables > settings.parameters.load_balancing_codepath_min_varcount;
-  }
-  if (settings.mode == fj_mode_t::ROUNDING) { use_load_balancing = false; }
+  bool use_load_balancing         = use_load_balancing_codepath();
   features["uses_load_balancing"] = (float)use_load_balancing;
 
   // Related variables metrics (if available)
@@ -1061,14 +1147,12 @@ std::map<std::string, float> fj_t<i_t, f_t>::get_feature_vector(i_t climber_idx)
 template <typename i_t, typename f_t>
 i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
 {
-  auto& data                       = *climbers[climber_idx];
-  auto v                           = data.view();  // == climber_views[climber_idx]
-  const double work_units_at_start = context.gpu_heur_loop.current_work();
-  const bool publish_progress      = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
-                                context.branch_and_bound_ptr != nullptr &&
-                                std::isfinite(settings.work_limit) && settings.work_limit > 0.0 &&
-                                settings.iteration_limit > 0 &&
-                                settings.iteration_limit != std::numeric_limits<i_t>::max();
+  auto& data = *climbers[climber_idx];
+  auto v     = data.view();  // == climber_views[climber_idx]
+  const bool deterministic_work_estimate =
+    (context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS);
+  const bool use_graph           = true;
+  const i_t iterations_per_batch = use_graph ? iterations_per_graph : 1;
 
   auto climber_stream = data.stream.view();
   if (climber_idx == 0) climber_stream = handle_ptr->get_stream();
@@ -1086,9 +1170,10 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
   work_limit_timer_t timer(context.gpu_heur_loop, settings.time_limit, *context.termination);
   i_t steps;
   bool limit_reached = false;
-  for (steps = 0; steps < std::numeric_limits<i_t>::max(); steps += iterations_per_graph) {
+  for (steps = 0; steps < std::numeric_limits<i_t>::max(); steps += iterations_per_batch) {
     // to actualize time limit
     handle_ptr->sync_stream();
+    const bool lhs_refreshed = (steps % settings.parameters.lhs_refresh_period == 0);
     if (timer.check_time_limit() || steps >= settings.iteration_limit ||
         context.preempt_heuristic_solver_.load()) {
       limit_reached = true;
@@ -1128,12 +1213,16 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
         detail::compute_hash(cstr_left_weights, climber_stream));
     }
 
-    if (!limit_reached) { run_step_device(climber_stream, climber_idx); }
+    if (!limit_reached) { run_step_device(climber_stream, climber_idx, use_graph); }
 
     // periodically recompute the LHS and violation scores
     // to correct any accumulated numerical errors
-    if (steps % settings.parameters.lhs_refresh_period == 0) {
-      refresh_lhs_and_violation(climber_stream, climber_idx);
+    if (lhs_refreshed) { refresh_lhs_and_violation(climber_stream, climber_idx); }
+    if (deterministic_work_estimate && !limit_reached) {
+      // TODO: replace with work predictor model
+      double batch_work = data.deterministic_batch_work.value(climber_stream) / 1e8;
+      timer.record_work(batch_work);
+      if (timer.check_time_limit()) { limit_reached = true; }
     }
 
     // periodically synchronize and check the latest solution
@@ -1145,12 +1234,6 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
       }
 
       i_t iterations = data.iterations.value(climber_stream);
-      if (publish_progress) {
-        const double progress_ratio =
-          std::min(1.0, (double)iterations / (double)settings.iteration_limit);
-        const double published_work = work_units_at_start + settings.work_limit * progress_ratio;
-        context.gpu_heur_loop.set_current_work(published_work);
-      }
       // make sure we have the current incumbent saved (e.g. in the case of a timeout)
       update_best_solution_kernel<i_t, f_t><<<1, blocks_resetmoves, 0, climber_stream>>>(v);
       // check feasibility with the relative tolerance rather than the violation score
@@ -1308,7 +1391,8 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
     CUOPT_LOG_DEBUG("FJ: skipping solve due to exhausted deterministic work budget");
     return solution.compute_feasibility();
   }
-  work_limit_timer_t timer(context.gpu_heur_loop, settings.time_limit, *context.termination);
+  auto total_work_start = context.gpu_heur_loop.current_work();
+  auto total_time_start = std::chrono::high_resolution_clock::now();
   pb_ptr->check_problem_representation(true);
   resize_vectors(solution.handle_ptr);
 
@@ -1321,18 +1405,6 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
                   detail::compute_hash(cstr_weights, handle_ptr->get_stream()),
                   detail::compute_hash(cstr_left_weights, handle_ptr->get_stream()),
                   detail::compute_hash(cstr_right_weights, handle_ptr->get_stream()));
-
-  // if work_limit is set: compute an estimate of the number of iterations required
-  if (deterministic && settings.work_limit != std::numeric_limits<double>::infinity()) {
-    std::map<std::string, float> features_map = get_feature_vector(0);
-    float iter_prediction                     = std::max(
-      (f_t)0.0, (f_t)ceil(context.work_unit_predictors.fj_predictor.predict_scalar(features_map)));
-    CUOPT_LOG_DEBUG("FJ determ: Estimated number of iterations for %f WU: %f",
-                    settings.work_limit,
-                    iter_prediction);
-    if (settings.work_limit == 0) iter_prediction = 0;
-    settings.iteration_limit = std::min(settings.iteration_limit, (i_t)iter_prediction);
-  }
 
   bool is_initial_feasible = solution.compute_feasibility();
   auto initial_solution    = solution;
@@ -1368,6 +1440,8 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
   RAFT_CHECK_CUDA(handle_ptr->get_stream());
   handle_ptr->sync_stream();
 
+  if (deterministic) { initialize_deterministic_work_estimator(); }
+
   // Compute and store feature vector for later logging
   if (deterministic) { feature_vector = get_feature_vector(0); }
 
@@ -1375,7 +1449,10 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
   RAFT_CHECK_CUDA(handle_ptr->get_stream());
   handle_ptr->sync_stream();
 
-  f_t effort_rate = (f_t)iterations / timer.elapsed_time();
+  f_t elapsed_time = std::chrono::duration_cast<std::chrono::duration<double>>(
+                       std::chrono::high_resolution_clock::now() - total_time_start)
+                       .count();
+  f_t effort_rate = (f_t)iterations / elapsed_time;
 
   // If we're in rounding mode and some fractionals remain: round them all
   // limit = total_limit * second_stage_split
@@ -1393,7 +1470,7 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
     }
   }
 
-  CUOPT_LOG_TRACE("GPU solver took %g", timer.elapsed_time());
+  CUOPT_LOG_TRACE("GPU solver took %g", elapsed_time);
   CUOPT_LOG_TRACE("limit reached, effort rate %g steps/secm %d steps", effort_rate, iterations);
   reset_cuda_graph();
   i_t n_integer_vars = thrust::count_if(
@@ -1421,46 +1498,11 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
   cuopt_func_call(solution.test_variable_bounds());
 
   if (deterministic) {
-    double work_to_record = settings.work_limit;
-
-    if (iterations < settings.iteration_limit) {
-      CUOPT_LOG_DEBUG(
-        "FJ early exit at %d iterations (limit: %d)", iterations, settings.iteration_limit);
-      // Compute the work unit corresponding to the number of iterations elapsed
-      // by incrementally guessing work units until the model predicts >= actual iterations
-      // TODO: awfully ugly, change
-      if ((context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS) &&
-          iterations > 0) {
-        double guessed_work         = 0.0;
-        const double work_increment = 0.1;
-        const double max_work       = settings.work_limit * 2.0;  // Safety limit
-        float predicted_iters       = 0.0f;
-
-        // Make a copy of the feature vector and modify the time/work_limit field
-        std::map<std::string, float> features_for_prediction = feature_vector;
-
-        while (guessed_work <= max_work) {
-          features_for_prediction["time"] = (float)guessed_work;
-          predicted_iters                 = std::max(
-            0.0f,
-            (float)ceil(
-              context.work_unit_predictors.fj_predictor.predict_scalar(features_for_prediction)));
-
-          if (predicted_iters >= (float)iterations) {
-            work_to_record = guessed_work;
-            break;
-          }
-
-          guessed_work += work_increment;
-        }
-      }
-    }
-
-    CUOPT_LOG_DEBUG("FJ: recording work %fwu for %d iterations", work_to_record, iterations);
-    const double already_published_work =
-      std::max(0.0, context.gpu_heur_loop.current_work() - timer.work_units_at_start);
-    const double remaining_work_to_record = std::max(0.0, work_to_record - already_published_work);
-    timer.record_work(remaining_work_to_record);
+    auto total_work_end = context.gpu_heur_loop.current_work();
+    CUOPT_LOG_DEBUG("FJ: worked %fwu for %d iterations, %g seconds",
+                    total_work_end - total_work_start,
+                    iterations,
+                    elapsed_time);
   }
 
   CUOPT_LOG_DEBUG("FJ sol hash %x", solution.get_hash());

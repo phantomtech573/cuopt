@@ -273,6 +273,7 @@ class fj_t {
   rmm::device_uvector<fj_load_balancing_workid_mapping_t> work_id_to_bin_var_idx;
   rmm::device_uvector<fj_load_balancing_workid_mapping_t> work_id_to_nonbin_var_idx;
   rmm::device_uvector<i_t> work_ids_for_related_vars;
+  rmm::device_uvector<double> deterministic_frontier_work_by_var_d_;
 
   cudaGraphExec_t graph_instance;
   bool graph_created = false;
@@ -331,6 +332,7 @@ class fj_t {
     rmm::device_scalar<i_t> full_refresh_iteration;
     rmm::device_scalar<i_t> relvar_count_last_update;
     rmm::device_scalar<i_t> load_balancing_skip;
+    rmm::device_scalar<double> deterministic_batch_work;
 
     contiguous_set_t<i_t, f_t> violated_constraints;
     contiguous_set_t<i_t, f_t> candidate_variables;
@@ -425,6 +427,7 @@ class fj_t {
         last_iter_candidates(0, fj.handle_ptr->get_stream()),
         relvar_count_last_update(0, fj.handle_ptr->get_stream()),
         load_balancing_skip(0, fj.handle_ptr->get_stream()),
+        deterministic_batch_work(0.0, fj.handle_ptr->get_stream()),
         break_condition(0, fj.handle_ptr->get_stream()),
         temp_break_condition(0, fj.handle_ptr->get_stream()),
         cub_storage_bytes(0, fj.handle_ptr->get_stream()),
@@ -495,6 +498,7 @@ class fj_t {
       raft::device_span<i_t> row_size_nonbin_prefix_sum;
       raft::device_span<fj_load_balancing_workid_mapping_t> work_id_to_bin_var_idx;
       raft::device_span<fj_load_balancing_workid_mapping_t> work_id_to_nonbin_var_idx;
+      raft::device_span<double> deterministic_frontier_work_by_var;
 
       i_t* selected_var;
       i_t* constraints_changed_count;
@@ -523,6 +527,9 @@ class fj_t {
       i_t* relvar_count_last_update;
       i_t* load_balancing_skip;
       f_t* max_cstr_weight;
+      double* deterministic_batch_work;
+      double deterministic_refresh_work;
+      bool deterministic_work_accounting;
 
       fj_settings_t* settings;
 
@@ -640,8 +647,13 @@ class fj_t {
   rmm::device_uvector<typename climber_data_t::view_t> climber_views;
   fj_settings_t settings;
   std::map<std::string, float> feature_vector;
+  std::vector<double> deterministic_frontier_work_by_var_;
+  double deterministic_average_frontier_work_{0.0};
+  double deterministic_refresh_work_{0.0};
 
  private:
+  bool use_load_balancing_codepath() const;
+  void initialize_deterministic_work_estimator();
   std::map<std::string, float> get_feature_vector(i_t climber_idx = 0) const;
 };
 
