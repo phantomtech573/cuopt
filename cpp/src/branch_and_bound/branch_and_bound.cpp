@@ -3180,11 +3180,15 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   }
   exploration_started_cv_.notify_all();
 
+  int bb_device_id = 0;
+  RAFT_CUDA_TRY(cudaGetDevice(&bb_device_id));
+
   if (settings_.deterministic) {
     run_deterministic_coordinator(Arow_);
   } else if (settings_.num_threads > 1) {
 #pragma omp parallel num_threads(settings_.num_threads)
     {
+      RAFT_CUDA_TRY(cudaSetDevice(bb_device_id));
 #pragma omp master
       run_scheduler();
     }
@@ -3436,9 +3440,12 @@ void branch_and_bound_t<i_t, f_t>::run_deterministic_coordinator(const csr_matri
   }
 
   const int total_thread_count = num_bfs_workers + num_diving_workers;
+  int coordinator_device_id    = 0;
+  RAFT_CUDA_TRY(cudaGetDevice(&coordinator_device_id));
 
 #pragma omp parallel num_threads(total_thread_count)
   {
+    RAFT_CUDA_TRY(cudaSetDevice(coordinator_device_id));
     int thread_id = omp_get_thread_num();
     if (thread_id < num_bfs_workers) {
       auto& worker          = (*deterministic_workers_)[thread_id];
