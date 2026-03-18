@@ -147,7 +147,7 @@ message ArrayChunk {
 }
 
 // Start a chunked upload: sends problem metadata and settings.
-// Problem type (LP/MIP) is derived from problem_header.header.problem_type.
+// Problem category (LP/MIP) is derived from problem_header.header.problem_category.
 message StartChunkedUploadRequest {
   ChunkedProblemHeader problem_header = 1;
 }

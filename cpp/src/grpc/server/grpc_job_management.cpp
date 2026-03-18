@@ -67,7 +67,7 @@ bool recv_incumbent_pipe(int fd, std::vector<uint8_t>& data)
 // Uses CAS on `claimed` for lock-free slot reservation and release semantics
 // on `ready` to publish all writes to the dispatch thread.
 std::pair<bool, std::string> submit_job_async(std::vector<uint8_t>&& request_data,
-                                              uint32_t problem_type)
+                                              uint32_t problem_category)
 {
   std::string job_id = generate_job_id();
 
@@ -85,8 +85,8 @@ std::pair<bool, std::string> submit_job_async(std::vector<uint8_t>&& request_dat
 
   // Populate the slot while we hold the `claimed` flag.
   copy_cstr(job_queue[slot].job_id, job_id);
-  job_queue[slot].problem_type = problem_type;
-  job_queue[slot].data_size    = request_data.size();
+  job_queue[slot].problem_category = problem_category;
+  job_queue[slot].data_size        = request_data.size();
   job_queue[slot].cancelled.store(false);
   job_queue[slot].worker_index.store(-1);
   job_queue[slot].data_sent.store(false);
@@ -101,12 +101,12 @@ std::pair<bool, std::string> submit_job_async(std::vector<uint8_t>&& request_dat
   {
     std::lock_guard<std::mutex> lock(tracker_mutex);
     JobInfo info;
-    info.job_id         = job_id;
-    info.status         = JobStatus::QUEUED;
-    info.submit_time    = std::chrono::steady_clock::now();
-    info.problem_type   = problem_type;
-    info.is_blocking    = false;
-    job_tracker[job_id] = std::move(info);
+    info.job_id           = job_id;
+    info.status           = JobStatus::QUEUED;
+    info.submit_time      = std::chrono::steady_clock::now();
+    info.problem_category = problem_category;
+    info.is_blocking      = false;
+    job_tracker[job_id]   = std::move(info);
   }
 
   // Publish: release makes all writes above visible to the dispatch thread.
@@ -122,7 +122,7 @@ std::pair<bool, std::string> submit_job_async(std::vector<uint8_t>&& request_dat
 // header + chunks in pending_chunked_data and marks the slot as is_chunked
 // so the dispatch thread calls write_chunked_request_to_pipe().
 std::pair<bool, std::string> submit_chunked_job_async(PendingChunkedUpload&& chunked_data,
-                                                      uint32_t problem_type)
+                                                      uint32_t problem_category)
 {
   std::string job_id = generate_job_id();
 
@@ -138,8 +138,8 @@ std::pair<bool, std::string> submit_chunked_job_async(PendingChunkedUpload&& chu
   if (slot < 0) { return {false, "Job queue full"}; }
 
   copy_cstr(job_queue[slot].job_id, job_id);
-  job_queue[slot].problem_type = problem_type;
-  job_queue[slot].data_size    = 0;
+  job_queue[slot].problem_category = problem_category;
+  job_queue[slot].data_size        = 0;
   job_queue[slot].cancelled.store(false);
   job_queue[slot].worker_index.store(-1);
   job_queue[slot].data_sent.store(false);
@@ -154,12 +154,12 @@ std::pair<bool, std::string> submit_chunked_job_async(PendingChunkedUpload&& chu
   {
     std::lock_guard<std::mutex> lock(tracker_mutex);
     JobInfo info;
-    info.job_id         = job_id;
-    info.status         = JobStatus::QUEUED;
-    info.submit_time    = std::chrono::steady_clock::now();
-    info.problem_type   = problem_type;
-    info.is_blocking    = false;
-    job_tracker[job_id] = std::move(info);
+    info.job_id           = job_id;
+    info.status           = JobStatus::QUEUED;
+    info.submit_time      = std::chrono::steady_clock::now();
+    info.problem_category = problem_category;
+    info.is_blocking      = false;
+    job_tracker[job_id]   = std::move(info);
   }
 
   job_queue[slot].ready.store(true, std::memory_order_release);

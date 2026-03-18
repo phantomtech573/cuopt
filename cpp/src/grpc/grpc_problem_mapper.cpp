@@ -326,7 +326,7 @@ void populate_chunked_header_lp(const cpu_optimization_problem_t<i_t, f_t>& cpu_
   // Request header
   auto* rh = header->mutable_header();
   rh->set_version(1);
-  rh->set_problem_type(cuopt::remote::LP);
+  rh->set_problem_category(cuopt::remote::LP);
 
   header->set_maximize(cpu_problem.get_sense());
   header->set_objective_scaling_factor(cpu_problem.get_objective_scaling_factor());
@@ -350,7 +350,7 @@ void populate_chunked_header_mip(const cpu_optimization_problem_t<i_t, f_t>& cpu
   // Request header
   auto* rh = header->mutable_header();
   rh->set_version(1);
-  rh->set_problem_type(cuopt::remote::MIP);
+  rh->set_problem_category(cuopt::remote::MIP);
 
   header->set_maximize(cpu_problem.get_sense());
   header->set_objective_scaling_factor(cpu_problem.get_objective_scaling_factor());

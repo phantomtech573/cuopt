@@ -28,7 +28,7 @@ cuopt::remote::SubmitJobRequest build_lp_submit_request(
   // Set header
   auto* header = lp_request->mutable_header();
   header->set_version(1);
-  header->set_problem_type(cuopt::remote::LP);
+  header->set_problem_category(cuopt::remote::LP);
 
   // Map problem data to protobuf
   map_problem_to_proto(cpu_problem, lp_request->mutable_problem());
@@ -53,7 +53,7 @@ cuopt::remote::SubmitJobRequest build_mip_submit_request(
   // Set header
   auto* header = mip_request->mutable_header();
   header->set_version(1);
-  header->set_problem_type(cuopt::remote::MIP);
+  header->set_problem_category(cuopt::remote::MIP);
 
   // Map problem data to protobuf
   map_problem_to_proto(cpu_problem, mip_request->mutable_problem());

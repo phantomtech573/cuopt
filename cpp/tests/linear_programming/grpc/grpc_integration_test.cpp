@@ -1790,7 +1790,7 @@ class ChunkValidationTests : public GrpcIntegrationTestBase {
     cuopt::remote::StartChunkedUploadRequest req;
     auto* hdr = req.mutable_problem_header()->mutable_header();
     hdr->set_version(1);
-    hdr->set_problem_type(cuopt::remote::LP);
+    hdr->set_problem_category(cuopt::remote::LP);
     cuopt::remote::StartChunkedUploadResponse resp;
     auto status = stub_->StartChunkedUpload(&ctx, req, &resp);
     EXPECT_TRUE(status.ok()) << status.error_message();

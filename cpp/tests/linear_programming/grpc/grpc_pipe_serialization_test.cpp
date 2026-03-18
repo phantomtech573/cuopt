@@ -459,7 +459,7 @@ TEST(PipeSerialization, SerializeSubmitRequest)
 {
   SubmitJobRequest request;
   auto* lp = request.mutable_lp_request();
-  lp->mutable_header()->set_problem_type(LP);
+  lp->mutable_header()->set_problem_category(LP);
 
   auto blob = serialize_submit_request_to_pipe(request);
   ASSERT_FALSE(blob.empty());
@@ -467,5 +467,5 @@ TEST(PipeSerialization, SerializeSubmitRequest)
   SubmitJobRequest parsed;
   ASSERT_TRUE(parsed.ParseFromArray(blob.data(), static_cast<int>(blob.size())));
   EXPECT_TRUE(parsed.has_lp_request());
-  EXPECT_EQ(parsed.lp_request().header().problem_type(), LP);
+  EXPECT_EQ(parsed.lp_request().header().problem_category(), LP);
 }

@@ -8,10 +8,10 @@ package cuopt.remote;
 // Protocol version and metadata
 message RequestHeader {
   uint32 version = 1;           // Protocol version (currently 1)
-  ProblemType problem_type = 2; // LP or MIP
+  ProblemCategory problem_category = 2; // LP or MIP
 }
 
-enum ProblemType {
+enum ProblemCategory {
   LP = 0;
   MIP = 1;
 }

@@ -497,7 +497,7 @@ void worker_process(int worker_id)
 
     JobQueueEntry& job = job_queue[job_slot];
     std::string job_id(job.job_id);
-    uint32_t problem_type = job.problem_type;
+    uint32_t problem_category = job.problem_category;
 
     if (job.cancelled) {
       SERVER_LOG_INFO("[Worker %d] Job cancelled before processing: %s", worker_id, job_id.c_str());
@@ -509,7 +509,7 @@ void worker_process(int worker_id)
     SERVER_LOG_INFO("[Worker %d] Processing job: %s (type: %s)",
                     worker_id,
                     job_id.c_str(),
-                    problem_type == cuopt::remote::MIP ? "MIP" : "LP");
+                    problem_category == cuopt::remote::MIP ? "MIP" : "LP");
 
     auto deserialized = read_problem_from_pipe(worker_id, job);
     if (!deserialized.success) {
@@ -527,7 +527,7 @@ void worker_process(int worker_id)
     std::string log_file = get_log_file_path(job_id);
     raft::handle_t handle;
 
-    SolveResult result = (problem_type == cuopt::remote::MIP)
+    SolveResult result = (problem_category == cuopt::remote::MIP)
                            ? run_mip_solve(deserialized, handle, log_file, job_id, worker_id)
                            : run_lp_solve(deserialized, handle, log_file);
 
