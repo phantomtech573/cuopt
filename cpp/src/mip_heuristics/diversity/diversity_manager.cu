@@ -1024,12 +1024,13 @@ std::pair<solution_t<i_t, f_t>, bool> diversity_manager_t<i_t, f_t>::recombine(
   }
   CUOPT_DETERMINISM_LOG(
     "Deterministic recombiner selection: requested=%s selected_index=%d chosen=%s "
-    "enabled_size=%zu last_choice_before=%d",
+    "enabled_size=%zu last_choice_before=%d current_seed=%d",
     recombiner_t<i_t, f_t>::recombiner_name(recombiner_type),
     (int)selected_index,
     recombiner_t<i_t, f_t>::recombiner_name(recombiner),
     recombiner_t<i_t, f_t>::enabled_recombiners.size(),
-    mab_recombiner.last_chosen_option);
+    mab_recombiner.last_chosen_option,
+    (unsigned int)cuopt::seed_generator::get_seed());
   mab_recombiner.set_last_chosen_option(selected_index);
   recombine_stats.add_attempt((recombiner_enum_t)recombiner);
   recombine_stats.start_recombiner_time();

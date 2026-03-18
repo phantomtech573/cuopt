@@ -80,7 +80,8 @@ struct bb_observer_adapter_t {
         context->problem_ptr, context->scaling, temp_sol, info.origin, work_timestamp);
       context->solution_publication.publish_new_best_feasible(payload, dm->timer.elapsed_time());
     }
-    if (context->diversity_manager_ptr != nullptr) {
+    if (context->diversity_manager_ptr != nullptr &&
+        !(context->settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS)) {
       context->diversity_manager_ptr->population.add_external_solution(
         solution, objective, info.origin);
       context->diversity_manager_ptr->rins.new_best_incumbent_callback(solution);
