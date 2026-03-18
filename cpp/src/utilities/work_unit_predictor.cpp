@@ -23,12 +23,8 @@
 #include <limits>
 #include <mip_heuristics/logger.hpp>
 #include <raft/core/nvtx.hpp>
-#include <stdexcept>
 
-#include "models/cpufj_predictor/header.h"
-#include "models/dualsimplex_predictor/header.h"
 #include "models/fj_predictor/header.h"
-#include "models/pdlp_predictor/header.h"
 
 namespace cuopt {
 
@@ -89,8 +85,5 @@ float work_unit_predictor_t<model_t, scaler_t>::predict_scalar(
 }
 
 template class work_unit_predictor_t<fj_predictor, gpu_work_unit_scaler_t>;
-template class work_unit_predictor_t<cpufj_predictor, cpu_work_unit_scaler_t>;
-template class work_unit_predictor_t<dualsimplex_predictor, cpu_work_unit_scaler_t>;
-template class work_unit_predictor_t<pdlp_predictor, gpu_work_unit_scaler_t>;
 
 }  // namespace cuopt

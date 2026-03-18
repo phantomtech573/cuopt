@@ -245,27 +245,23 @@ class recombiner_t {
       enabled_recombiners.erase(recombiner_enum_t::SUB_MIP);
     }
     // submip not supported in deterministic mode yet
-    if (disable_submip_for_determinism) { enabled_recombiners.erase(recombiner_enum_t::SUB_MIP); }
+    if (disable_submip_for_determinism) {
+      // temp, added for debugging
+      enabled_recombiners.erase(recombiner_enum_t::SUB_MIP);
+    }
     recombiner_t::enabled_recombiners =
       std::vector<recombiner_enum_t>(enabled_recombiners.begin(), enabled_recombiners.end());
     cuopt_assert(!recombiner_t::enabled_recombiners.empty(), "No recombiners enabled after init");
-    const char* enabled_0 = recombiner_t::enabled_recombiners.size() > 0
-                              ? recombiner_name(recombiner_t::enabled_recombiners[0])
-                              : "NONE";
-    const char* enabled_1 = recombiner_t::enabled_recombiners.size() > 1
-                              ? recombiner_name(recombiner_t::enabled_recombiners[1])
-                              : "NONE";
-    const char* enabled_2 = recombiner_t::enabled_recombiners.size() > 2
-                              ? recombiner_name(recombiner_t::enabled_recombiners[2])
-                              : "NONE";
-    const char* enabled_3 = recombiner_t::enabled_recombiners.size() > 3
-                              ? recombiner_name(recombiner_t::enabled_recombiners[3])
-                              : "NONE";
+    std::string order_str;
+    for (size_t i = 0; i < recombiner_t::enabled_recombiners.size(); ++i) {
+      if (i > 0) { order_str += ','; }
+      order_str += recombiner_name(recombiner_t::enabled_recombiners[i]);
+    }
     CUOPT_DETERMINISM_LOG(
       "Deterministic recombiner init: expensive_to_fix=%d n_continuous=%d "
       "max_continuous=%zu disable_fp_submip_expensive=%d "
       "disable_submip_continuous=%d disable_submip_deterministic=%d size=%zu "
-      "order=[%s,%s,%s,%s]",
+      "order=[%s]",
       (int)problem.expensive_to_fix_vars,
       (int)n_continuous_vars,
       sub_mip_recombiner_config_t::max_continuous_vars,
@@ -273,10 +269,7 @@ class recombiner_t {
       (int)disable_submip_for_continuous_limit,
       (int)disable_submip_for_determinism,
       recombiner_t::enabled_recombiners.size(),
-      enabled_0,
-      enabled_1,
-      enabled_2,
-      enabled_3);
+      order_str.c_str());
   }
 
   mip_solver_context_t<i_t, f_t>& context;

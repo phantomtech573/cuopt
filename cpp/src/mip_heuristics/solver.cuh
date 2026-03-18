@@ -27,6 +27,7 @@ class mip_solver_t {
   solver_stats_t<i_t, f_t>& get_solver_stats() { return context.stats; }
 
   mip_solver_context_t<i_t, f_t> context;
+  // reference to the original problem
   const problem_t<i_t, f_t>& op_problem_;
   const mip_solver_settings_t<i_t, f_t>& solver_settings_;
   cuopt::termination_checker_t& timer_;

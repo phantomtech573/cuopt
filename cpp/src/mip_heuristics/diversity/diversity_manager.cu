@@ -427,12 +427,15 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
       sol.get_total_excess());
   };
 
-  bool bb_only = (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC_BB);
-  // Debug: Allow disabling GPU heuristics to test B&B tree determinism in isolation
+  const bool deterministic_bb_without_deterministic_heuristics =
+    (context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
+    !(context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS);
   const char* disable_heuristics_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
-  if (bb_only ||
+  if (deterministic_bb_without_deterministic_heuristics ||
       (disable_heuristics_env != nullptr && std::string(disable_heuristics_env) == "1")) {
-    CUOPT_LOG_INFO("GPU heuristics disabled via CUOPT_DISABLE_GPU_HEURISTICS=1");
+    CUOPT_LOG_INFO("GPU heuristics disabled (det_bb_only=%d env=%s)",
+                   (int)deterministic_bb_without_deterministic_heuristics,
+                   disable_heuristics_env ? disable_heuristics_env : "unset");
     if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
         context.branch_and_bound_ptr != nullptr) {
       auto& producer_sync = context.branch_and_bound_ptr->get_producer_sync();

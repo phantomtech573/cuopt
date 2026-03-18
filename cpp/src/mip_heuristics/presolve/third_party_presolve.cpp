@@ -557,6 +557,7 @@ void set_presolve_parameters(papilo::Presolve<f_t>& presolver,
                              int ncols,
                              bool deterministic = false)
 {
+  // It looks like a copy. But this copy has the pointers to relevant variables in papilo
   auto params = presolver.getParameters();
   if (category == problem_category_t::MIP) {
     if (!deterministic) {

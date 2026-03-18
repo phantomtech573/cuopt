@@ -601,11 +601,10 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
     CUOPT_LOG_TRACE(
       "Repair: best_cstr_delta value %d best_damage %f", best_cstr_delta, best_damage);
     i_t best_move_idx;
-    i_t n_of_eligible_candidates  = -1;
-    const double random_draw      = best_cstr_delta > 0 ? rand_double(0, 1, gen) : -1.0;
-    const bool choose_random_move = (best_cstr_delta > 0 && random_draw < p) || is_cycle;
+    i_t n_of_eligible_candidates = -1;
+
     // if the best damage is positive and we are within the prop (paper uses 0.75)
-    if (choose_random_move) {
+    if ((best_cstr_delta > 0 && rand_double(0, 1, gen) < p) || is_cycle) {
       // pick a random move from the candidate list
       best_move_idx = get_random_idx(n_candidates);
     } else {
@@ -616,24 +615,6 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
       cuopt_assert(n_of_eligible_candidates > 0, "");
       CUOPT_LOG_TRACE("n_of_eligible_candidates %d", n_of_eligible_candidates);
       best_move_idx = get_random_idx(n_of_eligible_candidates);
-    }
-    if (timer.deterministic) {
-      CUOPT_DETERMINISM_LOG(
-        "Repair iter choice: iter=%d curr_cstr=%d best_cstr_delta=%d best_damage=%.6f "
-        "choose_random=%d random_draw=%.6f eligible=%d best_move_idx=%d move_var=%d "
-        "move_shift=%.6f move_cdelta=%d move_damage=%.6f",
-        repair_iterations,
-        curr_cstr,
-        best_cstr_delta,
-        best_damage,
-        (int)choose_random_move,
-        random_draw,
-        n_of_eligible_candidates,
-        best_move_idx,
-        candidates.variable_index.element(best_move_idx, handle_ptr->get_stream()),
-        candidates.bound_shift.element(best_move_idx, handle_ptr->get_stream()),
-        candidates.cstr_delta.element(best_move_idx, handle_ptr->get_stream()),
-        candidates.damage.element(best_move_idx, handle_ptr->get_stream()));
     }
     CUOPT_LOG_TRACE("Repair: selected best_move_idx %d var id %d shift %f cstr_delta %d damage %f",
                     best_move_idx,
@@ -685,14 +666,6 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
   bool feasible = h_n_violated_cstr == 0;
   // copy best bounds into problem
   best_bounds.update_to(problem, handle_ptr);
-  if (timer.deterministic) {
-    CUOPT_DETERMINISM_LOG(
-      "Repair work estimate: loops=%d total=%.6f best_violation=%.6f feasible=%d",
-      repair_iterations,
-      total_estimated_work,
-      best_violation,
-      (int)feasible);
-  }
   CUOPT_LOG_DEBUG("Repair: returning with feas: %d vio %f", feasible, best_violation);
   return feasible;
 }

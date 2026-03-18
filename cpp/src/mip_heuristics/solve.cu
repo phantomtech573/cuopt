@@ -97,38 +97,18 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
     solution.compute_objective();  // just to ensure h_user_obj is set
     auto stats = solver_stats_t<i_t, f_t>{};
     stats.set_solution_bound(solution.get_user_objective());
-    // log the objective for scripts which need it
     CUOPT_LOG_INFO("Best feasible: %f", solution.get_user_objective());
-    for (auto callback : settings.get_mip_callbacks()) {
-      auto temp_sol(solution);
-      std::vector<f_t> user_objective_vec(1);
-      std::vector<f_t> user_bound_vec(1);
-      user_objective_vec[0] = solution.get_user_objective();
-      user_bound_vec[0]     = stats.get_solution_bound();
+    {
+      detail::solution_callback_payload_t<i_t, f_t> payload{};
+      payload.user_objective   = solution.get_user_objective();
+      payload.solver_objective = solution.get_objective();
+      detail::solution_t<i_t, f_t> temp_sol(solution);
       if (problem.has_papilo_presolve_data()) {
         problem.papilo_uncrush_assignment(temp_sol.assignment);
       }
-      std::vector<f_t> user_assignment_vec(temp_sol.assignment.size());
-      raft::copy(user_assignment_vec.data(),
-                 temp_sol.assignment.data(),
-                 temp_sol.assignment.size(),
-                 temp_sol.handle_ptr->get_stream());
-      solution.handle_ptr->sync_stream();
-      if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION) {
-        auto get_sol_callback = static_cast<internals::get_solution_callback_t*>(callback);
-        get_sol_callback->get_solution(user_assignment_vec.data(),
-                                       user_objective_vec.data(),
-                                       user_bound_vec.data(),
-                                       get_sol_callback->get_user_data());
-      } else if (callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION_EXT) {
-        internals::mip_solution_callback_info_t callback_info{};
-        auto get_sol_callback_ext = static_cast<internals::get_solution_callback_ext_t*>(callback);
-        get_sol_callback_ext->get_solution(user_assignment_vec.data(),
-                                           user_objective_vec.data(),
-                                           user_bound_vec.data(),
-                                           &callback_info,
-                                           get_sol_callback_ext->get_user_data());
-      }
+      payload.assignment = temp_sol.get_host_assignment();
+      detail::solution_publication_t<i_t, f_t> pub(settings, stats);
+      pub.publish_terminal_solution(payload);
     }
     return solution.get_solution(true, stats, false);
   }

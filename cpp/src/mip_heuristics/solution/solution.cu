@@ -47,8 +47,6 @@ solution_t<i_t, f_t>::solution_t(problem_t<i_t, f_t>& problem_)
     assignment(std::move(get_lower_bounds<f_t>(problem_.variable_bounds, handle_ptr))),
     lower_excess(problem_.n_constraints, handle_ptr->get_stream()),
     upper_excess(problem_.n_constraints, handle_ptr->get_stream()),
-    lower_slack(problem_.n_constraints, handle_ptr->get_stream()),
-    upper_slack(problem_.n_constraints, handle_ptr->get_stream()),
     constraint_value(problem_.n_constraints, handle_ptr->get_stream()),
     obj_val(handle_ptr->get_stream()),
     n_feasible_constraints(handle_ptr->get_stream()),
@@ -64,8 +62,6 @@ solution_t<i_t, f_t>::solution_t(const solution_t<i_t, f_t>& other)
     assignment(other.assignment, handle_ptr->get_stream()),
     lower_excess(other.lower_excess, handle_ptr->get_stream()),
     upper_excess(other.upper_excess, handle_ptr->get_stream()),
-    lower_slack(other.lower_slack, handle_ptr->get_stream()),
-    upper_slack(other.upper_slack, handle_ptr->get_stream()),
     constraint_value(other.constraint_value, handle_ptr->get_stream()),
     obj_val(other.obj_val, handle_ptr->get_stream()),
     n_feasible_constraints(other.n_feasible_constraints, handle_ptr->get_stream()),
@@ -97,8 +93,6 @@ void solution_t<i_t, f_t>::copy_from(const solution_t<i_t, f_t>& other_sol)
   // such
   cuopt::mark_span_as_initialized(make_span(other_sol.lower_excess), handle_ptr->get_stream());
   cuopt::mark_span_as_initialized(make_span(other_sol.upper_excess), handle_ptr->get_stream());
-  cuopt::mark_span_as_initialized(make_span(other_sol.lower_slack), handle_ptr->get_stream());
-  cuopt::mark_span_as_initialized(make_span(other_sol.upper_slack), handle_ptr->get_stream());
   cuopt::mark_span_as_initialized(make_span(other_sol.constraint_value), handle_ptr->get_stream());
   cuopt::mark_span_as_initialized(make_span(other_sol.obj_val), handle_ptr->get_stream());
   cuopt::mark_span_as_initialized(make_span(other_sol.n_feasible_constraints),
@@ -129,8 +123,6 @@ void solution_t<i_t, f_t>::resize_to_problem()
   assignment.resize(problem_ptr->n_variables, handle_ptr->get_stream());
   lower_excess.resize(problem_ptr->n_constraints, handle_ptr->get_stream());
   upper_excess.resize(problem_ptr->n_constraints, handle_ptr->get_stream());
-  lower_slack.resize(problem_ptr->n_constraints, handle_ptr->get_stream());
-  upper_slack.resize(problem_ptr->n_constraints, handle_ptr->get_stream());
   constraint_value.resize(problem_ptr->n_constraints, handle_ptr->get_stream());
   lp_state.prev_primal.resize(problem_ptr->n_variables, handle_ptr->get_stream());
   lp_state.prev_dual.resize(problem_ptr->n_constraints, handle_ptr->get_stream());
@@ -156,10 +148,6 @@ void solution_t<i_t, f_t>::resize_to_original_problem()
                       handle_ptr->get_stream());
   upper_excess.resize(problem_ptr->original_problem_ptr->get_n_constraints(),
                       handle_ptr->get_stream());
-  lower_slack.resize(problem_ptr->original_problem_ptr->get_n_constraints(),
-                     handle_ptr->get_stream());
-  upper_slack.resize(problem_ptr->original_problem_ptr->get_n_constraints(),
-                     handle_ptr->get_stream());
   constraint_value.resize(problem_ptr->original_problem_ptr->get_n_constraints(),
                           handle_ptr->get_stream());
   lp_state.prev_primal.resize(problem_ptr->original_problem_ptr->get_n_variables(),
@@ -174,8 +162,6 @@ void solution_t<i_t, f_t>::resize_copy(const solution_t<i_t, f_t>& other_sol)
   assignment.resize(other_sol.assignment.size(), handle_ptr->get_stream());
   lower_excess.resize(other_sol.lower_excess.size(), handle_ptr->get_stream());
   upper_excess.resize(other_sol.upper_excess.size(), handle_ptr->get_stream());
-  lower_slack.resize(other_sol.lower_slack.size(), handle_ptr->get_stream());
-  upper_slack.resize(other_sol.upper_slack.size(), handle_ptr->get_stream());
   constraint_value.resize(other_sol.constraint_value.size(), handle_ptr->get_stream());
   lp_state.prev_primal.resize(other_sol.lp_state.prev_primal.size(), handle_ptr->get_stream());
   lp_state.prev_dual.resize(other_sol.lp_state.prev_dual.size(), handle_ptr->get_stream());
@@ -190,8 +176,6 @@ typename solution_t<i_t, f_t>::view_t solution_t<i_t, f_t>::view()
   v.assignment       = raft::device_span<f_t>{assignment.data(), assignment.size()};
   v.lower_excess     = raft::device_span<f_t>{lower_excess.data(), lower_excess.size()};
   v.upper_excess     = raft::device_span<f_t>{upper_excess.data(), upper_excess.size()};
-  v.lower_slack      = raft::device_span<f_t>{lower_slack.data(), lower_slack.size()};
-  v.upper_slack      = raft::device_span<f_t>{upper_slack.data(), upper_slack.size()};
   v.constraint_value = raft::device_span<f_t>{constraint_value.data(), constraint_value.size()};
   v.obj_val          = obj_val.data();
   v.n_feasible_constraints = n_feasible_constraints.data();

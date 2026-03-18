@@ -126,16 +126,12 @@ HDI std::pair<f_t, f_t> feas_score_constraint(
     // usually occur on a rarer basis (around 50 iteratiosn to 1 local minimum)
     // likely unreasonable and overkill however
     f_t cstr_weight = bound_idx == 0 ? cstr_left_weight : cstr_right_weight;
-    if (!isfinite(cstr_weight)) {
-      cstr_weight =
-        bound_idx == 0 ? fj.cstr_left_weights[cstr_idx] : fj.cstr_right_weights[cstr_idx];
-    }
-    f_t sign      = bound_idx == 0 ? -1 : 1;
-    f_t rhs       = bounds[bound_idx] * sign;
-    f_t old_lhs   = current_lhs * sign;
-    f_t new_lhs   = (current_lhs + cstr_coeff * delta) * sign;
-    f_t old_slack = rhs - old_lhs;
-    f_t new_slack = rhs - new_lhs;
+    f_t sign        = bound_idx == 0 ? -1 : 1;
+    f_t rhs         = bounds[bound_idx] * sign;
+    f_t old_lhs     = current_lhs * sign;
+    f_t new_lhs     = (current_lhs + cstr_coeff * delta) * sign;
+    f_t old_slack   = rhs - old_lhs;
+    f_t new_slack   = rhs - new_lhs;
 
     cuopt_assert(isfinite(cstr_weight), "invalid weight");
     cuopt_assert(cstr_weight >= 0, "invalid weight");

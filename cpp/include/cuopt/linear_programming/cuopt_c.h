@@ -71,24 +71,9 @@ typedef int32_t cuopt_int_t;
 typedef int64_t cuopt_int_t;
 #endif
 
-typedef enum {
-  CUOPT_MIP_SOLUTION_ORIGIN_UNKNOWN               = 0,
-  CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND_NODE = 1,
-  CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND      = CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND_NODE,
-  CUOPT_MIP_SOLUTION_ORIGIN_FEASIBILITY_JUMP      = 2,
-  CUOPT_MIP_SOLUTION_ORIGIN_LOCAL_SEARCH          = 3,
-  CUOPT_MIP_SOLUTION_ORIGIN_QUICK_FEASIBLE        = 4,
-  CUOPT_MIP_SOLUTION_ORIGIN_USER_INITIAL          = 5,
-  CUOPT_MIP_SOLUTION_ORIGIN_LP_ROUNDING           = 6,
-  CUOPT_MIP_SOLUTION_ORIGIN_RECOMBINATION         = 7,
-  CUOPT_MIP_SOLUTION_ORIGIN_SUB_MIP               = 8,
-  CUOPT_MIP_SOLUTION_ORIGIN_CPU_FEASIBILITY_JUMP  = 9,
-  CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND_DIVING = 10,
-} cuOptMIPSolutionOrigin;
-
 typedef struct {
   uint64_t struct_size;
-  cuOptMIPSolutionOrigin origin;
+  uint32_t origin;
   double work_timestamp;
 } cuOptMIPSolutionCallbackInfo;
 

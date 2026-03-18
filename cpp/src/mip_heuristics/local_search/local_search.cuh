@@ -15,12 +15,6 @@
 #include <mip_heuristics/solver.cuh>
 #include <utilities/work_limit_timer.hpp>
 
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <mutex>
-#include <thread>
-
 namespace cuopt::linear_programming::dual_simplex {
 template <typename i_t, typename f_t>
 class branch_and_bound_t;

@@ -34,9 +34,6 @@
 
 namespace cuopt::linear_programming::detail {
 
-static double local_search_best_obj       = std::numeric_limits<double>::max();
-static population_t<int, double>* pop_ptr = nullptr;
-
 template <typename i_t, typename f_t>
 local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context_,
                                          rmm::device_uvector<f_t>& lp_optimal_solution_)
@@ -64,12 +61,8 @@ local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context
     cpu_fj.fj_ptr = &fj;
   }
   scratch_cpu_fj_on_lp_opt.fj_ptr = &fj;
-  CUOPT_DETERMINISM_LOG(
-    "Deterministic solve start local_search state: seed_state=%lld "
-    "local_search_best_obj=%.16e pop_ptr_set=%d",
-    (long long)cuopt::seed_generator::peek_seed(),
-    local_search_best_obj,
-    (int)(pop_ptr != nullptr));
+  CUOPT_DETERMINISM_LOG("Deterministic solve start local_search state: seed_state=%lld",
+                        (long long)cuopt::seed_generator::peek_seed());
 }
 
 template <typename i_t, typename f_t>
@@ -77,8 +70,6 @@ void local_search_t<i_t, f_t>::start_cpufj_scratch_threads(population_t<i_t, f_t
 {
   cuopt_assert(!(context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS),
                "Scratch CPUFJ must remain opportunistic-only");
-  pop_ptr = &population;
-
   std::vector<f_t> default_weights(context.problem_ptr->n_constraints, 1.);
 
   solution_t<i_t, f_t> solution(*context.problem_ptr);
@@ -100,19 +91,9 @@ void local_search_t<i_t, f_t>::start_cpufj_scratch_threads(population_t<i_t, f_t
 
     cpu_fj.fj_cpu->log_prefix = "******* scratch " + std::to_string(counter) + ": ";
     cpu_fj.fj_cpu->improvement_callback =
-      [&population, problem_ptr = context.problem_ptr](
-        f_t obj, const std::vector<f_t>& h_vec, double /*work_units*/) {
+      [&population](f_t obj, const std::vector<f_t>& h_vec, double /*work_units*/) {
         population.add_external_solution(
           h_vec, obj, internals::mip_solution_origin_t::CPU_FEASIBILITY_JUMP);
-        (void)problem_ptr;
-        if (obj < local_search_best_obj) {
-          CUOPT_LOG_TRACE("******* New local search best obj %g, best overall %g",
-                          problem_ptr->get_user_obj_from_solver_obj(obj),
-                          problem_ptr->get_user_obj_from_solver_obj(
-                            population.is_feasible() ? population.best_feasible().get_objective()
-                                                     : std::numeric_limits<f_t>::max()));
-          local_search_best_obj = obj;
-        }
       };
     counter++;
   };
@@ -128,7 +109,6 @@ void local_search_t<i_t, f_t>::start_cpufj_lptopt_scratch_threads(
 {
   cuopt_assert(!(context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS),
                "LP-opt CPUFJ scratch must remain opportunistic-only");
-  pop_ptr = &population;
 
   std::vector<f_t> default_weights(context.problem_ptr->n_constraints, 1.);
 
@@ -140,17 +120,9 @@ void local_search_t<i_t, f_t>::start_cpufj_lptopt_scratch_threads(
     solution_lp, default_weights, default_weights, 0., context.preempt_heuristic_solver_);
   scratch_cpu_fj_on_lp_opt.fj_cpu->log_prefix = "******* scratch on LP optimal: ";
   scratch_cpu_fj_on_lp_opt.fj_cpu->improvement_callback =
-    [this, &population](f_t obj, const std::vector<f_t>& h_vec, double /*work_units*/) {
+    [&population](f_t obj, const std::vector<f_t>& h_vec, double /*work_units*/) {
       population.add_external_solution(
         h_vec, obj, internals::mip_solution_origin_t::CPU_FEASIBILITY_JUMP);
-      if (obj < local_search_best_obj) {
-        CUOPT_LOG_DEBUG("******* New local search best obj %g, best overall %g",
-                        context.problem_ptr->get_user_obj_from_solver_obj(obj),
-                        context.problem_ptr->get_user_obj_from_solver_obj(
-                          population.is_feasible() ? population.best_feasible().get_objective()
-                                                   : std::numeric_limits<f_t>::max()));
-        local_search_best_obj = obj;
-      }
     };
 
   // default weights

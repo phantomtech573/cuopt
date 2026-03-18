@@ -66,7 +66,7 @@ class c_get_solution_callback_ext_t : public cuopt::internals::get_solution_call
     cuOptMIPSolutionCallbackInfo c_callback_info{};
     c_callback_info.struct_size = sizeof(cuOptMIPSolutionCallbackInfo);
     if (callback_info != nullptr) {
-      c_callback_info.origin         = static_cast<cuOptMIPSolutionOrigin>(callback_info->origin);
+      c_callback_info.origin         = (uint32_t)callback_info->origin;
       c_callback_info.work_timestamp = callback_info->work_timestamp;
     } else {
       c_callback_info.origin         = CUOPT_MIP_SOLUTION_ORIGIN_UNKNOWN;

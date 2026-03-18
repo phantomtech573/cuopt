@@ -30,60 +30,6 @@ constexpr double infeasibility_balance_ratio = 1.1;
 constexpr double halving_skip_ratio          = 0.75;
 
 template <typename i_t, typename f_t>
-void assert_solution_matches_population_problem(const char* location,
-                                                const char* role,
-                                                const problem_t<i_t, f_t>* population_problem,
-                                                const solution_t<i_t, f_t>& sol)
-{
-  cuopt_assert(population_problem != nullptr, "Population problem must not be null");
-  cuopt_assert(sol.problem_ptr != nullptr, "Solution problem must not be null");
-  const size_t assignment_size = sol.assignment.size();
-  const size_t solution_vars   = (size_t)sol.problem_ptr->n_variables;
-  const size_t population_vars = (size_t)population_problem->n_variables;
-  if (assignment_size != solution_vars || assignment_size != population_vars ||
-      sol.problem_ptr != population_problem) {
-    CUOPT_LOG_ERROR(
-      "%s: %s shape mismatch assignment=%zu solution_vars=%zu population_vars=%zu sol_hash=0x%x "
-      "solution_problem=0x%x population_problem=0x%x",
-      location,
-      role,
-      assignment_size,
-      solution_vars,
-      population_vars,
-      sol.get_hash(),
-      sol.problem_ptr->get_fingerprint(),
-      population_problem->get_fingerprint());
-  }
-  cuopt_assert(assignment_size == solution_vars, "Solution assignment must match its problem size");
-  cuopt_assert(assignment_size == population_vars,
-               "Solution assignment must match the population problem size");
-  cuopt_assert(sol.problem_ptr == population_problem,
-               "Solution problem must match the population problem");
-}
-
-template <typename i_t, typename f_t>
-void assert_solutions_compatible_for_similarity(const char* location,
-                                                const problem_t<i_t, f_t>* population_problem,
-                                                const solution_t<i_t, f_t>& lhs,
-                                                const char* lhs_role,
-                                                const solution_t<i_t, f_t>& rhs,
-                                                const char* rhs_role)
-{
-  assert_solution_matches_population_problem(location, lhs_role, population_problem, lhs);
-  assert_solution_matches_population_problem(location, rhs_role, population_problem, rhs);
-  if (lhs.assignment.size() != rhs.assignment.size()) {
-    CUOPT_LOG_ERROR("%s: pair mismatch lhs_size=%zu rhs_size=%zu lhs_hash=0x%x rhs_hash=0x%x",
-                    location,
-                    lhs.assignment.size(),
-                    rhs.assignment.size(),
-                    lhs.get_hash(),
-                    rhs.get_hash());
-  }
-  cuopt_assert(lhs.assignment.size() == rhs.assignment.size(),
-               "Similarity check requires equal assignment sizes");
-}
-
-template <typename i_t, typename f_t>
 population_t<i_t, f_t>::population_t(std::string const& name_,
                                      mip_solver_context_t<i_t, f_t>& context_,
                                      diversity_manager_t<i_t, f_t>& dm_,
@@ -104,7 +50,6 @@ population_t<i_t, f_t>::population_t(std::string const& name_,
     timer(0.0, cuopt::termination_checker_t::root_tag_t{})
 {
   best_feasible_objective = std::numeric_limits<f_t>::max();
-  context.solution_publication.reset_published_best();
 }
 
 template <typename i_t>
@@ -329,98 +274,39 @@ template <typename i_t, typename f_t>
 void population_t<i_t, f_t>::run_solution_callbacks(
   solution_t<i_t, f_t>& sol, internals::mip_solution_origin_t callback_origin)
 {
-  bool better_solution_found = is_better_than_best_feasible(sol);
-  auto user_callbacks        = context.settings.get_mip_callbacks();
-  if (better_solution_found) {
-    const bool deterministic_callback_owner_is_bb =
-      (context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
-      context.branch_and_bound_ptr != nullptr;
-    if (deterministic_callback_owner_is_bb) {
-      cuopt_assert(sol.get_feasible(),
-                   "Deterministic heuristic posting requires a feasible solution");
+  if (is_better_than_best_feasible(sol)) {
+    const bool deterministic_bb = (context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
+                                  context.branch_and_bound_ptr != nullptr;
+
+    if (deterministic_bb) {
       const double work_timestamp = context.gpu_heur_loop.current_producer_work();
       cuopt_assert(std::isfinite(work_timestamp),
                    "Deterministic heuristic work timestamp must be finite");
       context.branch_and_bound_ptr->queue_external_solution_deterministic(
         sol.get_host_assignment(), sol.get_user_objective(), work_timestamp, callback_origin);
     } else {
-      if (problem_ptr->branch_and_bound_callback != nullptr) {
-        problem_ptr->branch_and_bound_callback(sol.get_host_assignment());
-      }
       const double work_timestamp = context.gpu_heur_loop.current_work();
-      const auto payload =
-        make_solution_callback_payload_from_solution<i_t, f_t>(problem_ptr,
-                                                               context.settings,
-                                                               context.scaling,
-                                                               context.gpu_heur_loop,
-                                                               sol,
-                                                               callback_origin,
-                                                               work_timestamp);
-      const bool published =
-        context.solution_publication.publish_new_best_feasible(payload, timer.elapsed_time());
-      cuopt_assert(published, "New best feasible solution should publish to GET callbacks");
-      best_feasible_objective = sol.get_objective();
-    }
-  }
+      const auto payload          = context.solution_publication.build_payload(
+        context.problem_ptr, context.scaling, sol, callback_origin, work_timestamp);
+      context.solution_publication.publish_new_best_feasible(payload, timer.elapsed_time());
 
-  for (auto callback : user_callbacks) {
-    if (callback->get_type() == internals::base_solution_callback_type::SET_SOLUTION) {
-      auto set_sol_callback       = static_cast<internals::set_solution_callback_t*>(callback);
-      f_t user_bound              = context.stats.get_solution_bound();
-      auto callback_num_variables = problem_ptr->original_problem_ptr->get_n_variables();
-      rmm::device_uvector<f_t> incumbent_assignment(callback_num_variables,
-                                                    sol.handle_ptr->get_stream());
-      solution_t<i_t, f_t> outside_sol(sol);
-      rmm::device_scalar<f_t> d_outside_sol_objective(sol.handle_ptr->get_stream());
-      auto inf = std::numeric_limits<f_t>::infinity();
-      d_outside_sol_objective.set_value_async(inf, sol.handle_ptr->get_stream());
-      sol.handle_ptr->sync_stream();
-      std::vector<f_t> h_incumbent_assignment(incumbent_assignment.size());
-      std::vector<f_t> h_outside_sol_objective(1, inf);
-      std::vector<f_t> h_user_bound(1, user_bound);
-      set_sol_callback->set_solution(h_incumbent_assignment.data(),
-                                     h_outside_sol_objective.data(),
-                                     h_user_bound.data(),
-                                     set_sol_callback->get_user_data());
-      f_t outside_sol_objective = h_outside_sol_objective[0];
-      // The callback might be called without setting any valid solution or objective which triggers
-      // asserts
-      if (outside_sol_objective == inf) { return; }
-      d_outside_sol_objective.set_value_async(outside_sol_objective, sol.handle_ptr->get_stream());
-      raft::copy(incumbent_assignment.data(),
-                 h_incumbent_assignment.data(),
-                 incumbent_assignment.size(),
-                 sol.handle_ptr->get_stream());
-
-      if (context.settings.mip_scaling) { context.scaling.scale_solutions(incumbent_assignment); }
-      bool is_valid = problem_ptr->pre_process_assignment(incumbent_assignment);
-      if (!is_valid) { return; }
-      cuopt_assert(outside_sol.assignment.size() == incumbent_assignment.size(),
-                   "Incumbent assignment size mismatch");
-      raft::copy(outside_sol.assignment.data(),
-                 incumbent_assignment.data(),
-                 incumbent_assignment.size(),
-                 sol.handle_ptr->get_stream());
-      outside_sol.compute_feasibility();
-
-      CUOPT_LOG_DEBUG("Injected solution feasibility =  %d objective = %g excess = %g",
-                      outside_sol.get_feasible(),
-                      outside_sol.get_user_objective(),
-                      outside_sol.get_total_excess());
-      if (std::abs(outside_sol.get_user_objective() - outside_sol_objective) > 1e-6) {
-        cuopt_func_call(
-          CUOPT_LOG_DEBUG("External solution objective mismatch: outside_sol.get_user_objective() "
-                          "= %g, outside_sol_objective = %g",
-                          outside_sol.get_user_objective(),
-                          outside_sol_objective));
+      if (context.branch_and_bound_ptr != nullptr &&
+          context.problem_ptr->branch_and_bound_callback != nullptr) {
+        context.problem_ptr->branch_and_bound_callback(sol.get_host_assignment());
       }
-      cuopt_assert(std::abs(outside_sol.get_user_objective() - outside_sol_objective) <= 1e-6,
-                   "External solution objective mismatch");
-      auto h_outside_sol = outside_sol.get_host_assignment();
-      add_external_solution(
-        h_outside_sol, outside_sol.get_objective(), internals::mip_solution_origin_t::USER_INITIAL);
     }
+
+    best_feasible_objective = sol.get_objective();
   }
+
+  context.solution_injection.invoke_set_solution_callbacks(
+    problem_ptr,
+    context.scaling,
+    sol,
+    [this](
+      const std::vector<f_t>& assignment, f_t objective, internals::mip_solution_origin_t origin) {
+      add_external_solution(assignment, objective, origin);
+    });
 }
 
 template <typename i_t, typename f_t>

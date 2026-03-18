@@ -55,7 +55,7 @@ struct recombiner_work_normalized_reward_t {
   double operator()(double factor) const
   {
     // normal recombiners take 2000 ms
-    if (deterministic) {
+    if (!deterministic) {
       double time_in_miliseconds = work;
       return factor * (std::max(0.1, 4.0 - (time_in_miliseconds / 2000)));
     } else {

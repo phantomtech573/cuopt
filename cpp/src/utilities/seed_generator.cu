@@ -8,3 +8,4 @@
 #include <utilities/seed_generator.cuh>
 
 int64_t cuopt::seed_generator::base_seed_ = 0;
+std::atomic<int64_t> cuopt::seed_generator::epoch_{0};

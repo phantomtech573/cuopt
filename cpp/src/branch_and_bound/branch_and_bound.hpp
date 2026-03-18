@@ -93,22 +93,7 @@ class branch_and_bound_t {
                                     f_t user_objective,
                                     i_t iterations)
   {
-    CUOPT_DETERMINISM_LOG(
-      settings_.log,
-      "Deterministic root callback enter: guard=%d crossover_flag=%d current_root_obj=%.16e "
-      "callback_solver_obj=%.16e callback_user_obj=%.16e primal_size=%zu dual_size=%zu "
-      "reduced_cost_size=%zu iterations=%d\n",
-      (int)is_root_solution_set,
-      (int)root_crossover_solution_set_.load(std::memory_order_acquire),
-      root_objective_,
-      objective,
-      user_objective,
-      primal.size(),
-      dual.size(),
-      reduced_costs.size(),
-      iterations);
     if (!is_root_solution_set) {
-      const f_t previous_root_objective   = root_objective_;
       root_crossover_soln_.x              = primal;
       root_crossover_soln_.y              = dual;
       root_crossover_soln_.z              = reduced_costs;
@@ -117,24 +102,6 @@ class branch_and_bound_t {
       root_crossover_soln_.user_objective = user_objective;
       root_crossover_soln_.iterations     = iterations;
       root_crossover_solution_set_.store(true, std::memory_order_release);
-      CUOPT_DETERMINISM_LOG(
-        settings_.log,
-        "Deterministic root callback accept: root_obj_before=%.16e root_obj_after=%.16e "
-        "callback_solver_obj=%.16e callback_user_obj=%.16e iterations=%d\n",
-        previous_root_objective,
-        root_objective_,
-        objective,
-        user_objective,
-        iterations);
-    } else {
-      CUOPT_DETERMINISM_LOG(
-        settings_.log,
-        "Deterministic root callback ignore: current_root_obj=%.16e callback_solver_obj=%.16e "
-        "callback_user_obj=%.16e iterations=%d\n",
-        root_objective_,
-        objective,
-        user_objective,
-        iterations);
     }
   }
 

@@ -14,6 +14,8 @@
 #include <type_traits>
 
 #include <cuopt/linear_programming/constants.h>
+#include <cuopt/linear_programming/cuopt_c.h>
+
 namespace cuopt {
 namespace internals {
 
@@ -23,19 +25,19 @@ class Callback {
 };
 
 enum class mip_solution_origin_t : uint32_t {
-  UNKNOWN = 0,
-  BRANCH_AND_BOUND_NODE,
-  BRANCH_AND_BOUND = BRANCH_AND_BOUND_NODE,
-  FEASIBILITY_JUMP,
-  LOCAL_SEARCH,
-  QUICK_FEASIBLE,
-  USER_INITIAL,
-  LP_ROUNDING,
-  RECOMBINATION,
-  SUB_MIP,
-  CPU_FEASIBILITY_JUMP,
-  BRANCH_AND_BOUND_DIVING,
-  RINS,
+  UNKNOWN                 = CUOPT_MIP_SOLUTION_ORIGIN_UNKNOWN,
+  BRANCH_AND_BOUND_NODE   = CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND,
+  BRANCH_AND_BOUND_DIVING = CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND_DIVING,
+  FEASIBILITY_JUMP        = CUOPT_MIP_SOLUTION_ORIGIN_FEASIBILITY_JUMP,
+  CPU_FEASIBILITY_JUMP    = CUOPT_MIP_SOLUTION_ORIGIN_CPU_FEASIBILITY_JUMP,
+  LOCAL_SEARCH            = CUOPT_MIP_SOLUTION_ORIGIN_LOCAL_SEARCH,
+  QUICK_FEASIBLE          = CUOPT_MIP_SOLUTION_ORIGIN_QUICK_FEASIBLE,
+  LP_ROUNDING             = CUOPT_MIP_SOLUTION_ORIGIN_LP_ROUNDING,
+  RECOMBINATION           = CUOPT_MIP_SOLUTION_ORIGIN_RECOMBINATION,
+  SUB_MIP                 = CUOPT_MIP_SOLUTION_ORIGIN_SUB_MIP,
+  USER_INITIAL            = CUOPT_MIP_SOLUTION_ORIGIN_USER_INITIAL,
+  USER_INJECTED           = CUOPT_MIP_SOLUTION_ORIGIN_USER_INJECTED,
+  RINS                    = CUOPT_MIP_SOLUTION_ORIGIN_RINS,
 };
 
 constexpr const char* mip_solution_origin_to_string(mip_solution_origin_t origin)
@@ -52,6 +54,8 @@ constexpr const char* mip_solution_origin_to_string(mip_solution_origin_t origin
     case mip_solution_origin_t::RECOMBINATION: return "recombination";
     case mip_solution_origin_t::SUB_MIP: return "sub_mip";
     case mip_solution_origin_t::CPU_FEASIBILITY_JUMP: return "cpu_feasibility_jump";
+    case mip_solution_origin_t::USER_INJECTED: return "user_injected";
+    case mip_solution_origin_t::RINS: return "rins";
     default: return "unknown";
   }
 }
@@ -62,6 +66,8 @@ struct mip_solution_callback_info_t {
   double work_timestamp{-1.0};
 };
 
+// get_solution_ext was added to support passing additional information to the get_solution callback
+// without inducing a breaking ABI change
 enum class base_solution_callback_type { GET_SOLUTION, GET_SOLUTION_EXT, SET_SOLUTION };
 
 class base_solution_callback_t : public Callback {

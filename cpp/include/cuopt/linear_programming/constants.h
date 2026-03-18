@@ -78,8 +78,10 @@
 #define CUOPT_PDLP_PRECISION                  "pdlp_precision"
 
 /* @brief MIP determinism mode flags (bitset) */
-#define CUOPT_DETERMINISM_NONE           0x0
-#define CUOPT_DETERMINISM_BB             0x1
+#define CUOPT_DETERMINISM_NONE 0x0
+#define CUOPT_DETERMINISM_BB \
+  0x1  // matches the previous value of '1' which was for B&B-only determinism in the previous
+       // rleease
 #define CUOPT_DETERMINISM_GPU_HEURISTICS 0x2
 #define CUOPT_DETERMINISM_FULL           (CUOPT_DETERMINISM_BB | CUOPT_DETERMINISM_GPU_HEURISTICS)
 
@@ -88,6 +90,21 @@
 #define CUOPT_MODE_DETERMINISTIC                CUOPT_DETERMINISM_FULL
 #define CUOPT_MODE_DETERMINISTIC_BB             CUOPT_DETERMINISM_BB
 #define CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS CUOPT_DETERMINISM_GPU_HEURISTICS
+
+/* @brief MIP solution origin constants */
+#define CUOPT_MIP_SOLUTION_ORIGIN_UNKNOWN                 0
+#define CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND        1
+#define CUOPT_MIP_SOLUTION_ORIGIN_BRANCH_AND_BOUND_DIVING 2
+#define CUOPT_MIP_SOLUTION_ORIGIN_FEASIBILITY_JUMP        3
+#define CUOPT_MIP_SOLUTION_ORIGIN_CPU_FEASIBILITY_JUMP    4
+#define CUOPT_MIP_SOLUTION_ORIGIN_LOCAL_SEARCH            5
+#define CUOPT_MIP_SOLUTION_ORIGIN_QUICK_FEASIBLE          6
+#define CUOPT_MIP_SOLUTION_ORIGIN_LP_ROUNDING             7
+#define CUOPT_MIP_SOLUTION_ORIGIN_RECOMBINATION           8
+#define CUOPT_MIP_SOLUTION_ORIGIN_SUB_MIP                 9
+#define CUOPT_MIP_SOLUTION_ORIGIN_USER_INITIAL            10
+#define CUOPT_MIP_SOLUTION_ORIGIN_USER_INJECTED           11
+#define CUOPT_MIP_SOLUTION_ORIGIN_RINS                    12
 
 /* @brief LP/MIP termination status constants */
 #define CUOPT_TERIMINATION_STATUS_NO_TERMINATION   0

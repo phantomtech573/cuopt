@@ -6,6 +6,7 @@
 /* clang-format on */
 
 #pragma once
+#include <atomic>
 #include <raft/random/rng_device.cuh>
 #include <utilities/cuda_helpers.cuh>
 
@@ -13,20 +14,23 @@ namespace cuopt {
 
 class seed_generator {
   static int64_t base_seed_;
+  // Monotonically increasing epoch; incremented on every set_seed() call.
+  // Thread-local state compares against this to detect resets, even when
+  // the same seed value is set again (e.g., repeated solve_mip() calls).
+  static std::atomic<int64_t> epoch_;
 
   struct thread_state_t {
     int64_t counter{0};
-    int64_t last_base{0};
-    bool initialized{false};
+    int64_t last_epoch{-1};
   };
 
   static thread_state_t& local_state()
   {
     thread_local thread_state_t state;
-    if (!state.initialized || state.last_base != base_seed_) {
-      state.counter     = base_seed_;
-      state.last_base   = base_seed_;
-      state.initialized = true;
+    int64_t current_epoch = epoch_.load(std::memory_order_acquire);
+    if (state.last_epoch != current_epoch) {
+      state.counter    = base_seed_;
+      state.last_epoch = current_epoch;
     }
     return state;
   }
@@ -40,6 +44,7 @@ class seed_generator {
 #else
     base_seed_ = static_cast<int64_t>(seed);
 #endif
+    epoch_.fetch_add(1, std::memory_order_release);
   }
   template <typename arg0, typename arg1, typename... args>
   static void set_seed(arg0 seed0, arg1 seed1, args... seeds)

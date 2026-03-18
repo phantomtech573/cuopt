@@ -51,30 +51,6 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   raft::common::nvtx::range fun_scope("get_relaxed_lp_solution");
   static std::atomic<uint64_t> lp_call_counter{0};
   const uint64_t lp_call_id = lp_call_counter.fetch_add(1, std::memory_order_relaxed);
-  // auto function_start_time = std::chrono::high_resolution_clock::now();
-
-  // // === PDLP PREDICTOR FEATURES - START ===
-  // CUOPT_LOG_INFO("PDLP_FEATURES: n_variables=%d n_constraints=%d nnz=%lu",
-  //                op_problem.n_variables,
-  //                op_problem.n_constraints,
-  //                op_problem.coefficients.size());
-
-  // CUOPT_LOG_INFO("PDLP_FEATURES: sparsity=%.6f nnz_stddev=%.6f unbalancedness=%.6f",
-  //                op_problem.sparsity,
-  //                op_problem.nnz_stddev,
-  //                op_problem.unbalancedness);
-
-  // CUOPT_LOG_INFO("PDLP_FEATURES: has_warm_start=%d time_limit=%.6f iteration_limit=%d",
-  //                settings.has_initial_primal,
-  //                settings.time_limit,
-  //                settings.iteration_limit);
-
-  // CUOPT_LOG_INFO("PDLP_FEATURES: tolerance=%.10f check_infeasibility=%d
-  // return_first_feasible=%d",
-  //                settings.tolerance,
-  //                settings.check_infeasibility,
-  //                settings.return_first_feasible);
-  // // === PDLP PREDICTOR FEATURES - END ===
 
   pdlp_solver_settings_t<i_t, f_t> pdlp_settings{};
   pdlp_settings.detect_infeasibility = settings.check_infeasibility;
@@ -109,13 +85,14 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
     } else {
       estim_iters = std::numeric_limits<int>::max();
     }
-    CUOPT_LOG_DEBUG("estimated iterations %d for work limit %f", estim_iters, settings.work_limit);
+    CUOPT_DETERMINISM_LOG(
+      "estimated iterations %d for work limit %f", estim_iters, settings.work_limit);
     pdlp_settings.iteration_limit  = estim_iters;
     pdlp_settings.time_limit       = std::numeric_limits<double>::infinity();
     pdlp_settings.pdlp_solver_mode = pdlp_solver_mode_t::Stable2;
     pdlp_settings.presolver        = presolver_t::None;
   }
-  CUOPT_LOG_DEBUG(
+  CUOPT_DETERMINISM_LOG(
     "LP call %lu config: det=%d work_limit=%.6f time_limit=%.6f iter_limit=%d method=%d mode=%d "
     "presolver=%d save_state=%d has_initial=%d assignment_hash=0x%x",
     lp_call_id,
@@ -134,12 +111,12 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   pdlp_solver_t<i_t, f_t> lp_solver(op_problem, pdlp_settings);
   if (settings.has_initial_primal) {
     i_t prev_size = lp_state.prev_dual.size();
-    // CUOPT_LOG_DEBUG(
-    //   "setting initial primal solution of size %d dual size %d problem vars %d cstrs %d",
-    //   assignment.size(),
-    //   lp_state.prev_dual.size(),
-    //   op_problem.n_variables,
-    //   op_problem.n_constraints);
+    CUOPT_LOG_TRACE(
+      "setting initial primal solution of size %d dual size %d problem vars %d cstrs %d",
+      assignment.size(),
+      lp_state.prev_dual.size(),
+      op_problem.n_variables,
+      op_problem.n_constraints);
     lp_state.resize(op_problem, op_problem.handle_ptr->get_stream());
     clamp_within_var_bounds(assignment, &op_problem, op_problem.handle_ptr);
     // The previous dual sometimes contain invalid values w.r.t current problem
@@ -148,6 +125,7 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
                      lp_state.prev_dual.data(),
                      lp_state.prev_dual.data() + op_problem.n_constraints,
                      [prev_size, dual = make_span(lp_state.prev_dual)] __device__(i_t i) {
+                       // early exit to avoid a false positive in compute-sanitizer initcheck
                        if (i >= prev_size) { return 0.0; }
                        f_t x = dual[i];
                        if (!isfinite(x)) { return 0.0; }
@@ -166,19 +144,16 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   CUOPT_DETERMINISM_LOG(
     "prev solution sizes primal=%lu dual=%lu", assignment.size(), lp_state.prev_dual.size());
   if (determinism_mode) {
-    auto scaling_hash = lp_solver.get_scaling_hash();
     auto init_primal_hash =
       detail::compute_hash(make_span(assignment), op_problem.handle_ptr->get_stream());
     auto init_dual_hash =
       settings.has_initial_primal
         ? detail::compute_hash(make_span(lp_state.prev_dual), op_problem.handle_ptr->get_stream())
         : 0u;
-    CUOPT_DETERMINISM_LOG(
-      "LP call %lu pre-solve state: scaling_hash=0x%x init_primal_hash=0x%x init_dual_hash=0x%x",
-      lp_call_id,
-      scaling_hash,
-      init_primal_hash,
-      init_dual_hash);
+    CUOPT_DETERMINISM_LOG("LP call %lu pre-solve state: init_primal_hash=0x%x init_dual_hash=0x%x",
+                          lp_call_id,
+                          init_primal_hash,
+                          init_dual_hash);
   }
   auto solver_response = lp_solver.run_solver(start_time);
   CUOPT_DETERMINISM_LOG("post LP primal size %lu", solver_response.get_primal_solution().size());

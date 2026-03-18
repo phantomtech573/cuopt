@@ -678,7 +678,6 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
     const i_t n_tasks = std::min<i_t>(4 * settings.num_threads, fractional.size());
     std::vector<cuopt::work_limit_context_t> task_work_contexts;
     if (use_work_accounting) {
-      task_work_contexts.reserve(n_tasks);
       for (i_t k = 0; k < n_tasks; ++k) {
         task_work_contexts.emplace_back("sb_task_" + std::to_string(k));
         task_work_contexts.back().deterministic = true;
@@ -721,6 +720,8 @@ void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
       }
     }
 
+    // record pre-exploration work by taking the max work performed by any task
+    // important to aggregate by task and not thread, as openmp uses dynamic scheduling here
     if (use_work_accounting) {
       double max_work = 0.0;
       for (auto& ctx : task_work_contexts) {

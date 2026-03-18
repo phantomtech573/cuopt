@@ -8,7 +8,6 @@
 #pragma once
 
 #include <dual_simplex/presolve.hpp>
-#include <utilities/memory_instrumentation.hpp>
 
 namespace cuopt::linear_programming::dual_simplex {
 

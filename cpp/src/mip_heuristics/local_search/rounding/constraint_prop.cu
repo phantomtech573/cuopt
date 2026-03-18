@@ -761,7 +761,7 @@ bool constraint_prop_t<i_t, f_t>::run_repair_procedure(problem_t<i_t, f_t>& prob
                                                        work_limit_timer_t& timer,
                                                        const raft::handle_t* handle_ptr)
 {
-  CUOPT_LOG_DEBUG("Running repair procedure");
+  CUOPT_LOG_TRACE("Running repair procedure");
 
   // select the first probing value
   i_t select = 0;
@@ -842,7 +842,6 @@ bool constraint_prop_t<i_t, f_t>::is_problem_ii(problem_t<i_t, f_t>& problem)
 {
   bounds_update.calculate_activity_on_problem_bounds(problem);
   bounds_update.calculate_infeasible_redundant_constraints(problem);
-  multi_probe.calculate_activity(problem, problem.handle_ptr);
   bool problem_ii = bounds_update.infeas_constraints_count > 0;
   return problem_ii;
 }
@@ -942,12 +941,10 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   bool timeout_happened          = false;
   i_t n_failed_repair_iterations = 0;
   while (set_count < unset_integer_vars.size()) {
-    auto iter_start_time = std::chrono::high_resolution_clock::now();
     CUOPT_LOG_TRACE("n_set_vars %d vars to set %lu", set_count, unset_integer_vars.size());
     CUOPT_LOG_TRACE("unset_integer_vars size %lu", unset_integer_vars.size());
     const size_t set_count_before = set_count;
     update_host_assignment(sol);
-    auto after_update_host_assignment = std::chrono::high_resolution_clock::now();
     if (max_timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("Second time limit is reached returning nearest rounding!");
       collapse_crossing_bounds(*sol.problem_ptr, *orig_sol.problem_ptr, sol.handle_ptr);
@@ -978,31 +975,15 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
       sort_by_implied_slack_consumption(
         sol, make_span(unset_integer_vars, set_count, unset_integer_vars.size()), problem_ii);
     }
-    auto after_sort = std::chrono::high_resolution_clock::now();
     std::vector<i_t> host_vars_to_set(n_vars_to_set);
     raft::copy(host_vars_to_set.data(),
                unset_integer_vars.data() + set_count,
                n_vars_to_set,
                sol.handle_ptr->get_stream());
-
-    CUOPT_LOG_TRACE("host_vars_to_set hash 0x%x", detail::compute_hash(host_vars_to_set));
-
     auto var_probe_vals =
       generate_bulk_rounding_vector(sol, orig_sol, host_vars_to_set, probing_config);
-    auto after_generate_probe_vals = std::chrono::high_resolution_clock::now();
-
-    CUOPT_LOG_TRACE("var_probe_vals hash 1 0x%x, hash 2 0x%x, hash 3 0x%x",
-                    detail::compute_hash(std::get<0>(var_probe_vals)),
-                    detail::compute_hash(std::get<1>(var_probe_vals)),
-                    detail::compute_hash(std::get<2>(var_probe_vals)));
     probe(
       sol, orig_sol.problem_ptr, var_probe_vals, &set_count, unset_integer_vars, probing_config);
-    auto after_probe = std::chrono::high_resolution_clock::now();
-    CUOPT_LOG_TRACE(
-      "post probe, set count %d, unset var hash 0x%x, size %lu",
-      (int)set_count,
-      detail::compute_hash(make_span(unset_integer_vars), sol.handle_ptr->get_stream()),
-      unset_integer_vars.size());
     [[maybe_unused]] bool repair_attempted = false;
     bool bounds_repaired                   = false;
     i_t n_fixed_vars                       = 0;
@@ -1012,56 +993,9 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
       work_limit_timer_t repair_timer(
         context.gpu_heur_loop, timer.remaining_time() / 5, *context.termination);
       save_bounds(sol);
-      auto remaining_unset = make_span(unset_integer_vars, set_count, unset_integer_vars.size());
-      const auto orig_pb_fingerprint = orig_sol.problem_ptr->get_fingerprint();
-      const auto curr_pb_fingerprint = sol.problem_ptr->get_fingerprint();
-      CUOPT_LOG_DEBUG(
-        "CP repair entry: set_count=%lu unset_remaining=%lu unset_hash=0x%x assign_hash=0x%x "
-        "bounds_hash=0x%x orig_pb_hash=0x%x curr_pb_hash=0x%x ii_counts=%d/%d recovery=%d "
-        "rounding_ii=%d failed_repairs=%d interval=%d timer_rem=%.6f max_timer_rem=%.6f "
-        "repair_budget=%.6f",
-        set_count,
-        remaining_unset.size(),
-        detail::compute_hash(remaining_unset, sol.handle_ptr->get_stream()),
-        sol.get_hash(),
-        detail::compute_hash(make_span(sol.problem_ptr->variable_bounds),
-                             sol.handle_ptr->get_stream()),
-        orig_pb_fingerprint,
-        curr_pb_fingerprint,
-        multi_probe.infeas_constraints_count_0,
-        multi_probe.infeas_constraints_count_1,
-        (int)recovery_mode,
-        (int)rounding_ii,
-        n_failed_repair_iterations,
-        bounds_prop_interval,
-        timer.remaining_time(),
-        max_timer.remaining_time(),
-        repair_timer.remaining_time());
       // update bounds and run repair procedure
-      repair_attempted = true;
-      bounds_repaired =
+      bool bounds_repaired =
         run_repair_procedure(*sol.problem_ptr, *orig_sol.problem_ptr, repair_timer, sol.handle_ptr);
-      remaining_unset = make_span(unset_integer_vars, set_count, unset_integer_vars.size());
-      CUOPT_LOG_DEBUG(
-        "CP repair exit: success=%d set_count=%lu unset_remaining=%lu unset_hash=0x%x "
-        "assign_hash=0x%x bounds_hash=0x%x curr_pb_hash=0x%x ii_counts=%d/%d "
-        "infeas_after_bounds_update=%d timer_rem=%.6f max_timer_rem=%.6f repair_elapsed=%.6f "
-        "repair_remaining=%.6f",
-        (int)bounds_repaired,
-        set_count,
-        remaining_unset.size(),
-        detail::compute_hash(remaining_unset, sol.handle_ptr->get_stream()),
-        sol.get_hash(),
-        detail::compute_hash(make_span(sol.problem_ptr->variable_bounds),
-                             sol.handle_ptr->get_stream()),
-        curr_pb_fingerprint,
-        multi_probe.infeas_constraints_count_0,
-        multi_probe.infeas_constraints_count_1,
-        bounds_update.infeas_constraints_count,
-        timer.remaining_time(),
-        max_timer.remaining_time(),
-        repair_timer.elapsed_time(),
-        repair_timer.remaining_time());
       if (!bounds_repaired) {
         restore_bounds(sol);
         n_failed_repair_iterations++;
@@ -1089,43 +1023,6 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
         set_count += n_fixed_vars;
       }
     }
-    auto after_repair = std::chrono::high_resolution_clock::now();
-    const double update_host_assignment_ms =
-      std::chrono::duration<double, std::milli>(after_update_host_assignment - iter_start_time)
-        .count();
-    const double sort_ms =
-      std::chrono::duration<double, std::milli>(after_sort - after_update_host_assignment).count();
-    const double generate_probe_vals_ms =
-      std::chrono::duration<double, std::milli>(after_generate_probe_vals - after_sort).count();
-    const double probe_ms =
-      std::chrono::duration<double, std::milli>(after_probe - after_generate_probe_vals).count();
-    const double repair_ms =
-      std::chrono::duration<double, std::milli>(after_repair - after_probe).count();
-    const double iter_total_ms =
-      std::chrono::duration<double, std::milli>(after_repair - iter_start_time).count();
-    CUOPT_DETERMINISM_LOG(
-      "CP iter: set_count=%lu->%lu unset=%d interval=%d n_vars_to_set=%d sort=%d recovery=%d "
-      "rounding_ii=%d probe_ii=%d timeout=%d repair_attempted=%d repair_success=%d "
-      "repair_fixed=%d t_ms(update=%.3f sort=%.3f gen=%.3f probe=%.3f repair=%.3f total=%.3f)",
-      set_count_before,
-      set_count,
-      n_curr_unset,
-      bounds_prop_interval,
-      n_vars_to_set,
-      (int)did_sort,
-      (int)recovery_mode,
-      (int)rounding_ii,
-      (int)problem_ii,
-      (int)timeout_happened,
-      (int)repair_attempted,
-      (int)bounds_repaired,
-      n_fixed_vars,
-      update_host_assignment_ms,
-      sort_ms,
-      generate_probe_vals_ms,
-      probe_ms,
-      repair_ms,
-      iter_total_ms);
     // we can keep normal bounds_update here because this is only activated after the  repair
     if (recovery_mode && multi_probe.infeas_constraints_count_0 > 0 &&
         multi_probe.infeas_constraints_count_1 > 0) {
@@ -1170,7 +1067,6 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
     lp_settings.tolerance             = orig_sol.problem_ptr->tolerances.absolute_tolerance;
     lp_settings.save_state            = false;
     lp_settings.return_first_feasible = true;
-    CUOPT_LOG_TRACE("bounds repair LP, sol hash 0x%x", orig_sol.get_hash());
     run_lp_with_vars_fixed(*orig_sol.problem_ptr,
                            orig_sol,
                            orig_sol.problem_ptr->integer_indices,
@@ -1191,41 +1087,10 @@ bool constraint_prop_t<i_t, f_t>::apply_round(
 {
   raft::common::nvtx::range fun_scope("constraint prop round");
 
-  // === CONSTRAINT PROP PREDICTOR FEATURES - START ===
-  auto cp_start_time = std::chrono::high_resolution_clock::now();
-
-  // CUOPT_LOG_INFO("CP_FEATURES: n_variables=%d n_constraints=%d n_integer_vars=%d",
-  //                sol.problem_ptr->n_variables,
-  //                sol.problem_ptr->n_constraints,
-  //                sol.problem_ptr->n_integer_vars);
-
-  // CUOPT_LOG_INFO("CP_FEATURES: nnz=%lu sparsity=%.6f",
-  //                sol.problem_ptr->coefficients.size(),
-  //                sol.problem_ptr->sparsity);
-
   sol.compute_feasibility();
-  i_t n_unset_integers = sol.problem_ptr->n_integer_vars - sol.compute_number_of_integers();
-
-  // CUOPT_LOG_INFO("CP_FEATURES: n_unset_vars=%d initial_excess=%.6f time_budget=%.6f",
-  //                n_unset_integers,
-  //                sol.get_total_excess(),
-  //                max_time_for_bounds_prop);
-
-  // CUOPT_LOG_INFO("CP_FEATURES: round_all_vars=%d lp_run_time_after_feasible=%.6f",
-  //                round_all_vars,
-  //                lp_run_time_after_feasible);
-  // === CONSTRAINT PROP PREDICTOR FEATURES - END ===
-
   max_timer =
     work_limit_timer_t{context.gpu_heur_loop, max_time_for_bounds_prop, *context.termination};
-  if (check_brute_force_rounding(sol)) {
-    auto cp_end_time = std::chrono::high_resolution_clock::now();
-    auto cp_elapsed_ms =
-      std::chrono::duration_cast<std::chrono::milliseconds>(cp_end_time - cp_start_time).count();
-    // CUOPT_LOG_INFO("CP_RESULT: time_ms=%lld termination=BRUTE_FORCE_SUCCESS iterations=0",
-    //                cp_elapsed_ms);
-    return true;
-  }
+  if (check_brute_force_rounding(sol)) { return true; }
   recovery_mode      = false;
   rounding_ii        = false;
   n_iter_in_recovery = 0;
@@ -1250,25 +1115,11 @@ bool constraint_prop_t<i_t, f_t>::apply_round(
     repair_stats.total_time_spent_on_repair,
     repair_stats.total_time_spent_bounds_prop_after_repair,
     repair_stats.total_time_spent_on_bounds_prop);
-  // === CONSTRAINT PROP PREDICTOR RESULTS - START ===
-  auto cp_end_time = std::chrono::high_resolution_clock::now();
-  auto cp_elapsed_ms =
-    std::chrono::duration_cast<std::chrono::milliseconds>(cp_end_time - cp_start_time).count();
-  // === CONSTRAINT PROP PREDICTOR RESULTS - END ===
-
   if (!sol_found) {
     sol.compute_feasibility();
-    // CUOPT_LOG_INFO("CP_RESULT: time_ms=%lld termination=FAILED iterations=%d",
-    //                cp_elapsed_ms,
-    //                0);  // TODO: track actual iterations
     return false;
   }
-  bool result = sol.compute_feasibility();
-  // CUOPT_LOG_INFO("CP_RESULT: time_ms=%lld termination=%s iterations=%d",
-  //                cp_elapsed_ms,
-  //                result ? "SUCCESS" : "FAILED",
-  //                0);  // TODO: track actual iterations
-  return result;
+  return sol.compute_feasibility();
 }
 
 template <typename i_t, typename f_t>
@@ -1350,17 +1201,6 @@ bool constraint_prop_t<i_t, f_t>::handle_fixed_vars(
   auto set_count    = *set_count_ptr;
   const f_t int_tol = sol.problem_ptr->tolerances.integrality_tolerance;
   // which other variables were affected?
-  CUOPT_LOG_TRACE("handle_fixed_vars, unset vars hash 0x%x, sol.assignment hash 0x%x",
-                  detail::compute_hash(make_span(unset_vars), sol.handle_ptr->get_stream()),
-                  detail::compute_hash(make_span(sol.assignment), sol.handle_ptr->get_stream()));
-  CUOPT_LOG_TRACE(
-    "handle_fixed_vars, original_problem->variable_bounds hash 0x%x, "
-    "sol.problem_ptr->variable_bounds hash 0x%x",
-    detail::compute_hash(make_span(original_problem->variable_bounds),
-                         sol.handle_ptr->get_stream()),
-    detail::compute_hash(make_span(sol.problem_ptr->variable_bounds),
-                         sol.handle_ptr->get_stream()));
-
   auto iter        = thrust::stable_partition(sol.handle_ptr->get_thrust_policy(),
                                        unset_vars.begin() + set_count,
                                        unset_vars.end(),

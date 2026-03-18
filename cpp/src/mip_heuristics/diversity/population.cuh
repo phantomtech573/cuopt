@@ -82,7 +82,6 @@ class population_t {
     indices[0].second = std::numeric_limits<f_t>::max();
     indices.erase(indices.begin() + 1, indices.end());
     best_feasible_objective = std::numeric_limits<f_t>::max();
-    context.solution_publication.reset_published_best();
   }
 
   void clear_except_best_feasible()
@@ -93,7 +92,6 @@ class population_t {
     solutions[indices[0].first].first = true;
     indices.erase(indices.begin() + 1, indices.end());
     best_feasible_objective = solutions[indices[0].first].second.get_objective();
-    context.solution_publication.reset_published_best(best_feasible_objective);
   }
 
   // -------------------

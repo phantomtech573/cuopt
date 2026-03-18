@@ -702,24 +702,23 @@ bool branch_and_bound_t<i_t, f_t>::repair_solution(const std::vector<f_t>& edge_
     f_t primal_error;
     f_t bound_error;
     i_t num_fractional;
-    feasible     = check_guess(original_lp_,
+    feasible               = check_guess(original_lp_,
                            settings_,
                            var_types_,
                            lp_solution.x,
                            primal_error,
                            bound_error,
                            num_fractional);
-    repaired_obj = compute_objective(original_lp_, repaired_solution);
-    if (!feasible) {
+    repaired_obj           = compute_objective(original_lp_, repaired_solution);
+    constexpr bool verbose = false;
+    if (verbose) {
       settings_.log.printf(
-        "Repair LP optimal but check_guess failed: primal_err=%e bound_err=%e fractional=%d "
-        "obj=%e iters=%d time=%.3fs\n",
+        "After repair: feasible %d primal error %e bound error %e fractional %d. Objective %e\n",
+        feasible,
         primal_error,
         bound_error,
         num_fractional,
-        repaired_obj,
-        iter,
-        toc(lp_start_time));
+        repaired_obj);
     }
   } else {
     settings_.log.printf(
@@ -792,17 +791,8 @@ void branch_and_bound_t<i_t, f_t>::set_solution_at_root(mip_solution_t<i_t, f_t>
                                                         const cut_info_t<i_t, f_t>& cut_info)
 {
   mutex_upper_.lock();
-  const f_t previous_upper = upper_bound_;
   incumbent_.set_incumbent_solution(root_objective_, root_relax_soln_.x);
   upper_bound_ = root_objective_;
-  CUOPT_DETERMINISM_LOG(
-    settings_.log,
-    "Deterministic B&B incumbent update: source=root_solution prev_upper=%.16e new_upper=%.16e "
-    "obj=%.16e hash=0x%x\n",
-    previous_upper,
-    upper_bound_.load(),
-    root_objective_,
-    detail::compute_hash(root_relax_soln_.x));
   mutex_upper_.unlock();
 
   print_cut_info(settings_, cut_info);
@@ -2721,26 +2711,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 
       f_t add_cuts_start_time = tic();
       mutex_original_lp_.lock();
-      assert(new_slacks_.size() == static_cast<size_t>(original_lp_.num_rows));
-      CUOPT_DETERMINISM_LOG(
-        settings_.log,
-        "Deterministic root LP before add_cuts: pass=%d fractional=%d num_cuts=%d rows=%d "
-        "cols=%d nnz=%zu slacks=%zu slack_hash=0x%x rhs_hash=0x%x lower_hash=0x%x "
-        "upper_hash=0x%x Acol_hash=0x%x Arow_hash=0x%x Aval_hash=0x%x\n",
-        cut_pass,
-        num_fractional,
-        num_cuts,
-        original_lp_.num_rows,
-        original_lp_.num_cols,
-        original_lp_.A.x.size(),
-        new_slacks_.size(),
-        detail::compute_hash(new_slacks_),
-        detail::compute_hash(original_lp_.rhs),
-        detail::compute_hash(original_lp_.lower),
-        detail::compute_hash(original_lp_.upper),
-        detail::compute_hash(original_lp_.A.col_start),
-        detail::compute_hash(original_lp_.A.i),
-        detail::compute_hash(original_lp_.A.x));
       i_t add_cuts_status = add_cuts(settings_,
                                      cuts_to_add,
                                      cut_rhs,
@@ -2754,27 +2724,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                      edge_norms_);
       var_types_.resize(original_lp_.num_cols, variable_type_t::CONTINUOUS);
       variable_bounds.resize(original_lp_.num_cols);
-      assert(new_slacks_.size() == static_cast<size_t>(original_lp_.num_rows));
-      CUOPT_DETERMINISM_LOG(
-        settings_.log,
-        "Deterministic root LP after add_cuts: pass=%d fractional=%d num_cuts=%d status=%d "
-        "rows=%d cols=%d nnz=%zu slacks=%zu slack_hash=0x%x rhs_hash=0x%x lower_hash=0x%x "
-        "upper_hash=0x%x Acol_hash=0x%x Arow_hash=0x%x Aval_hash=0x%x\n",
-        cut_pass,
-        num_fractional,
-        num_cuts,
-        add_cuts_status,
-        original_lp_.num_rows,
-        original_lp_.num_cols,
-        original_lp_.A.x.size(),
-        new_slacks_.size(),
-        detail::compute_hash(new_slacks_),
-        detail::compute_hash(original_lp_.rhs),
-        detail::compute_hash(original_lp_.lower),
-        detail::compute_hash(original_lp_.upper),
-        detail::compute_hash(original_lp_.A.col_start),
-        detail::compute_hash(original_lp_.A.i),
-        detail::compute_hash(original_lp_.A.x));
       mutex_original_lp_.unlock();
       f_t add_cuts_time = toc(add_cuts_start_time);
       if (add_cuts_time > 1.0) {
@@ -3397,7 +3346,6 @@ void branch_and_bound_t<i_t, f_t>::run_deterministic_coordinator(const csr_matri
 
   deterministic_horizon_step_ = 0.50;
 
-  // In deterministic mode, honor the user-visible B&B thread budget exactly.
   const i_t num_workers = settings_.num_threads;
   std::vector<search_strategy_t> search_strategies =
     get_search_strategies(settings_.diving_settings);
@@ -3577,43 +3525,10 @@ void branch_and_bound_t<i_t, f_t>::run_deterministic_bfs_loop(
       if (node == nullptr) { continue; }
 
       worker.current_node = node;
-      if (deterministic_current_horizon_ <= deterministic_horizon_step_ + 1e-9 &&
-          worker.total_nodes_processed < 16) {
-        CUOPT_DETERMINISM_LOG(
-          settings_.log,
-          "Deterministic BFS dequeue: horizon=%.6f worker=%d node_id=%d packed=0x%llx "
-          "path_hash=0x%x depth=%d lower=%.16e local_upper=%.16e clock=%.6f queue_size=%zu\n",
-          deterministic_current_horizon_,
-          worker.worker_id,
-          node->creation_seq,
-          (unsigned long long)node->get_id_packed(),
-          node->compute_path_hash(),
-          node->depth,
-          node->lower_bound,
-          worker.local_upper_bound,
-          worker.clock,
-          worker.queue_size());
-      }
 
       f_t upper_bound = worker.local_upper_bound;
       f_t rel_gap     = user_relative_gap(original_lp_, upper_bound, node->lower_bound);
       if (node->lower_bound > upper_bound) {
-        if (deterministic_current_horizon_ <= deterministic_horizon_step_ + 1e-9) {
-          CUOPT_DETERMINISM_LOG(
-            settings_.log,
-            "Deterministic BFS prune vs local upper: horizon=%.6f worker=%d node_id=%d "
-            "packed=0x%llx "
-            "path_hash=0x%x depth=%d node_lower=%.16e local_upper=%.16e clock=%.6f\n",
-            deterministic_current_horizon_,
-            worker.worker_id,
-            node->creation_seq,
-            (unsigned long long)node->get_id_packed(),
-            node->compute_path_hash(),
-            node->depth,
-            node->lower_bound,
-            upper_bound,
-            worker.clock);
-        }
         worker.current_node = nullptr;
         worker.record_fathomed(node, node->lower_bound);
         search_tree.update(node, node_status_t::FATHOMED);
@@ -3685,56 +3600,6 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sync_callback()
   }
 
   bb_event_batch_t<i_t, f_t> all_events = deterministic_workers_->collect_and_sort_events();
-  if (deterministic_current_horizon_ <= deterministic_horizon_step_ + 1e-9) {
-    CUOPT_DETERMINISM_LOG(
-      settings_.log,
-      "Deterministic sync start: horizon_idx=%d horizon_end=%.6f global_upper=%.16e "
-      "nodes_explored=%d nodes_unexplored=%lu event_count=%zu heuristic_queue=%zu\n",
-      deterministic_horizon_number_,
-      horizon_end,
-      upper_bound_.load(),
-      exploration_stats_.nodes_explored.load(),
-      exploration_stats_.nodes_unexplored.load(),
-      all_events.events.size(),
-      heuristic_solution_queue_.size());
-    for (size_t i = 0; i < all_events.events.size(); ++i) {
-      const auto& event = all_events.events[i];
-      if (event.type != bb_event_type_t::NODE_INTEGER) { continue; }
-      CUOPT_DETERMINISM_LOG(
-        settings_.log,
-        "Deterministic sync integer event[%zu]: wut=%.6f worker=%d node_id=%d event_seq=%d "
-        "obj=%.16e\n",
-        i,
-        event.work_timestamp,
-        event.worker_id,
-        event.node_id,
-        event.event_sequence,
-        event.payload.integer_solution.objective_value);
-    }
-    for (const auto& worker : *deterministic_workers_) {
-      CUOPT_DETERMINISM_LOG(
-        settings_.log,
-        "Deterministic BFS horizon summary: horizon=%.6f worker=%d clock=%.16e "
-        "nodes_processed_h=%d total_nodes=%d integer_queue=%zu next_creation_seq=%d "
-        "next_solution_seq=%d queue_size=%zu current_node=0x%llx last_solved=0x%llx "
-        "local_upper=%.16e\n",
-        deterministic_current_horizon_,
-        worker.worker_id,
-        worker.clock,
-        worker.nodes_processed_this_horizon,
-        worker.total_nodes_processed,
-        worker.integer_solutions.size(),
-        worker.next_creation_seq,
-        worker.next_solution_seq,
-        worker.queue_size(),
-        worker.current_node != nullptr ? (unsigned long long)worker.current_node->get_id_packed()
-                                       : 0ULL,
-        worker.last_solved_node != nullptr
-          ? (unsigned long long)worker.last_solved_node->get_id_packed()
-          : 0ULL,
-        worker.local_upper_bound);
-    }
-  }
 
   std::vector<typename branch_and_bound_t<i_t, f_t>::deterministic_replay_solution_t>
     replay_solutions;
@@ -3919,6 +3784,7 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
     lp_settings, worker.bounds_changed, worker.leaf_problem.lower, worker.leaf_problem.upper);
 
   if (settings_.deterministic) {
+    // TEMP APPROXIMATION;
     worker.work_context.record_work_sync_on_horizon(worker.node_presolver.last_nnz_processed / 1e8);
   }
 #endif
@@ -3986,27 +3852,6 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
 
   deterministic_bfs_policy_t<i_t, f_t> policy{*this, worker};
   auto [status, round_dir] = update_tree_impl(node_ptr, search_tree, &worker, lp_status, policy);
-  if (deterministic_current_horizon_ <= deterministic_horizon_step_ + 1e-9 &&
-      (status == node_status_t::HAS_CHILDREN || status == node_status_t::INTEGER_FEASIBLE)) {
-    CUOPT_DETERMINISM_LOG(
-      settings_.log,
-      "Deterministic BFS solve progress: horizon=%.6f worker=%d node_packed=0x%llx "
-      "node_path_hash=0x%x depth=%d lp_status=%d status=%d node_iter=%d work=%.16e "
-      "clock_before=%.16e clock_after=%.16e local_upper=%.16e node_lower=%.16e\n",
-      deterministic_current_horizon_,
-      worker.worker_id,
-      (unsigned long long)node_ptr->get_id_packed(),
-      node_ptr->compute_path_hash(),
-      node_ptr->depth,
-      (int)lp_status,
-      (int)status,
-      node_iter,
-      work_performed,
-      clock_before,
-      worker.clock,
-      worker.local_upper_bound,
-      node_ptr->lower_bound);
-  }
 
   return status;
 }
@@ -4217,11 +4062,6 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
 
     if (process_event) {
       const auto& event = events.events[event_idx++];
-      /*
-      settings_.log.printf("Deterministic replay event: type=%d wut=%.6f worker=%d node=%d
-      seq=%d\n", (int)event.type, event.work_timestamp, event.worker_id, event.node_id,
-                           event.event_sequence);
-      */
       switch (event.type) {
         case bb_event_type_t::NODE_INTEGER:
         case bb_event_type_t::NODE_BRANCHED:
@@ -4350,33 +4190,46 @@ void branch_and_bound_t<i_t, f_t>::deterministic_balance_worker_loads()
   const size_t num_workers = deterministic_workers_->size();
   if (num_workers <= 1) return;
 
-  std::vector<mip_node_t<i_t, f_t>*> all_nodes;
+  constexpr bool force_rebalance_every_sync = false;
+
+  std::vector<size_t> backlog_counts(num_workers);
+  size_t total_backlog = 0;
+  size_t max_backlog   = 0;
+  size_t min_backlog   = std::numeric_limits<size_t>::max();
+
+  for (size_t w = 0; w < num_workers; ++w) {
+    auto& worker      = (*deterministic_workers_)[w];
+    backlog_counts[w] = worker.backlog.size();
+    total_backlog += backlog_counts[w];
+    max_backlog = std::max(max_backlog, backlog_counts[w]);
+    min_backlog = std::min(min_backlog, backlog_counts[w]);
+  }
+  if (total_backlog == 0) return;
+
+  bool needs_balance;
+  if (force_rebalance_every_sync) {
+    needs_balance = (total_backlog > 1);
+  } else {
+    needs_balance =
+      (min_backlog == 0 && max_backlog >= 2) || (min_backlog > 0 && max_backlog > 4 * min_backlog);
+  }
+
+  if (!needs_balance) return;
+
+  std::vector<mip_node_t<i_t, f_t>*> all_backlog_nodes;
   for (auto& worker : *deterministic_workers_) {
-    for (auto* node : worker.plunge_stack) {
-      all_nodes.push_back(node);
-    }
-    worker.plunge_stack.clear();
     for (auto* node : worker.backlog.data()) {
-      all_nodes.push_back(node);
+      all_backlog_nodes.push_back(node);
     }
     worker.backlog.clear();
   }
 
-  if (all_nodes.empty()) return;
+  if (all_backlog_nodes.empty()) return;
 
-  std::sort(all_nodes.begin(),
-            all_nodes.end(),
-            [](const mip_node_t<i_t, f_t>* a, const mip_node_t<i_t, f_t>* b) {
-              if (a->lower_bound != b->lower_bound) { return a->lower_bound < b->lower_bound; }
-              if (a->origin_worker_id != b->origin_worker_id) {
-                return a->origin_worker_id < b->origin_worker_id;
-              }
-              return a->creation_seq < b->creation_seq;
-            });
-
-  for (int i = (int)all_nodes.size() - 1; i >= 0; --i) {
+  // Round-robin distribute into backlogs; priority queue handles ordering internally
+  for (size_t i = 0; i < all_backlog_nodes.size(); ++i) {
     size_t worker_idx = i % num_workers;
-    (*deterministic_workers_)[worker_idx].enqueue_node(all_nodes[i]);
+    (*deterministic_workers_)[worker_idx].backlog.push(all_backlog_nodes[i]);
   }
 }
 

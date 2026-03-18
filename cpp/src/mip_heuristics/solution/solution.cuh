@@ -113,8 +113,6 @@ class solution_t {
     raft::device_span<f_t> assignment;
     raft::device_span<f_t> lower_excess;
     raft::device_span<f_t> upper_excess;
-    raft::device_span<f_t> lower_slack;
-    raft::device_span<f_t> upper_slack;
     raft::device_span<f_t> constraint_value;
     f_t* obj_val;
     i_t* n_feasible_constraints;
@@ -129,8 +127,6 @@ class solution_t {
   rmm::device_uvector<f_t> assignment;
   rmm::device_uvector<f_t> lower_excess;
   rmm::device_uvector<f_t> upper_excess;
-  rmm::device_uvector<f_t> lower_slack;
-  rmm::device_uvector<f_t> upper_slack;
   rmm::device_uvector<f_t> constraint_value;
   rmm::device_scalar<f_t> obj_val;
   rmm::device_scalar<i_t> n_feasible_constraints;

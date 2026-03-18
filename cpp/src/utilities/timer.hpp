@@ -39,14 +39,14 @@ class timer_t {
                         int line           = __builtin_LINE()) const noexcept
   {
     bool elapsed = elapsed_time() >= time_limit;
-    if (elapsed) {
-      printf("************ TIME LIMIT (%.2gs) REACHED BY %s:%d: %s() ***\n",
-             time_limit,
-             file,
-             line,
-             caller);
-      //__builtin_trap();
-    }
+    // if (elapsed) {
+    //   printf("************ TIME LIMIT (%.2gs) REACHED BY %s:%d: %s() ***\n",
+    //          time_limit,
+    //          file,
+    //          line,
+    //          caller);
+    //   //__builtin_trap();
+    // }
     return elapsed;
   }
 
