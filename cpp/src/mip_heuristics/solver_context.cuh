@@ -14,9 +14,7 @@
 #include <utilities/work_limit_context.hpp>
 #include <utilities/work_unit_scheduler.hpp>
 
-#include <utilities/models/fj_predictor/header.h>
 #include <utilities/work_limit_timer.hpp>
-#include <utilities/work_unit_predictor.hpp>
 
 // Forward declare
 namespace cuopt::linear_programming::dual_simplex {
@@ -26,9 +24,6 @@ class branch_and_bound_t;
 
 namespace cuopt::linear_programming::detail {
 
-struct mip_solver_work_unit_predictors_t {
-  work_unit_predictor_t<fj_predictor, gpu_work_unit_scaler_t> fj_predictor{};
-};
 template <typename i_t, typename f_t>
 class diversity_manager_t;
 
@@ -68,7 +63,6 @@ struct mip_solver_context_t {
   const mip_solver_settings_t<i_t, f_t> settings;
   pdlp_initial_scaling_strategy_t<i_t, f_t>& scaling;
   solver_stats_t<i_t, f_t> stats;
-  mip_solver_work_unit_predictors_t work_unit_predictors;
   work_limit_context_t gpu_heur_loop{"GPUHeur"};
   solution_publication_t<i_t, f_t> solution_publication;
   solution_injection_t<i_t, f_t> solution_injection;
