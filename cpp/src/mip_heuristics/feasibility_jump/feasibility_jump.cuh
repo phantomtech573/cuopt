@@ -651,9 +651,11 @@ class fj_t {
   double deterministic_average_frontier_work_{0.0};
   double deterministic_refresh_work_{0.0};
 
+ public:
+  void initialize_deterministic_work_estimator();
+
  private:
   bool use_load_balancing_codepath() const;
-  void initialize_deterministic_work_estimator();
   std::map<std::string, float> get_feature_vector(i_t climber_idx = 0) const;
 };
 

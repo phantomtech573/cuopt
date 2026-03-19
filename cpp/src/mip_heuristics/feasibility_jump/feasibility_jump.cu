@@ -132,74 +132,131 @@ bool fj_t<i_t, f_t>::use_load_balancing_codepath() const
   return use_load_balancing;
 }
 
+// precompute estimates of the amount of work performed per selected variable
+// using the related_variables table to estimate the nnz touched
+// will be replaced with a model estimator in the future.
 template <typename i_t, typename f_t>
 void fj_t<i_t, f_t>::initialize_deterministic_work_estimator()
 {
-  const size_t num_vars  = pb_ptr->n_variables;
+  const i_t num_vars     = pb_ptr->n_variables;
+  const i_t num_cstrs    = pb_ptr->n_constraints;
   const double total_nnz = static_cast<double>(pb_ptr->coefficients.size());
 
-  deterministic_frontier_work_by_var_.assign(num_vars, 1.0);
   deterministic_refresh_work_          = total_nnz;
   deterministic_average_frontier_work_ = total_nnz;
   if (num_vars == 0) { return; }
 
-  auto h_reverse_offsets = cuopt::host_copy(pb_ptr->reverse_offsets, handle_ptr->get_stream());
-  std::vector<double> variable_work_by_var(num_vars, 0.0);
-  for (size_t var_idx = 0; var_idx < num_vars; ++var_idx) {
-    const i_t degree              = h_reverse_offsets[var_idx + 1] - h_reverse_offsets[var_idx];
-    variable_work_by_var[var_idx] = static_cast<double>(degree);
-  }
+  auto stream = handle_ptr->get_stream();
+  auto policy = handle_ptr->get_thrust_policy();
 
-  if (pb_ptr->related_variables_offsets.size() == 0 || pb_ptr->related_variables.size() == 0) {
-    auto h_offsets   = cuopt::host_copy(pb_ptr->offsets, handle_ptr->get_stream());
-    auto h_variables = cuopt::host_copy(pb_ptr->variables, handle_ptr->get_stream());
-    auto h_reverse_constraints =
-      cuopt::host_copy(pb_ptr->reverse_constraints, handle_ptr->get_stream());
-    std::vector<i_t> frontier_marks(num_vars, -1);
-    for (i_t var_idx = 0; var_idx < pb_ptr->n_variables; ++var_idx) {
-      double frontier_work    = variable_work_by_var[var_idx];
-      frontier_marks[var_idx] = var_idx;
-      for (i_t offset = h_reverse_offsets[var_idx]; offset < h_reverse_offsets[var_idx + 1];
-           ++offset) {
-        const i_t constraint_idx = h_reverse_constraints[offset];
-        for (i_t constraint_offset = h_offsets[constraint_idx];
-             constraint_offset < h_offsets[constraint_idx + 1];
-             ++constraint_offset) {
-          const i_t related_var = h_variables[constraint_offset];
-          if (frontier_marks[related_var] == var_idx) { continue; }
-          frontier_marks[related_var] = var_idx;
-          frontier_work += variable_work_by_var[related_var];
-        }
-      }
-      deterministic_frontier_work_by_var_[var_idx] = frontier_work;
-    }
+  // degree[v] = number of constraints variable v appears in
+  rmm::device_uvector<double> degree(num_vars, stream);
+  auto rev_offsets = make_span(pb_ptr->reverse_offsets);
+  thrust::tabulate(policy, degree.begin(), degree.end(), [rev_offsets] __device__(i_t v) -> double {
+    return (double)(rev_offsets[v + 1] - rev_offsets[v]);
+  });
+
+  deterministic_frontier_work_by_var_d_.resize(num_vars, stream);
+
+  if (pb_ptr->related_variables_offsets.size() > 0 && pb_ptr->related_variables.size() > 0) {
+    // Exact path: segmented reduce over the precomputed related_variables table
+    auto degree_ptr        = degree.data();
+    auto related_offsets   = pb_ptr->related_variables_offsets.data();
+    auto degree_of_related = thrust::make_transform_iterator(
+      pb_ptr->related_variables.begin(), [degree_ptr, num_vars] __device__(i_t rv) -> double {
+        return (rv >= 0 && rv < num_vars) ? degree_ptr[rv] : 0.0;
+      });
+
+    size_t temp_bytes = 0;
+    cub::DeviceSegmentedReduce::Sum(nullptr,
+                                    temp_bytes,
+                                    degree_of_related,
+                                    deterministic_frontier_work_by_var_d_.data(),
+                                    num_vars,
+                                    related_offsets,
+                                    related_offsets + 1,
+                                    stream);
+    rmm::device_uvector<char> temp(temp_bytes, stream);
+    cub::DeviceSegmentedReduce::Sum(temp.data(),
+                                    temp_bytes,
+                                    degree_of_related,
+                                    deterministic_frontier_work_by_var_d_.data(),
+                                    num_vars,
+                                    related_offsets,
+                                    related_offsets + 1,
+                                    stream);
+
   } else {
-    auto h_related_offsets =
-      cuopt::host_copy(pb_ptr->related_variables_offsets, handle_ptr->get_stream());
-    auto h_related_vars = cuopt::host_copy(pb_ptr->related_variables, handle_ptr->get_stream());
-    for (size_t var_idx = 0; var_idx < num_vars; ++var_idx) {
-      double frontier_work = variable_work_by_var[var_idx];
-      for (i_t offset = h_related_offsets[var_idx]; offset < h_related_offsets[var_idx + 1];
-           ++offset) {
-        const i_t related_var = h_related_vars[offset];
-        if (related_var >= 0 && related_var < pb_ptr->n_variables) {
-          frontier_work += variable_work_by_var[related_var];
-        }
-      }
-      deterministic_frontier_work_by_var_[var_idx] = frontier_work;
-    }
+    // SpMV path: frontier_work ≈ A^T * (A * degree)
+    // Overestimates by double-counting shared neighbors, but deterministic and
+    // properly load-balanced. Acceptable for a work-unit proxy.
+
+    // Step 1: y[c] = sum of degree[v] for v in constraint c
+    rmm::device_uvector<double> y(num_cstrs, stream);
+    auto degree_ptr    = degree.data();
+    auto offsets_ptr   = pb_ptr->offsets.data();
+    auto degree_of_var = thrust::make_transform_iterator(
+      pb_ptr->variables.begin(),
+      [degree_ptr] __device__(i_t v) -> double { return degree_ptr[v]; });
+
+    size_t temp_bytes = 0;
+    cub::DeviceSegmentedReduce::Sum(nullptr,
+                                    temp_bytes,
+                                    degree_of_var,
+                                    y.data(),
+                                    num_cstrs,
+                                    offsets_ptr,
+                                    offsets_ptr + 1,
+                                    stream);
+    rmm::device_uvector<char> temp(temp_bytes, stream);
+    cub::DeviceSegmentedReduce::Sum(temp.data(),
+                                    temp_bytes,
+                                    degree_of_var,
+                                    y.data(),
+                                    num_cstrs,
+                                    offsets_ptr,
+                                    offsets_ptr + 1,
+                                    stream);
+
+    // Step 2: frontier_work[v] = sum of y[c] for c in constraints_of(v)
+    auto rev_offs_ptr = pb_ptr->reverse_offsets.data();
+    auto y_ptr        = y.data();
+    auto y_of_constraint =
+      thrust::make_transform_iterator(pb_ptr->reverse_constraints.begin(),
+                                      [y_ptr] __device__(i_t c) -> double { return y_ptr[c]; });
+
+    temp_bytes = 0;
+    cub::DeviceSegmentedReduce::Sum(nullptr,
+                                    temp_bytes,
+                                    y_of_constraint,
+                                    deterministic_frontier_work_by_var_d_.data(),
+                                    num_vars,
+                                    rev_offs_ptr,
+                                    rev_offs_ptr + 1,
+                                    stream);
+    temp.resize(temp_bytes, stream);
+    cub::DeviceSegmentedReduce::Sum(temp.data(),
+                                    temp_bytes,
+                                    y_of_constraint,
+                                    deterministic_frontier_work_by_var_d_.data(),
+                                    num_vars,
+                                    rev_offs_ptr,
+                                    rev_offs_ptr + 1,
+                                    stream);
   }
 
-  double total_frontier_work = 0.0;
-  for (double work : deterministic_frontier_work_by_var_) {
-    total_frontier_work += work;
-  }
-  deterministic_average_frontier_work_ = total_frontier_work / static_cast<double>(num_vars);
-  deterministic_frontier_work_by_var_d_.resize(num_vars, handle_ptr->get_stream());
-  raft::copy(deterministic_frontier_work_by_var_d_.data(),
-             deterministic_frontier_work_by_var_.data(),
+  deterministic_average_frontier_work_ =
+    thrust::reduce(policy,
+                   deterministic_frontier_work_by_var_d_.begin(),
+                   deterministic_frontier_work_by_var_d_.end(),
+                   0.0,
+                   thrust::plus<double>()) /
+    (double)num_vars;
+  deterministic_frontier_work_by_var_.resize(num_vars);
+  raft::copy(deterministic_frontier_work_by_var_.data(),
+             deterministic_frontier_work_by_var_d_.data(),
              num_vars,
-             handle_ptr->get_stream());
+             stream);
 
   CUOPT_LOG_DEBUG(
     "FJ determ: initialized frontier work estimator avg_frontier_nnz=%.6f refresh_nnz=%.6f "
