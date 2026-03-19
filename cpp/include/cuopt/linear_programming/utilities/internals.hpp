@@ -48,13 +48,13 @@ constexpr const char* mip_solution_origin_to_string(mip_solution_origin_t origin
     case mip_solution_origin_t::BRANCH_AND_BOUND_NODE: return "branch_and_bound_node";
     case mip_solution_origin_t::BRANCH_AND_BOUND_DIVING: return "branch_and_bound_diving";
     case mip_solution_origin_t::FEASIBILITY_JUMP: return "feasibility_jump";
+    case mip_solution_origin_t::CPU_FEASIBILITY_JUMP: return "cpu_feasibility_jump";
     case mip_solution_origin_t::LOCAL_SEARCH: return "local_search";
     case mip_solution_origin_t::QUICK_FEASIBLE: return "quick_feasible";
-    case mip_solution_origin_t::USER_INITIAL: return "user_initial";
     case mip_solution_origin_t::LP_ROUNDING: return "lp_rounding";
     case mip_solution_origin_t::RECOMBINATION: return "recombination";
     case mip_solution_origin_t::SUB_MIP: return "sub_mip";
-    case mip_solution_origin_t::CPU_FEASIBILITY_JUMP: return "cpu_feasibility_jump";
+    case mip_solution_origin_t::USER_INITIAL: return "user_initial";
     case mip_solution_origin_t::USER_INJECTED: return "user_injected";
     case mip_solution_origin_t::RINS: return "rins";
     case mip_solution_origin_t::PRESOLVE: return "presolve";

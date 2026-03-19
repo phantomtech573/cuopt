@@ -107,7 +107,7 @@ class mip_solver_settings_t {
   f_t gpu_heur_work_unit_scale = 1.0;
   f_t bb_work_unit_scale       = 1.0;
   // When true, GPU heuristics wait for B&B to finish root solve before starting.
-  bool gpu_heur_wait_for_exploration = true;
+  bool gpu_heur_wait_for_exploration = false;
 
   std::string log_file;
   std::string sol_file;

@@ -235,8 +235,11 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit,
   bool run_probing_cache = !fj_only_run;
   if (run_probing_cache) {
     // Run probing cache before trivial presolve to discover variable implications
-    const f_t max_time_on_probing = diversity_config.max_time_on_probing;
-    f_t time_for_probing_cache    = std::min(max_time_on_probing, time_limit);
+    const f_t max_time_on_probing =
+      (context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS)
+        ? std::numeric_limits<f_t>::infinity()
+        : diversity_config.max_time_on_probing;
+    f_t time_for_probing_cache = std::min(max_time_on_probing, time_limit);
     work_limit_timer_t probing_timer(
       context.gpu_heur_loop, time_for_probing_cache, *context.termination);
     // this function computes probing cache, finds singletons, substitutions and changes the problem
@@ -299,6 +302,7 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit,
   CUOPT_LOG_INFO("cuOpt presolve time: %.2f, fingerprint: 0x%x",
                  stats.presolve_time,
                  problem_ptr->get_fingerprint());
+  exit(0);
   return true;
 }
 

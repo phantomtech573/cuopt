@@ -774,7 +774,7 @@ cuopt_int_t cuOptSetMIPGetSolutionCallback(cuOptSolverSettings settings,
                                            void* user_data);
 
 /**
- * @brief Register an extended callback to receive incumbent MIP solutions with origin metadata.
+ * @brief Register an extended callback to receive incumbent MIP solutions with additional metadata.
  *
  * @param[in] settings - The solver settings object.
  * @param[in] callback - Callback function to receive incumbent solutions and callback metadata.

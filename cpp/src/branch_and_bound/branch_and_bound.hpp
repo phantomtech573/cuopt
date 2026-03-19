@@ -39,6 +39,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <tuple>
 #include <vector>
 
 namespace cuopt::linear_programming::detail {
@@ -434,9 +435,8 @@ class branch_and_bound_t {
       cuopt::internals::mip_solution_origin_t::UNKNOWN};
   };
 
-  bool retire_queued_solution(const queued_external_solution_t& queued_solution,
-                              f_t& out_obj,
-                              std::vector<f_t>& out_crushed);
+  std::tuple<bool, f_t, std::vector<f_t>> retire_queued_solution(
+    const queued_external_solution_t& queued_solution);
 
   // Deterministic pending external solution queue.
   // External solutions stay raw until their retirement horizon, where they are
