@@ -152,13 +152,21 @@ class termination_checker_t {
 
   double remaining_units() const noexcept
   {
+    double local_remaining;
     if (deterministic) {
-      if (!work_context) { return work_limit; }
-      double elapsed_since_start = work_context->current_work() - work_units_at_start;
-      return std::max(0.0, work_limit - elapsed_since_start);
+      if (!work_context) {
+        local_remaining = work_limit;
+      } else {
+        double elapsed_since_start = work_context->current_work() - work_units_at_start;
+        local_remaining            = std::max(0.0, work_limit - elapsed_since_start);
+      }
     } else {
-      return timer.remaining_time();
+      local_remaining = timer.remaining_time();
     }
+    if (parent_ != nullptr) {
+      local_remaining = std::min(local_remaining, parent_->remaining_units());
+    }
+    return local_remaining;
   }
 
   double remaining_time() const noexcept { return remaining_units(); }

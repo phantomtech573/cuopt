@@ -2257,10 +2257,6 @@ optimization_problem_solution_t<i_t, f_t> pdlp_solver_t<i_t, f_t>::run_solver(co
       cuopt_expects(!batch_mode_,
                     cuopt::error_type_t::ValidationError,
                     "Restart to average not supported in batch mode");
-      raft::copy(unscaled_primal_avg_solution_.data(),
-                 pdhg_solver_.get_primal_solution().data(),
-                 primal_size_h_,
-                 stream_view_);
       cub::DeviceTransform::Transform(
         cuda::std::make_tuple(unscaled_primal_avg_solution_.data(),
                               op_problem_scaled_.variable_bounds.data()),

@@ -39,11 +39,9 @@
 #include <deque>
 #include <future>
 #include <limits>
-#include <map>
 #include <optional>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 // uncomment to enable detailed detemrinism logs
@@ -275,7 +273,6 @@ branch_and_bound_t<i_t, f_t>::branch_and_bound_t(
   dualize_info_t<i_t, f_t> dualize_info;
   convert_user_problem(original_problem_, settings_, original_lp_, new_slacks_, dualize_info);
   full_variable_types(original_problem_, original_lp_, var_types_);
-  assert(new_slacks_.size() == static_cast<size_t>(original_lp_.num_rows));
   CUOPT_DETERMINISM_LOG(
     settings_.log,
     "Deterministic LP init state: rows=%d cols=%d nnz=%zu slacks=%zu slack_hash=0x%x "
@@ -488,40 +485,6 @@ void branch_and_bound_t<i_t, f_t>::update_user_bound(f_t lower_bound)
 }
 
 template <typename i_t, typename f_t>
-void branch_and_bound_t<i_t, f_t>::emit_solution_callback(
-  std::vector<f_t>& original_x,
-  f_t objective,
-  cuopt::internals::mip_solution_origin_t origin,
-  double work_timestamp)
-{
-  cuopt_assert(!settings_.deterministic || work_timestamp >= 0.0,
-               "work_timestamp must not be negative in deterministic mode");
-  if (settings_.new_incumbent_callback != nullptr) {
-    settings_.log.debug("Publishing incumbent: obj=%g wut=%.6f origin=%s\n",
-                        compute_user_objective(original_lp_, objective),
-                        work_timestamp,
-                        cuopt::internals::mip_solution_origin_to_string(origin));
-    cuopt::internals::mip_solution_callback_info_t callback_info{};
-    callback_info.origin         = origin;
-    callback_info.work_timestamp = work_timestamp;
-    settings_.new_incumbent_callback(original_x, objective, callback_info, work_timestamp);
-  }
-}
-
-template <typename i_t, typename f_t>
-void branch_and_bound_t<i_t, f_t>::emit_solution_callback_from_crushed(
-  const std::vector<f_t>& crushed_solution,
-  f_t objective,
-  cuopt::internals::mip_solution_origin_t origin,
-  double work_timestamp)
-{
-  if (settings_.new_incumbent_callback == nullptr) { return; }
-  std::vector<f_t> original_x;
-  uncrush_primal_solution(original_problem_, original_lp_, crushed_solution, original_x);
-  emit_solution_callback(original_x, objective, origin, work_timestamp);
-}
-
-template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solution,
                                                     cuopt::internals::mip_solution_origin_t origin)
 {
@@ -558,17 +521,8 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
     mutex_original_lp_.unlock();
     mutex_upper_.lock();
     if (is_feasible && obj < upper_bound_) {
-      const f_t previous_upper = upper_bound_;
-      upper_bound_             = obj;
+      upper_bound_ = obj;
       incumbent_.set_incumbent_solution(obj, crushed_solution);
-      CUOPT_DETERMINISM_LOG(
-        settings_.log,
-        "Deterministic B&B incumbent update: source=external_direct prev_upper=%.16e "
-        "new_upper=%.16e obj=%.16e hash=0x%x\n",
-        previous_upper,
-        upper_bound_.load(),
-        obj,
-        detail::compute_hash(crushed_solution));
     } else {
       attempt_repair         = true;
       constexpr bool verbose = false;
@@ -595,41 +549,61 @@ void branch_and_bound_t<i_t, f_t>::set_new_solution(const std::vector<f_t>& solu
 }
 
 template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::emit_solution_callback(
+  std::vector<f_t>& original_x,
+  f_t objective,
+  cuopt::internals::mip_solution_origin_t origin,
+  double work_timestamp)
+{
+  cuopt_assert(!settings_.deterministic || work_timestamp >= 0.0,
+               "work_timestamp must not be negative in deterministic mode");
+  if (settings_.new_incumbent_callback != nullptr) {
+    settings_.log.debug("Publishing incumbent: obj=%g wut=%.6f origin=%s\n",
+                        compute_user_objective(original_lp_, objective),
+                        work_timestamp,
+                        cuopt::internals::mip_solution_origin_to_string(origin));
+    cuopt::internals::mip_solution_callback_info_t callback_info{};
+    callback_info.origin         = origin;
+    callback_info.work_timestamp = work_timestamp;
+    settings_.new_incumbent_callback(original_x, objective, callback_info, work_timestamp);
+  }
+}
+
+template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::emit_solution_callback_from_crushed(
+  const std::vector<f_t>& crushed_solution,
+  f_t objective,
+  cuopt::internals::mip_solution_origin_t origin,
+  double work_timestamp)
+{
+  if (settings_.new_incumbent_callback == nullptr) { return; }
+  std::vector<f_t> original_x;
+  uncrush_primal_solution(original_problem_, original_lp_, crushed_solution, original_x);
+  emit_solution_callback(original_x, objective, origin, work_timestamp);
+}
+
+template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
   const std::vector<f_t>& solution,
   f_t user_objective,
   double work_unit_ts,
   cuopt::internals::mip_solution_origin_t origin)
 {
-  // In deterministic mode, external solutions remain raw until their retirement
-  // horizon so that feasibility and repair use the retirement LP state.
-
   if (solution.size() != original_problem_.num_cols) {
     settings_.log.printf(
       "Solution size mismatch %ld %d\n", solution.size(), original_problem_.num_cols);
     return;
   }
-  const double bnb_work_total = work_unit_context_.current_work();
-  const uint32_t host_hash    = detail::compute_hash(solution);
   settings_.log.printf(
     "Queueing deterministic external incumbent: obj=%g heur_wut=%.3f bnb_wut=%.3f origin=%s "
     "hash=0x%x\n",
     user_objective,
     work_unit_ts,
-    bnb_work_total,
+    work_unit_context_.current_work(),
     cuopt::internals::mip_solution_origin_to_string(origin),
-    host_hash);
+    detail::compute_hash(solution));
 
   mutex_original_lp_.lock();
-  const size_t lp_nnz       = original_lp_.A.x.size();
-  const i_t active_cut_rows = std::max((i_t)0, original_lp_.num_rows - original_problem_.num_rows);
-  const uint32_t new_slacks_hash = detail::compute_hash(new_slacks_);
-  const uint32_t rhs_hash        = detail::compute_hash(original_lp_.rhs);
-  const uint32_t lower_hash      = detail::compute_hash(original_lp_.lower);
-  const uint32_t upper_hash      = detail::compute_hash(original_lp_.upper);
-  const uint32_t a_col_hash      = detail::compute_hash(original_lp_.A.col_start);
-  const uint32_t a_row_hash      = detail::compute_hash(original_lp_.A.i);
-  const uint32_t a_val_hash      = detail::compute_hash(original_lp_.A.x);
   CUOPT_DETERMINISM_LOG(
     settings_.log,
     "Deterministic external crush ctx: wut=%.6f lp_rows=%d lp_cols=%d lp_nnz=%zu "
@@ -639,30 +613,22 @@ void branch_and_bound_t<i_t, f_t>::queue_external_solution_deterministic(
     work_unit_ts,
     original_lp_.num_rows,
     original_lp_.num_cols,
-    lp_nnz,
-    active_cut_rows,
+    original_lp_.A.x.size(),
+    std::max((i_t)0, original_lp_.num_rows - original_problem_.num_rows),
     new_slacks_.size(),
-    new_slacks_hash,
-    rhs_hash,
-    lower_hash,
-    upper_hash,
-    a_col_hash,
-    a_row_hash,
-    a_val_hash);
+    detail::compute_hash(new_slacks_),
+    detail::compute_hash(original_lp_.rhs),
+    detail::compute_hash(original_lp_.lower),
+    detail::compute_hash(original_lp_.upper),
+    detail::compute_hash(original_lp_.A.col_start),
+    detail::compute_hash(original_lp_.A.i),
+    detail::compute_hash(original_lp_.A.x));
   mutex_original_lp_.unlock();
 
   mutex_heuristic_queue_.lock();
   heuristic_solution_queue_.push_back({solution, user_objective, work_unit_ts, origin});
   const size_t heuristic_queue_size = heuristic_solution_queue_.size();
   mutex_heuristic_queue_.unlock();
-  CUOPT_DETERMINISM_LOG(
-    settings_.log,
-    "Deterministic external queued_for_retirement: wut=%.6f user_obj=%.16e host_hash=0x%x "
-    "heur_q=%zu\n",
-    work_unit_ts,
-    user_objective,
-    host_hash,
-    heuristic_queue_size);
 }
 
 template <typename i_t, typename f_t>
@@ -932,13 +898,26 @@ void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& 
     pending.swap(heuristic_solution_queue_);
     mutex_heuristic_queue_.unlock();
 
+    std::sort(pending.begin(),
+              pending.end(),
+              [](const queued_external_solution_t& a, const queued_external_solution_t& b) {
+                if (a.work_timestamp != b.work_timestamp) {
+                  return a.work_timestamp < b.work_timestamp;
+                }
+                if (a.user_objective != b.user_objective) {
+                  return a.user_objective < b.user_objective;
+                }
+                if (a.origin != b.origin) { return a.origin < b.origin; }
+                return a.solution < b.solution;
+              });
+
     for (const auto& queued_solution : pending) {
       if (queued_solution.work_timestamp > current_work) { continue; }
       auto [feasible, obj, crushed] = retire_queued_solution(queued_solution);
       if (feasible && obj < upper_bound_) {
         upper_bound_ = obj;
         incumbent_.set_incumbent_solution(obj, crushed);
-        settings_.log.printf(
+        settings_.log.debug(
           "Late-retired heuristic incumbent: obj=%.6e wut=%.3f origin=%s\n",
           compute_user_objective(original_lp_, obj),
           queued_solution.work_timestamp,
@@ -957,17 +936,6 @@ void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& 
   solution.lower_bound        = lower_bound;
   solution.nodes_explored     = exploration_stats_.nodes_explored;
   solution.simplex_iterations = exploration_stats_.total_lp_iters;
-  CUOPT_DETERMINISM_LOG(
-    settings_.log,
-    "Deterministic B&B final package: status=%d incumbent_obj=%.16e lower_bound=%.16e "
-    "incumbent_hash=0x%x final_hash=0x%x nodes=%d simplex_iterations=%d\n",
-    (int)solver_status_.load(),
-    solution.objective,
-    solution.lower_bound,
-    detail::compute_hash(incumbent_.x),
-    detail::compute_hash(solution.x),
-    solution.nodes_explored,
-    solution.simplex_iterations);
 }
 
 template <typename i_t, typename f_t>
@@ -2335,17 +2303,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     if (feasible) {
       const f_t computed_obj = compute_objective(original_lp_, crushed_guess);
       mutex_upper_.lock();
-      const f_t previous_upper = upper_bound_;
       incumbent_.set_incumbent_solution(computed_obj, crushed_guess);
       upper_bound_ = computed_obj;
-      CUOPT_DETERMINISM_LOG(
-        settings_.log,
-        "Deterministic B&B incumbent update: source=initial_guess prev_upper=%.16e "
-        "new_upper=%.16e obj=%.16e hash=0x%x\n",
-        previous_upper,
-        upper_bound_.load(),
-        computed_obj,
-        detail::compute_hash(crushed_guess));
       mutex_upper_.unlock();
     }
   }
@@ -2555,12 +2514,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                              original_lp_.upper[j]);
       }
 #endif
-
-      if (toc(exploration_stats_.start_time) > settings_.time_limit) {
-        solver_status_ = mip_status_t::TIME_LIMIT;
-        set_final_solution(solution, root_objective_);
-        return solver_status_;
-      }
 
       // Generate cuts and add them to the cut pool
       f_t cut_start_time    = tic();
@@ -3382,14 +3335,6 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sync_callback()
   total_producer_wait_time_ += wait_time;
   max_producer_wait_time_ = std::max(max_producer_wait_time_, wait_time);
   ++producer_wait_count_;
-  if (wait_time > 0.01) {
-    settings_.log.printf(
-      "Producer sync wait: %.3fs at horizon %.2f (cumulative: %.3fs, count: %d)\n",
-      wait_time,
-      horizon_end,
-      total_producer_wait_time_,
-      producer_wait_count_);
-  }
 
   work_unit_context_.set_current_work(horizon_end, false);
 
@@ -3584,7 +3529,6 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
   }
   lp_settings.inside_mip    = 2;
   lp_settings.time_limit    = remaining_time;
-  lp_settings.work_limit    = std::numeric_limits<f_t>::infinity();
   lp_settings.scale_columns = false;
 
   bool feasible = true;
@@ -3646,7 +3590,6 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
     lp_status                 = convert_lp_status_to_dual_status(second_status);
   }
 
-  double clock_before   = worker.clock;
   double work_performed = worker.work_context.global_work_units_elapsed - work_units_at_start;
   worker.clock += work_performed;
 
@@ -3689,11 +3632,11 @@ void branch_and_bound_t<i_t, f_t>::deterministic_merge_pseudo_cost_updates(PoolT
 {
   std::vector<pseudo_cost_update_t<i_t, f_t>> all_pc_updates;
   int64_t sb_iter_delta = 0;
+  int64_t base_sb       = pc_.strong_branching_lp_iter.load();
   for (auto& worker : pool) {
     auto updates = worker.pc_snapshot.take_updates();
     all_pc_updates.insert(all_pc_updates.end(), updates.begin(), updates.end());
     int64_t snapshot_sb = worker.pc_snapshot.strong_branching_lp_iter_;
-    int64_t base_sb     = pc_.strong_branching_lp_iter.load();
     sb_iter_delta += snapshot_sb - base_sb;
   }
   std::sort(all_pc_updates.begin(), all_pc_updates.end());
@@ -4255,7 +4198,6 @@ void branch_and_bound_t<i_t, f_t>::deterministic_dive(
     }
     lp_settings.inside_mip    = 2;
     lp_settings.time_limit    = remaining_time;
-    lp_settings.work_limit    = std::numeric_limits<f_t>::infinity();
     lp_settings.scale_columns = false;
 
 #ifndef DETERMINISM_DISABLE_BOUNDS_STRENGTHENING

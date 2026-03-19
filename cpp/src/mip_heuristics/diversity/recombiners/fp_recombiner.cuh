@@ -89,8 +89,7 @@ class fp_recombiner_t : public recombiner_t<i_t, f_t> {
       relaxed_lp_settings_t lp_settings;
       lp_settings.time_limit = fp_recombiner_config_t::infeasibility_detection_time_limit;
       if (this->context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS) {
-        lp_settings.time_limit =
-          std::numeric_limits<double>::max();  // TODO should be global time limit
+        lp_settings.time_limit   = std::numeric_limits<double>::max();
         lp_settings.work_limit   = fp_recombiner_config_t::infeasibility_detection_time_limit;
         lp_settings.work_context = &this->context.gpu_heur_loop;
         cuopt_assert(lp_settings.work_context != nullptr, "Missing deterministic work context");

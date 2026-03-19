@@ -137,9 +137,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   const bool run_presolve = context.settings.presolver != presolver_t::None;
   f_t time_limit =
     deterministic_run ? std::numeric_limits<f_t>::infinity() : timer_.remaining_time();
-  double presolve_time_limit = std::min(0.1 * time_limit, 60.0);
-  presolve_time_limit =
-    deterministic_run ? std::numeric_limits<f_t>::infinity() : presolve_time_limit;
+  double presolve_time_limit =
+    deterministic_run ? timer_.remaining_time() : std::min(0.1 * time_limit, 60.0);
   bool presolve_success = run_presolve ? dm.run_presolve(presolve_time_limit, timer_) : true;
   if (!presolve_success) {
     CUOPT_LOG_INFO("Problem proven infeasible in presolve");

@@ -289,11 +289,10 @@ i_t bounds_repair_t<i_t, f_t>::compute_best_shift(problem_t<i_t, f_t>& problem,
   handle_ptr->sync_stream();
   i_t n_candidates = candidates.n_candidates.value(handle_ptr->get_stream());
 
-  // Sort by variable index to ensure deterministic ordering
-  thrust::sort_by_key(handle_ptr->get_thrust_policy(),
-                      candidates.variable_index.begin(),
-                      candidates.variable_index.begin() + n_candidates,
-                      candidates.bound_shift.begin());
+  // Sort by (variable_index, bound_shift) to ensure fully deterministic ordering
+  auto key_iter = thrust::make_zip_iterator(
+    thrust::make_tuple(candidates.variable_index.begin(), candidates.bound_shift.begin()));
+  thrust::sort(handle_ptr->get_thrust_policy(), key_iter, key_iter + n_candidates);
 
   return n_candidates;
 }

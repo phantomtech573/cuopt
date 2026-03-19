@@ -104,8 +104,8 @@ HDI std::pair<f_t, f_t> feas_score_constraint(
   f_t c_lb,
   f_t c_ub,
   f_t current_lhs,
-  f_t cstr_left_weight  = std::numeric_limits<f_t>::quiet_NaN(),
-  f_t cstr_right_weight = std::numeric_limits<f_t>::quiet_NaN())
+  f_t cstr_left_weight,
+  f_t cstr_right_weight)
 {
   cuopt_assert(isfinite(delta), "invalid delta");
   cuopt_assert(cstr_coeff != 0 && isfinite(cstr_coeff), "invalid coefficient");

@@ -71,9 +71,21 @@ typedef int32_t cuopt_int_t;
 typedef int64_t cuopt_int_t;
 #endif
 
+/**
+ * @brief Extended callback information passed to cuOptMIPGetSolutionCallbackExt.
+ *
+ * Provides metadata about each incumbent solution reported during a MIP solve.
+ *
+ * ABI stability contract:
+ * - Fields are append-only. Existing fields will never be reordered, removed,
+ *   or change type across releases.
+ */
 typedef struct {
-  uint64_t struct_size;
+  /** Which solver component found this solution (CUOPT_MIP_SOLUTION_ORIGIN_*). */
   uint32_t origin;
+  /** Deterministic work-unit timestamp at which the solution was found.
+   *  Monotonically increasing across successive callbacks within a single solve.
+   *  In non-deterministic mode this value is informational only. */
   double work_timestamp;
 } cuOptMIPSolutionCallbackInfo;
 

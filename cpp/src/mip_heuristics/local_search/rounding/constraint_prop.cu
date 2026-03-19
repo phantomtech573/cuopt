@@ -1088,8 +1088,7 @@ bool constraint_prop_t<i_t, f_t>::apply_round(
   raft::common::nvtx::range fun_scope("constraint prop round");
 
   sol.compute_feasibility();
-  max_timer =
-    work_limit_timer_t{context.gpu_heur_loop, max_time_for_bounds_prop, *context.termination};
+  max_timer = work_limit_timer_t{context.gpu_heur_loop, max_time_for_bounds_prop, timer};
   if (check_brute_force_rounding(sol)) { return true; }
   recovery_mode      = false;
   rounding_ii        = false;

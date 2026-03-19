@@ -64,7 +64,6 @@ class c_get_solution_callback_ext_t : public cuopt::internals::get_solution_call
   {
     if (callback_ == nullptr) { return; }
     cuOptMIPSolutionCallbackInfo c_callback_info{};
-    c_callback_info.struct_size = sizeof(cuOptMIPSolutionCallbackInfo);
     if (callback_info != nullptr) {
       c_callback_info.origin         = (uint32_t)callback_info->origin;
       c_callback_info.work_timestamp = callback_info->work_timestamp;
@@ -102,6 +101,11 @@ class c_set_solution_callback_t : public cuopt::internals::set_solution_callback
  private:
   cuOptMIPSetSolutionCallback callback_;
 };
+
+// ABI guards: these fire at compile time if the struct layout changes
+// and existing field offsets are changed
+static_assert(offsetof(cuOptMIPSolutionCallbackInfo, origin) == 0, "ABI break");
+static_assert(offsetof(cuOptMIPSolutionCallbackInfo, work_timestamp) == 8, "ABI break");
 
 // Owns solver settings and C callback wrappers for C API lifetime.
 struct solver_settings_handle_t {

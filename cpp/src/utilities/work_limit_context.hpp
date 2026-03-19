@@ -63,65 +63,10 @@ struct work_limit_context_t {
 
   work_limit_context_t(const std::string& name) : name(name) {}
 
-  work_limit_context_t(const work_limit_context_t& other)
-    : global_work_units_elapsed(other.global_work_units_elapsed),
-      total_sync_time(other.total_sync_time),
-      deterministic(other.deterministic),
-      scheduler(other.scheduler),
-      producer_sync(other.producer_sync),
-      name(other.name),
-      producer_work_units_elapsed(std::make_unique<std::atomic<double>>(
-        other.producer_work_units_elapsed->load(std::memory_order_acquire))),
-      producer_progress_scale(other.producer_progress_scale),
-      work_unit_scale(other.work_unit_scale)
-  {
-  }
-
-  work_limit_context_t(work_limit_context_t&& other) noexcept
-    : global_work_units_elapsed(other.global_work_units_elapsed),
-      total_sync_time(other.total_sync_time),
-      deterministic(other.deterministic),
-      scheduler(other.scheduler),
-      producer_sync(other.producer_sync),
-      name(std::move(other.name)),
-      producer_work_units_elapsed(std::make_unique<std::atomic<double>>(
-        other.producer_work_units_elapsed->load(std::memory_order_acquire))),
-      producer_progress_scale(other.producer_progress_scale),
-      work_unit_scale(other.work_unit_scale)
-  {
-  }
-
-  work_limit_context_t& operator=(const work_limit_context_t& other)
-  {
-    if (this == &other) { return *this; }
-    global_work_units_elapsed   = other.global_work_units_elapsed;
-    total_sync_time             = other.total_sync_time;
-    deterministic               = other.deterministic;
-    scheduler                   = other.scheduler;
-    producer_sync               = other.producer_sync;
-    name                        = other.name;
-    producer_work_units_elapsed = std::make_unique<std::atomic<double>>(
-      other.producer_work_units_elapsed->load(std::memory_order_acquire));
-    producer_progress_scale = other.producer_progress_scale;
-    work_unit_scale         = other.work_unit_scale;
-    return *this;
-  }
-
-  work_limit_context_t& operator=(work_limit_context_t&& other) noexcept
-  {
-    if (this == &other) { return *this; }
-    global_work_units_elapsed   = other.global_work_units_elapsed;
-    total_sync_time             = other.total_sync_time;
-    deterministic               = other.deterministic;
-    scheduler                   = other.scheduler;
-    producer_sync               = other.producer_sync;
-    name                        = std::move(other.name);
-    producer_work_units_elapsed = std::make_unique<std::atomic<double>>(
-      other.producer_work_units_elapsed->load(std::memory_order_acquire));
-    producer_progress_scale = other.producer_progress_scale;
-    work_unit_scale         = other.work_unit_scale;
-    return *this;
-  }
+  work_limit_context_t(const work_limit_context_t&)            = delete;
+  work_limit_context_t& operator=(const work_limit_context_t&) = delete;
+  work_limit_context_t(work_limit_context_t&&)                 = default;
+  work_limit_context_t& operator=(work_limit_context_t&&)      = default;
 
   double current_work() const noexcept { return global_work_units_elapsed; }
 
