@@ -302,7 +302,6 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit,
   CUOPT_LOG_INFO("cuOpt presolve time: %.2f, fingerprint: 0x%x",
                  stats.presolve_time,
                  problem_ptr->get_fingerprint());
-  exit(0);
   return true;
 }
 

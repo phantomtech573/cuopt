@@ -1425,6 +1425,12 @@ void problem_t<i_t, f_t>::substitute_variables(const std::vector<i_t>& var_indic
   raft::common::nvtx::range fun_scope("substitute_variables");
   cuopt_assert((are_exclusive<i_t, f_t>(var_indices, var_to_substitute_indices)),
                "variables and var_to_substitute_indices are not exclusive");
+  {
+    std::vector<i_t> sorted_vi(var_indices);
+    std::sort(sorted_vi.begin(), sorted_vi.end());
+    cuopt_assert(std::adjacent_find(sorted_vi.begin(), sorted_vi.end()) == sorted_vi.end(),
+                 "var_indices must not contain duplicates");
+  }
   const i_t dummy_substituted_variable = var_indices[0];
   cuopt_assert(var_indices.size() == var_to_substitute_indices.size(), "size mismatch");
   cuopt_assert(var_indices.size() == offset_values.size(), "size mismatch");
@@ -1458,7 +1464,6 @@ void problem_t<i_t, f_t>::substitute_variables(const std::vector<i_t>& var_indic
   rmm::device_uvector<f_t> obj_coeff_deltas(n_substitutions, handle_ptr->get_stream());
 
   CUOPT_LOG_INFO("Substituting %d variables", n_substitutions);
-  cuopt::print("substituted_var_indices", d_var_indices);
 
   thrust::for_each(
     handle_ptr->get_thrust_policy(),

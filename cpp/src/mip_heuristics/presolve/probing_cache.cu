@@ -704,8 +704,11 @@ void apply_substitution_queue_to_problem(
     host_copy(problem.presolve_data.variable_mapping, problem.handle_ptr->get_stream());
   problem.handle_ptr->sync_stream();
 
+  // remove duplicate substitution proposals to avoid races later
+  std::unordered_set<i_t> seen_substituted;
   for (const auto& [substituting_var, substitutions] : all_substitutions) {
     for (const auto& [substituted_var, substitution] : substitutions) {
+      if (!seen_substituted.insert(substitution.substituted_var).second) { continue; }
       CUOPT_LOG_TRACE("Applying substitution: %d -> %d",
                       substitution.substituting_var,
                       substitution.substituted_var);
