@@ -124,9 +124,7 @@ static void apply_env_overrides(grpc_client_config_t& config)
 template <typename i_t, typename f_t>
 std::unique_ptr<lp_solution_interface_t<i_t, f_t>> solve_lp_remote(
   cpu_optimization_problem_t<i_t, f_t> const& cpu_problem,
-  pdlp_solver_settings_t<i_t, f_t> const& settings,
-  bool problem_checking,
-  bool use_pdlp_solver_mode)
+  pdlp_solver_settings_t<i_t, f_t> const& settings)
 {
   init_logger_t log(settings.log_file, settings.log_to_console);
 
@@ -250,10 +248,7 @@ std::unique_ptr<mip_solution_interface_t<i_t, f_t>> solve_mip_remote(
 
 // Explicit template instantiations for remote execution stubs
 template std::unique_ptr<lp_solution_interface_t<int, double>> solve_lp_remote(
-  cpu_optimization_problem_t<int, double> const&,
-  pdlp_solver_settings_t<int, double> const&,
-  bool,
-  bool);
+  cpu_optimization_problem_t<int, double> const&, pdlp_solver_settings_t<int, double> const&);
 
 template std::unique_ptr<mip_solution_interface_t<int, double>> solve_mip_remote(
   cpu_optimization_problem_t<int, double> const&, mip_solver_settings_t<int, double> const&);

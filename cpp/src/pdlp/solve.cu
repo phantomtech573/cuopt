@@ -1671,7 +1671,7 @@ std::unique_ptr<lp_solution_interface_t<i_t, f_t>> solve_lp(
                   error_type_t::ValidationError,
                   "Remote execution requires CPU memory backend");
     CUOPT_LOG_INFO("Remote LP solve requested");
-    return solve_lp_remote(*cpu_prob, settings, problem_checking, use_pdlp_solver_mode);
+    return solve_lp_remote(*cpu_prob, settings);
   }
 
   // Local execution - dispatch to appropriate overload based on problem type
