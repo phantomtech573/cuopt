@@ -292,7 +292,7 @@ int run_single_file(std::string file_path,
   settings.set_mip_callback(&incumbent_tracker);
   auto solution = cuopt::linear_programming::solve_mip(&handle_, mps_data_model, settings);
   CUOPT_LOG_INFO(
-    "3first obj: %f last improvement of best feasible: %f last improvement after recombination: %f",
+    "first obj: %f last improvement of best feasible: %f last improvement after recombination: %f",
     benchmark_info.objective_of_initial_population,
     benchmark_info.last_improvement_of_best_feasible,
     benchmark_info.last_improvement_after_recombination);
