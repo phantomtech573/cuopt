@@ -1180,6 +1180,7 @@ optimization_problem_solution_t<i_t, f_t> run_concurrent(
   } catch (...) {
     std::cout << "\n DEBUGGING: CAUGHT PDLP EXCEPTION \n" << std::endl;
     pdlp_exception                 = std::current_exception();
+    *settings_pdlp.concurrent_halt = 1;
     try {
       std::rethrow_exception(pdlp_exception);
     } catch (const std::exception& e) {
