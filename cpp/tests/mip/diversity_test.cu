@@ -169,6 +169,7 @@ static uint32_t test_initial_solution_determinism(std::string path,
   problem.tolerances = settings.get_tolerances();
 
   detail::diversity_manager_t<int, double> diversity_manager(solver.context);
+  solver.context.diversity_manager_ptr = &diversity_manager;
   work_limit_context_t work_limit_context("DiversityManager");
   work_limit_context.deterministic = true;
   diversity_manager.timer          = work_limit_timer_t(work_limit_context, 60000, timer);
