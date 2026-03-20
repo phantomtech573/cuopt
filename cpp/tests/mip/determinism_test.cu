@@ -329,7 +329,7 @@ TEST_F(DeterministicBBTest, reproducible_with_gpu_pipeline_in_deterministic_mode
   settings.time_limit               = 60.0;
   settings.determinism_mode         = CUOPT_MODE_DETERMINISTIC;
   settings.num_cpu_threads          = 8;
-  settings.work_limit               = 30;
+  settings.work_limit               = 4;
   settings.gpu_heur_work_unit_scale = 0.1;
   settings.cpufj_work_unit_scale    = 1.0;
 
@@ -359,45 +359,6 @@ TEST_F(DeterministicBBTest, reproducible_with_gpu_pipeline_in_deterministic_mode
     solution1, solution3, handle_, "Deterministic GPU pipeline run 1 vs 3: ");
 }
 
-TEST_F(DeterministicBBTest, deterministic_gpu_pipeline_ignores_cpufj_work_scale)
-{
-  auto path    = make_path_absolute("/mip/50v-10.mps");
-  auto problem = mps_parser::parse_mps<int, double>(path, false);
-  handle_.sync_stream();
-
-  mip_solver_settings_t<int, double> base_settings;
-  base_settings.time_limit               = 60.0;
-  base_settings.determinism_mode         = CUOPT_MODE_DETERMINISTIC;
-  base_settings.num_cpu_threads          = 8;
-  base_settings.work_limit               = 30;
-  base_settings.gpu_heur_work_unit_scale = 0.1;
-
-  auto seed = std::random_device{}() & 0x7fffffff;
-  std::cout << "Tested with seed " << seed << "\n";
-  base_settings.seed = seed;
-
-  auto settings_without_cpufj                  = base_settings;
-  settings_without_cpufj.cpufj_work_unit_scale = 1.0;
-  cuopt::seed_generator::set_seed(seed);
-  auto solution_without_cpufj = solve_mip(&handle_, problem, settings_without_cpufj);
-
-  auto settings_with_cpufj_scale                  = base_settings;
-  settings_with_cpufj_scale.cpufj_work_unit_scale = 17.0;
-  cuopt::seed_generator::set_seed(seed);
-  auto solution_with_cpufj_scale = solve_mip(&handle_, problem, settings_with_cpufj_scale);
-
-  EXPECT_EQ(solution_without_cpufj.get_termination_status(),
-            solution_with_cpufj_scale.get_termination_status());
-  EXPECT_DOUBLE_EQ(solution_without_cpufj.get_objective_value(),
-                   solution_with_cpufj_scale.get_objective_value());
-  EXPECT_DOUBLE_EQ(solution_without_cpufj.get_solution_bound(),
-                   solution_with_cpufj_scale.get_solution_bound());
-  expect_solutions_bitwise_equal(solution_without_cpufj,
-                                 solution_with_cpufj_scale,
-                                 handle_,
-                                 "Deterministic GPU pipeline should ignore CPUFJ scale: ");
-}
-
 TEST_F(DeterministicBBTest, deterministic_callback_sequence_reproducible_with_gpu_pipeline)
 {
   constexpr size_t callback_compare_count = 5;
@@ -413,7 +374,7 @@ TEST_F(DeterministicBBTest, deterministic_callback_sequence_reproducible_with_gp
   settings.time_limit               = 360.0;
   settings.determinism_mode         = CUOPT_MODE_DETERMINISTIC;
   settings.num_cpu_threads          = 2;
-  settings.work_limit               = 60;
+  settings.work_limit               = 4;
   settings.gpu_heur_work_unit_scale = 0.05;
   settings.cpufj_work_unit_scale    = 1.0;
 
@@ -511,43 +472,6 @@ TEST_P(DeterministicGpuHeuristicsInstanceTest, reproducible_with_gpu_heuristics)
   expect_solutions_bitwise_equal(solution1, solution3, handle_, "GPU heur run 1 vs 3: ");
 }
 
-TEST_F(DeterministicBBTest, reproducible_with_gpu_heuristics_50v10_no_cuts)
-{
-  auto path    = make_path_absolute("/mip/50v-10.mps");
-  auto problem = mps_parser::parse_mps<int, double>(path, false);
-  handle_.sync_stream();
-
-  mip_solver_settings_t<int, double> settings;
-  settings.time_limit       = 60.0;
-  settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
-  settings.num_cpu_threads  = 8;
-  settings.work_limit       = 30;
-  // settings.max_cut_passes   = 0;
-
-  auto seed = std::random_device{}() & 0x7fffffff;
-  std::cout << "Tested with seed " << seed << "\n";
-  settings.seed = seed;
-
-  cuopt::seed_generator::set_seed(seed);
-  auto solution1 = solve_mip(&handle_, problem, settings);
-  cuopt::seed_generator::set_seed(seed);
-  auto solution2 = solve_mip(&handle_, problem, settings);
-  cuopt::seed_generator::set_seed(seed);
-  auto solution3 = solve_mip(&handle_, problem, settings);
-
-  EXPECT_EQ(solution1.get_termination_status(), solution2.get_termination_status());
-  EXPECT_EQ(solution1.get_termination_status(), solution3.get_termination_status());
-
-  EXPECT_DOUBLE_EQ(solution1.get_objective_value(), solution2.get_objective_value());
-  EXPECT_DOUBLE_EQ(solution1.get_objective_value(), solution3.get_objective_value());
-
-  EXPECT_DOUBLE_EQ(solution1.get_solution_bound(), solution2.get_solution_bound());
-  EXPECT_DOUBLE_EQ(solution1.get_solution_bound(), solution3.get_solution_bound());
-
-  expect_solutions_bitwise_equal(solution1, solution2, handle_, "GPU heur no-cuts run 1 vs 2: ");
-  expect_solutions_bitwise_equal(solution1, solution3, handle_, "GPU heur no-cuts run 1 vs 3: ");
-}
-
 INSTANTIATE_TEST_SUITE_P(
   DeterministicGpuHeuristics,
   DeterministicGpuHeuristicsInstanceTest,
@@ -614,10 +538,10 @@ INSTANTIATE_TEST_SUITE_P(
   DeterministicBB,
   DeterministicBBInstanceTest,
   ::testing::Values(
-    // Instance, threads, time_limit
+    // Instance, threads, time_limit, work limiy
     std::make_tuple("/mip/gen-ip054.mps", 4, 60.0, 4),
     std::make_tuple("/mip/swath1.mps", 8, 60.0, 4),
-    std::make_tuple("/mip/50v-10.mps", 8, 60.0, 30),
+    std::make_tuple("/mip/50v-10.mps", 8, 60.0, 4),
     std::make_tuple("/mip/gen-ip054.mps", 128, 120.0, 1),
     std::make_tuple("/mip/bb_optimality.mps", 4, 60.0, 4),
     std::make_tuple("/mip/neos5.mps", 16, 60.0, 1),

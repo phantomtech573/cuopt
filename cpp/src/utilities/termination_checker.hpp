@@ -94,7 +94,7 @@ class termination_checker_t {
         double actual_elapsed_time = timer.elapsed_time();
 
         if (work_limit > 0 && std::abs(actual_elapsed_time - work_limit) / work_limit > 0.10) {
-          CUOPT_LOG_ERROR(
+          CUOPT_LOG_TRACE(
             "%s:%d: %s(): Work limit timer finished with a large discrepancy: %fs for %fwu "
             "(global: %g, start: %g)",
             file,
@@ -137,7 +137,7 @@ class termination_checker_t {
       double parent_elapsed_time = parent_ != nullptr ? parent_->timer.elapsed_time() : 0.0;
       double parent_time_limit   = parent_ != nullptr ? parent_->timer.get_time_limit() : 0.0;
 
-      CUOPT_LOG_DEBUG("%s:%d: %s(): Recorded %f work units in %fs, total %f (parent time: %g/%g)",
+      CUOPT_LOG_TRACE("%s:%d: %s(): Recorded %f work units in %fs, total %f (parent time: %g/%g)",
                       file,
                       line,
                       caller,
@@ -163,7 +163,8 @@ class termination_checker_t {
     } else {
       local_remaining = timer.remaining_time();
     }
-    if (parent_ != nullptr) {
+    // don't let the root's global time limit contaimnate work limits further down
+    if (parent_ != nullptr && !(deterministic && !parent_->deterministic)) {
       local_remaining = std::min(local_remaining, parent_->remaining_units());
     }
     return local_remaining;
