@@ -5,13 +5,6 @@
  */
 /* clang-format on */
 
-// uncomment to enable detailed detemrinism logs
-#undef CUOPT_DETERMINISM_LOG
-#define CUOPT_DETERMINISM_LOG(...) \
-  do {                             \
-    CUOPT_LOG_INFO(__VA_ARGS__);   \
-  } while (0)
-
 #include "lagrangian.cuh"
 #include "local_search.cuh"
 
@@ -31,6 +24,15 @@
 #include <cuda_profiler_api.h>
 
 #include <future>
+
+// enable to activate detailed determinism logs
+#if 0
+#undef CUOPT_DETERMINISM_LOG
+#define CUOPT_DETERMINISM_LOG(...) \
+  do {                             \
+    CUOPT_LOG_INFO(__VA_ARGS__);   \
+  } while (0)
+#endif
 
 namespace cuopt::linear_programming::detail {
 

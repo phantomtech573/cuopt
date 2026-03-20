@@ -18,12 +18,14 @@
 
 #include <cmath>
 
-// uncomment to enable detailed detemrinism logs
+// enable to activate detailed determinism logs
+#if 0
 #undef CUOPT_DETERMINISM_LOG
 #define CUOPT_DETERMINISM_LOG(...) \
   do {                             \
     CUOPT_LOG_INFO(__VA_ARGS__);   \
   } while (0)
+#endif
 
 namespace cuopt::linear_programming::detail {
 
@@ -522,8 +524,8 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
       total_estimated_work,
       setup_work);
   }
-  i_t no_candidate_in_a_row = 0;
-  const char* exit_reason   = "FEASIBLE";
+  i_t no_candidate_in_a_row                = 0;
+  [[maybe_unused]] const char* exit_reason = "FEASIBLE";
   // TODO: do this better
   i_t iter_limit = std::numeric_limits<i_t>::max();
   if (timer.deterministic) { iter_limit = 20; }

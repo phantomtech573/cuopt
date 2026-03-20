@@ -5,13 +5,6 @@
  */
 /* clang-format on */
 
-// uncomment to enable detailed detemrinism logs
-#undef CUOPT_DETERMINISM_LOG
-#define CUOPT_DETERMINISM_LOG(...) \
-  do {                             \
-    CUOPT_LOG_INFO(__VA_ARGS__);   \
-  } while (0)
-
 #include "diversity_manager.cuh"
 
 #include <mip_heuristics/mip_constants.hpp>
@@ -26,6 +19,15 @@
 
 #include <utilities/determinism_log.hpp>
 #include <utilities/scope_guard.hpp>
+
+// enable to activate detailed determinism logs
+#if 0
+#undef CUOPT_DETERMINISM_LOG
+#define CUOPT_DETERMINISM_LOG(...) \
+  do {                             \
+    CUOPT_LOG_INFO(__VA_ARGS__);   \
+  } while (0)
+#endif
 
 constexpr bool fj_only_run = false;
 

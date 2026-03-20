@@ -26,8 +26,11 @@
 #include <future>
 #include <memory>
 
+// enable to activate detailed determinism logs
+#if 0
 #undef CUOPT_DETERMINISM_LOG
 #define CUOPT_DETERMINISM_LOG(...) CUOPT_LOG_INFO(__VA_ARGS__)
+#endif
 
 namespace cuopt::linear_programming::detail {
 
