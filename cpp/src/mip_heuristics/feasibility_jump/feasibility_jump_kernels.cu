@@ -175,7 +175,8 @@ DI void update_weights(typename fj_t<i_t, f_t>::climber_data_t::view_t& fj)
 }
 
 template <typename i_t, typename f_t>
-__global__ void init_lhs_and_violation(typename fj_t<i_t, f_t>::climber_data_t::view_t fj)
+__global__ void init_lhs_and_violated_constraints(
+  typename fj_t<i_t, f_t>::climber_data_t::view_t fj)
 {
   for (i_t cstr_idx = TH_ID_X; cstr_idx < fj.pb.n_constraints; cstr_idx += GRID_STRIDE) {
     auto [offset_begin, offset_end] = fj.pb.range_for_constraint(cstr_idx);
@@ -1557,7 +1558,7 @@ __global__ void handle_local_minimum_kernel(typename fj_t<i_t, f_t>::climber_dat
     const __grid_constant__ typename fj_t<int, F_TYPE>::climber_data_t::view_t fj);   \
   template __global__ void load_balancing_sanity_checks<int, F_TYPE>(                 \
     const __grid_constant__ typename fj_t<int, F_TYPE>::climber_data_t::view_t fj);   \
-  template __global__ void init_lhs_and_violation<int, F_TYPE>(                       \
+  template __global__ void init_lhs_and_violated_constraints<int, F_TYPE>(            \
     typename fj_t<int, F_TYPE>::climber_data_t::view_t fj);                           \
   template __global__ void update_lift_moves_kernel<int, F_TYPE>(                     \
     typename fj_t<int, F_TYPE>::climber_data_t::view_t fj);                           \

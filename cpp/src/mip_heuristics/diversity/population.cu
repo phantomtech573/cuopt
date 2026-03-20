@@ -183,7 +183,8 @@ void population_t<i_t, f_t>::add_external_solution(const std::vector<f_t>& solut
 template <typename i_t, typename f_t>
 void population_t<i_t, f_t>::add_external_solutions_to_population()
 {
-  if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) { return; }
+  // GPU heuristics are producer-only in the current GPU determinism implementation
+  if ((context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS)) { return; }
   // don't do early exit checks here. mutex needs to be acquired to prevent race conditions
   auto new_sol_vector = get_external_solutions();
   for (auto& drained_sol : new_sol_vector) {
@@ -261,13 +262,8 @@ population_t<i_t, f_t>::get_external_solutions()
 template <typename i_t, typename f_t>
 bool population_t<i_t, f_t>::is_better_than_best_feasible(solution_t<i_t, f_t>& sol)
 {
-  if (!sol.get_feasible()) { return false; }
-  f_t threshold = best_feasible_objective;
-  if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
-      context.branch_and_bound_ptr != nullptr) {
-    threshold = context.branch_and_bound_ptr->get_upper_bound();
-  }
-  return sol.get_objective() < threshold;
+  bool obj_better = sol.get_objective() < best_feasible_objective;
+  return obj_better && sol.get_feasible();
 }
 
 template <typename i_t, typename f_t>
@@ -285,17 +281,20 @@ void population_t<i_t, f_t>::run_solution_callbacks(
       context.branch_and_bound_ptr->queue_external_solution_deterministic(
         sol.get_host_assignment(), sol.get_user_objective(), work_timestamp, callback_origin);
     } else {
-      const double work_timestamp = context.gpu_heur_loop.current_work();
-      const auto payload          = context.solution_publication.build_callback_payload(
-        context.problem_ptr, context.scaling, sol, callback_origin, work_timestamp);
-      context.solution_publication.publish_new_best_feasible(payload, timer.elapsed_time());
-
       if (context.branch_and_bound_ptr != nullptr &&
           context.problem_ptr->branch_and_bound_callback != nullptr) {
         context.problem_ptr->branch_and_bound_callback(sol.get_host_assignment(), callback_origin);
       }
-    }
 
+      const double work_timestamp = context.gpu_heur_loop.current_work();
+      const auto payload          = context.solution_publication.build_callback_payload(
+        context.problem_ptr, context.scaling, sol, callback_origin, work_timestamp);
+      context.solution_publication.publish_new_best_feasible(payload, timer.elapsed_time());
+    }
+    // save the best objective here, because we might not have been able to return the solution to
+    // the user because of the unscaling that causes infeasibility.
+    // This prevents an issue of repaired, or a fully feasible solution being reported in the call
+    // back in next run.
     best_feasible_objective = sol.get_objective();
   }
 

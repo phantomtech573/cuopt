@@ -203,6 +203,9 @@ void diversity_manager_t<i_t, f_t>::add_user_given_solutions(
                      is_feasible,
                      sol.get_user_objective(),
                      sol.get_total_excess());
+      if (is_feasible) {
+        population.run_solution_callbacks(sol, internals::mip_solution_origin_t::USER_INITIAL);
+      }
       initial_sol_vector.emplace_back(std::move(sol));
     } else {
       CUOPT_LOG_ERROR(
@@ -331,6 +334,7 @@ void diversity_manager_t<i_t, f_t>::generate_quick_feasible_solution()
     auto& feas_sol = initial_sol_vector.back().get_feasible()
                        ? initial_sol_vector.back()
                        : initial_sol_vector[initial_sol_vector.size() - 2];
+    population.run_solution_callbacks(feas_sol, internals::mip_solution_origin_t::LOCAL_SEARCH);
     CUOPT_LOG_INFO("Generated fast solution in %f seconds with objective %f, hash 0x%x",
                    timer.elapsed_time(),
                    feas_sol.get_user_objective(),
@@ -685,16 +689,16 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   if (ls.lp_optimal_exists) {
     solution_t<i_t, f_t> lp_rounded_sol(*problem_ptr);
     lp_rounded_sol.copy_new_assignment(lp_optimal_solution);
-    CUOPT_LOG_DEBUG("DM bootstrap candidate (LP raw): hash=0x%x feas=%d obj=%.12f",
-                    lp_rounded_sol.get_hash(),
-                    (int)lp_rounded_sol.get_feasible(),
-                    lp_rounded_sol.get_user_objective());
+    CUOPT_DETERMINISM_LOG("DM bootstrap candidate (LP raw): hash=0x%x feas=%d obj=%.12f",
+                          lp_rounded_sol.get_hash(),
+                          (int)lp_rounded_sol.get_feasible(),
+                          lp_rounded_sol.get_user_objective());
     lp_rounded_sol.round_nearest();
     lp_rounded_sol.compute_feasibility();
-    CUOPT_LOG_DEBUG("DM bootstrap candidate (LP rounded): hash=0x%x feas=%d obj=%.12f",
-                    lp_rounded_sol.get_hash(),
-                    (int)lp_rounded_sol.get_feasible(),
-                    lp_rounded_sol.get_user_objective());
+    CUOPT_DETERMINISM_LOG("DM bootstrap candidate (LP rounded): hash=0x%x feas=%d obj=%.12f",
+                          lp_rounded_sol.get_hash(),
+                          (int)lp_rounded_sol.get_feasible(),
+                          lp_rounded_sol.get_user_objective());
     population.add_solution(std::move(lp_rounded_sol),
                             internals::mip_solution_origin_t::LP_ROUNDING);
     if (!diversity_config.dry_run &&
@@ -704,11 +708,12 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   }
 
   for (size_t i = 0; i < initial_sol_vector.size(); ++i) {
-    CUOPT_LOG_DEBUG("DM bootstrap candidate (initial_sol_vector[%lu]): hash=0x%x feas=%d obj=%.12f",
-                    i,
-                    initial_sol_vector[i].get_hash(),
-                    (int)initial_sol_vector[i].get_feasible(),
-                    initial_sol_vector[i].get_user_objective());
+    CUOPT_DETERMINISM_LOG(
+      "DM bootstrap candidate (initial_sol_vector[%lu]): hash=0x%x feas=%d obj=%.12f",
+      i,
+      initial_sol_vector[i].get_hash(),
+      (int)initial_sol_vector[i].get_feasible(),
+      initial_sol_vector[i].get_user_objective());
   }
   population.add_solutions_from_vec(std::move(initial_sol_vector),
                                     internals::mip_solution_origin_t::USER_INITIAL);
@@ -735,6 +740,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     log_return_solution("fj_only_run", sol);
     return sol;
   }
+  // RINS not supported in deterministic mode yet
   if (!(context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS)) { rins.enable(); }
 
   generate_solution(timer.remaining_time(), false);
@@ -743,7 +749,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     log_return_solution("initial_solution_only", best_sol);
     return best_sol;
   }
-  if (work_limit_reached()) {
+  if (timer.check_time_limit()) {
     population.add_external_solutions_to_population();
     auto& best_sol = population.best_feasible();
     log_return_solution("work_limit_reached", best_sol);
@@ -779,7 +785,7 @@ void diversity_manager_t<i_t, f_t>::diversity_step(i_t max_iterations_without_im
         CUOPT_LOG_DEBUG("Population degenerated in diversity step");
         return;
       }
-      if (work_limit_reached()) return;
+      if (timer.check_time_limit()) return;
       constexpr bool tournament = true;
       auto [sol1, sol2]         = population.get_two_random(tournament);
       cuopt_assert(population.test_invariant(), "");
@@ -836,7 +842,7 @@ void diversity_manager_t<i_t, f_t>::recombine_and_ls_with_all(solution_t<i_t, f_
           population.add_solution(std::move(offspring),
                                   internals::mip_solution_origin_t::RECOMBINATION);
         }
-        if (work_limit_reached()) { return; }
+        if (timer.check_time_limit()) { return; }
       }
     }
   }
@@ -858,11 +864,11 @@ void diversity_manager_t<i_t, f_t>::recombine_and_ls_with_all(
     }
     for (auto& drained_sol : solutions) {
       auto& sol = drained_sol.solution;
-      if (work_limit_reached()) { return; }
+      if (timer.check_time_limit()) { return; }
       solution_t<i_t, f_t> ls_solution(sol);
       ls_config_t<i_t, f_t> ls_config;
       run_local_search(ls_solution, population.weights, timer, ls_config);
-      if (work_limit_reached()) { return; }
+      if (timer.check_time_limit()) { return; }
       // TODO try if running LP with integers fixed makes it feasible
       if (ls_solution.get_feasible()) {
         CUOPT_LOG_DEBUG("LS searched solution feasible, running recombiners!");
@@ -1049,11 +1055,11 @@ std::pair<solution_t<i_t, f_t>, bool> diversity_manager_t<i_t, f_t>::recombine(
   mab_recombiner.set_last_chosen_option(selected_index);
   recombine_stats.add_attempt((recombiner_enum_t)recombiner);
   recombine_stats.start_recombiner_time();
-  CUOPT_LOG_TRACE("Recombining sol %x and %x with recombiner %d, weights %x",
-                  a.get_hash(),
-                  b.get_hash(),
-                  recombiner,
-                  population.weights.get_hash());
+  CUOPT_DETERMINISM_LOG("Recombining sol %x and %x with recombiner %d, weights %x",
+                        a.get_hash(),
+                        b.get_hash(),
+                        recombiner,
+                        population.weights.get_hash());
 
   // Refactored code using a switch statement
   switch (recombiner) {
@@ -1124,12 +1130,6 @@ void diversity_manager_t<i_t, f_t>::set_simplex_solution(const std::vector<f_t>&
              context.handle_ptr->get_stream());
   set_new_user_bound(objective);
   context.handle_ptr->sync_stream();
-}
-
-template <typename i_t, typename f_t>
-bool diversity_manager_t<i_t, f_t>::work_limit_reached()
-{
-  return timer.check_time_limit();
 }
 
 #if MIP_INSTANTIATE_FLOAT

@@ -86,24 +86,28 @@ class solution_publication_t {
   bool publish_new_best_feasible(const solution_callback_payload_t<i_t, f_t>& payload,
                                  double elapsed_time = -1.0)
   {
-    std::lock_guard<std::mutex> lock(solution_callback_mutex_);
-    cuopt_assert(std::isfinite(payload.solver_objective),
-                 "Feasible incumbent objective must be finite");
-    if (!(payload.solver_objective < best_callback_feasible_objective_)) { return false; }
+    {
+      std::lock_guard<std::mutex> lock(solution_callback_mutex_);
+      cuopt_assert(std::isfinite(payload.solver_objective),
+                   "Feasible incumbent objective must be finite");
+      if (!(payload.solver_objective < best_callback_feasible_objective_)) { return false; }
 
-    if (settings.benchmark_info_ptr != nullptr && elapsed_time >= 0.0) {
-      settings.benchmark_info_ptr->last_improvement_of_best_feasible = elapsed_time;
+      best_callback_feasible_objective_ = payload.solver_objective;
+      if (settings.benchmark_info_ptr != nullptr && elapsed_time >= 0.0) {
+        settings.benchmark_info_ptr->last_improvement_of_best_feasible = elapsed_time;
+      }
     }
     invoke_get_solution_callbacks(payload);
-    best_callback_feasible_objective_ = payload.solver_objective;
     return true;
   }
 
   void publish_terminal_solution(const solution_callback_payload_t<i_t, f_t>& payload)
   {
-    std::lock_guard<std::mutex> lock(solution_callback_mutex_);
+    {
+      std::lock_guard<std::mutex> lock(solution_callback_mutex_);
+      best_callback_feasible_objective_ = payload.solver_objective;
+    }
     invoke_get_solution_callbacks(payload);
-    best_callback_feasible_objective_ = payload.solver_objective;
   }
 
  private:

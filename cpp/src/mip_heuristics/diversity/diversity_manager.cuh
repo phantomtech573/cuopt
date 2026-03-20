@@ -69,7 +69,6 @@ class diversity_manager_t {
                         const weight_t<i_t, f_t>& weights,
                         work_limit_timer_t& timer,
                         ls_config_t<i_t, f_t>& ls_config);
-  bool work_limit_reached();
 
   void set_simplex_solution(const std::vector<f_t>& solution,
                             const std::vector<f_t>& dual_solution,

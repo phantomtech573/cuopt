@@ -999,7 +999,7 @@ void fj_t<i_t, f_t>::refresh_lhs_and_violation(const rmm::cuda_stream_view& stre
   auto v     = data.view();
 
   data.violated_constraints.clear(stream);
-  init_lhs_and_violation<i_t, f_t><<<4096, 256, 0, stream>>>(v);
+  init_lhs_and_violated_constraints<i_t, f_t><<<4096, 256, 0, stream>>>(v);
   // both transformreduce could be fused; but oh well hardly a bottleneck
   auto violation =
     thrust::transform_reduce(rmm::exec_policy(stream),
