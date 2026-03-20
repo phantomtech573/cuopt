@@ -1262,6 +1262,13 @@ struct deterministic_bfs_policy_t
     i_t var;
     if (this->bnb.settings_.reliability_branching != 0 &&
         this->worker.nodes_explored_snapshot > 0) {
+      auto& snap = this->worker.pc_snapshot;
+
+      sb_update_callback_t<i_t, f_t> on_sb_update = [&](
+                                                      i_t j, rounding_direction_t dir, f_t delta) {
+        snap.record_update(j, dir, delta, this->worker.clock, this->worker.worker_id);
+      };
+
       var = reliable_variable_selection_core(node,
                                              fractional,
                                              x,
@@ -1272,12 +1279,12 @@ struct deterministic_bfs_policy_t
                                              this->worker.basis_factors,
                                              this->worker.basic_list,
                                              this->worker.nonbasic_list,
-                                             this->worker.pc_snapshot.sum_down_.data(),
-                                             this->worker.pc_snapshot.sum_up_.data(),
-                                             this->worker.pc_snapshot.num_down_.data(),
-                                             this->worker.pc_snapshot.num_up_.data(),
-                                             this->worker.pc_snapshot.n_vars(),
-                                             this->worker.pc_snapshot.strong_branching_lp_iter_,
+                                             snap.sum_down_.data(),
+                                             snap.sum_up_.data(),
+                                             snap.num_down_.data(),
+                                             snap.num_up_.data(),
+                                             snap.n_vars(),
+                                             snap.strong_branching_lp_iter_,
                                              this->worker.local_upper_bound,
                                              (int64_t)this->worker.total_lp_iters_snapshot,
                                              (int64_t)this->worker.nodes_explored_snapshot,
@@ -1286,7 +1293,9 @@ struct deterministic_bfs_policy_t
                                              1,
                                              nullptr,
                                              nullptr,
-                                             nullptr);
+                                             &this->worker.rng,
+                                             &this->worker.work_context,
+                                             on_sb_update);
     } else {
       var = this->worker.pc_snapshot.variable_selection(fractional, x);
     }

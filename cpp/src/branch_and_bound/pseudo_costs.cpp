@@ -158,7 +158,8 @@ f_t trial_branching(const lp_problem_t<i_t, f_t>& original_lp,
                     f_t start_time,
                     i_t upper_max_lp_iter,
                     i_t lower_max_lp_iter,
-                    omp_atomic_t<int64_t>& total_lp_iter)
+                    omp_atomic_t<int64_t>& total_lp_iter,
+                    cuopt::work_limit_context_t* work_ctx = nullptr)
 {
   lp_problem_t child_problem      = original_lp;
   child_problem.lower[branch_var] = branch_var_lower;
@@ -197,7 +198,8 @@ f_t trial_branching(const lp_problem_t<i_t, f_t>& original_lp,
                                                           child_nonbasic_list,
                                                           solution,
                                                           iter,
-                                                          child_edge_norms);
+                                                          child_edge_norms,
+                                                          work_ctx);
   total_lp_iter += iter;
   settings.log.debug("Trial branching on variable %d. Lo: %e Up: %e. Iter %d. Status %s. Obj %e\n",
                      branch_var,
@@ -235,7 +237,8 @@ f_t trial_branching_generic(const lp_problem_t<i_t, f_t>& original_lp,
                             f_t start_time,
                             i_t upper_max_lp_iter,
                             i_t lower_max_lp_iter,
-                            omp_atomic_t<int64_t>& total_lp_iter)
+                            omp_atomic_t<int64_t>& total_lp_iter,
+                            cuopt::work_limit_context_t* /*work_ctx*/ = nullptr)
 {
   return trial_branching(original_lp,
                          settings,
@@ -273,7 +276,8 @@ f_t trial_branching_generic(const lp_problem_t<i_t, f_t>& original_lp,
                             f_t start_time,
                             i_t upper_max_lp_iter,
                             i_t lower_max_lp_iter,
-                            int64_t& total_lp_iter)
+                            int64_t& total_lp_iter,
+                            cuopt::work_limit_context_t* work_ctx = nullptr)
 {
   omp_atomic_t<int64_t> atomic_iter{0};
   f_t result = trial_branching(original_lp,
@@ -292,7 +296,8 @@ f_t trial_branching_generic(const lp_problem_t<i_t, f_t>& original_lp,
                                start_time,
                                upper_max_lp_iter,
                                lower_max_lp_iter,
-                               atomic_iter);
+                               atomic_iter,
+                               work_ctx);
   total_lp_iter += atomic_iter.load();
   return result;
 }
@@ -698,7 +703,9 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
                                      int num_tasks,
                                      omp_mutex_t* var_mutex_down,
                                      omp_mutex_t* var_mutex_up,
-                                     pcgenerator_t* rng)
+                                     pcgenerator_t* rng,
+                                     cuopt::work_limit_context_t* work_ctx,
+                                     const sb_update_callback_t<i_t, f_t>& on_sb_update)
 {
   constexpr f_t eps = 1e-6;
   i_t branch_var    = fractional[0];
@@ -745,13 +752,14 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
   }
 
   if (unreliable_list.empty()) {
-    log.printf(
+    settings.log.printf(
       "pc branching on %d. Value %e. Score %e\n", branch_var, solution[branch_var], max_score);
 
     return branch_var;
   }
 
   const i_t max_num_candidates = rb_settings.max_num_candidates;
+  const int task_priority      = rb_settings.task_priority;
   const i_t num_candidates     = std::min<size_t>(unreliable_list.size(), max_num_candidates);
 
   assert(task_priority > 0);
@@ -773,16 +781,15 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
     (long long)bnb_nodes_explored,
     num_tasks);
 
-  // Shuffle the unreliable list so every variable has the same chance to be selected.
+  cuopt_assert(rng != nullptr, "rng must be provided for candidate shuffling");
   if (unreliable_list.size() > (size_t)max_num_candidates) { rng->shuffle(unreliable_list); }
 
   if (toc(start_time) > settings.time_limit) {
-    log.printf("Time limit reached");
+    settings.log.printf("Time limit reached");
     return branch_var;
   }
 
   omp_mutex_t score_mutex;
-  const int task_priority = rb_settings.task_priority;
 
 #pragma omp taskloop if (num_tasks > 1) priority(task_priority) num_tasks(num_tasks) \
   shared(score_mutex, strong_branching_lp_iter)
@@ -809,12 +816,15 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
                                         start_time,
                                         rb_settings.upper_max_lp_iter,
                                         rb_settings.lower_max_lp_iter,
-                                        strong_branching_lp_iter);
+                                        strong_branching_lp_iter,
+                                        work_ctx);
       if (!std::isnan(obj)) {
         f_t change_in_obj = std::max(obj - node_ptr->lower_bound, eps);
         f_t change_in_x   = solution[j] - std::floor(solution[j]);
-        sum_down[j] += change_in_obj / change_in_x;
+        f_t delta         = change_in_obj / change_in_x;
+        sum_down[j] += delta;
         num_down[j]++;
+        if (on_sb_update) { on_sb_update(j, rounding_direction_t::DOWN, delta); }
       }
     }
     if (var_mutex_down) { var_mutex_down[j].unlock(); }
@@ -839,12 +849,15 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
                                         start_time,
                                         rb_settings.upper_max_lp_iter,
                                         rb_settings.lower_max_lp_iter,
-                                        strong_branching_lp_iter);
+                                        strong_branching_lp_iter,
+                                        work_ctx);
       if (!std::isnan(obj)) {
         f_t change_in_obj = std::max(obj - node_ptr->lower_bound, eps);
         f_t change_in_x   = std::ceil(solution[j]) - solution[j];
-        sum_up[j] += change_in_obj / change_in_x;
+        f_t delta         = change_in_obj / change_in_x;
+        sum_up[j] += delta;
         num_up[j]++;
+        if (on_sb_update) { on_sb_update(j, rounding_direction_t::UP, delta); }
       }
     }
     if (var_mutex_up) { var_mutex_up[j].unlock(); }
@@ -963,7 +976,9 @@ template int reliable_variable_selection_core<int,
   int,
   omp_mutex_t*,
   omp_mutex_t*,
-  pcgenerator_t*);
+  pcgenerator_t*,
+  cuopt::work_limit_context_t*,
+  const sb_update_callback_t<int, double>&);
 
 // Deterministic: plain arrays, plain int64_t sb_iter
 template int reliable_variable_selection_core<int, double, double, int, int64_t>(
@@ -991,7 +1006,9 @@ template int reliable_variable_selection_core<int, double, double, int, int64_t>
   int,
   omp_mutex_t*,
   omp_mutex_t*,
-  pcgenerator_t*);
+  pcgenerator_t*,
+  cuopt::work_limit_context_t*,
+  const sb_update_callback_t<int, double>&);
 
 template void strong_branching<int, double>(const user_problem_t<int, double>& original_problem,
                                             const lp_problem_t<int, double>& original_lp,

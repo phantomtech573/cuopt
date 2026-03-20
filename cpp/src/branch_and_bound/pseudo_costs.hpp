@@ -22,6 +22,7 @@
 #include <omp.h>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 
 namespace cuopt::linear_programming::dual_simplex {
 
@@ -355,6 +356,13 @@ class pseudo_cost_snapshot_t {
     }
   }
 
+  // Record an update that was already applied to the arrays (e.g. by strong branching).
+  void record_update(
+    i_t variable, rounding_direction_t direction, f_t delta, double clock, int worker_id)
+  {
+    updates_.push_back({variable, direction, delta, clock, worker_id});
+  }
+
   std::vector<pseudo_cost_update_t<i_t, f_t>> take_updates()
   {
     std::vector<pseudo_cost_update_t<i_t, f_t>> result;
@@ -520,6 +528,11 @@ class pseudo_costs_t {
   omp_atomic_t<int64_t> strong_branching_lp_iter  = 0;
 };
 
+// Callback invoked after each strong-branching pseudocost discovery.
+template <typename i_t, typename f_t>
+using sb_update_callback_t =
+  std::function<void(i_t variable, rounding_direction_t direction, f_t delta)>;
+
 // Core reliability branching loop usable by both opportunistic and deterministic paths.
 // When num_tasks == 1, runs serially with no locking (deterministic).
 // When num_tasks > 1 with mutexes/rng, uses OMP taskloop (opportunistic).
@@ -549,7 +562,9 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
                                      int num_tasks,
                                      omp_mutex_t* var_mutex_down,
                                      omp_mutex_t* var_mutex_up,
-                                     pcgenerator_t* rng);
+                                     pcgenerator_t* rng,
+                                     cuopt::work_limit_context_t* work_ctx              = nullptr,
+                                     const sb_update_callback_t<i_t, f_t>& on_sb_update = {});
 
 template <typename i_t, typename f_t>
 void strong_branching(const user_problem_t<i_t, f_t>& original_problem,
