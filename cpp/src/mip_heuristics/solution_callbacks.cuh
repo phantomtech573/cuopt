@@ -65,7 +65,8 @@ class solution_publication_t {
                     temp_sol.assignment.size());
     if (settings.mip_scaling) {
       rmm::device_uvector<f_t> dummy(0, temp_sol.handle_ptr->get_stream());
-      scaling.unscale_solutions(temp_sol.assignment, dummy);
+      scaling.unscale_solutions(
+        temp_sol.assignment, dummy, temp_sol.handle_ptr->get_stream().value());
       CUOPT_LOG_DEBUG("build_callback_payload: post_unscale size=%zu", temp_sol.assignment.size());
     }
     if (problem_ptr->has_papilo_presolve_data()) {
@@ -86,16 +87,14 @@ class solution_publication_t {
   bool publish_new_best_feasible(const solution_callback_payload_t<i_t, f_t>& payload,
                                  double elapsed_time = -1.0)
   {
-    {
-      std::lock_guard<std::mutex> lock(solution_callback_mutex_);
-      cuopt_assert(std::isfinite(payload.solver_objective),
-                   "Feasible incumbent objective must be finite");
-      if (!(payload.solver_objective < best_callback_feasible_objective_)) { return false; }
+    std::lock_guard<std::mutex> lock(solution_callback_mutex_);
+    cuopt_assert(std::isfinite(payload.solver_objective),
+                 "Feasible incumbent objective must be finite");
+    if (!(payload.solver_objective < best_callback_feasible_objective_)) { return false; }
 
-      best_callback_feasible_objective_ = payload.solver_objective;
-      if (settings.benchmark_info_ptr != nullptr && elapsed_time >= 0.0) {
-        settings.benchmark_info_ptr->last_improvement_of_best_feasible = elapsed_time;
-      }
+    best_callback_feasible_objective_ = payload.solver_objective;
+    if (settings.benchmark_info_ptr != nullptr && elapsed_time >= 0.0) {
+      settings.benchmark_info_ptr->last_improvement_of_best_feasible = elapsed_time;
     }
     invoke_get_solution_callbacks(payload);
     return true;
