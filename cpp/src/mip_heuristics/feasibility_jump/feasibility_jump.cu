@@ -31,9 +31,6 @@
 
 #include <cooperative_groups.h>
 
-#include <iomanip>
-#include <sstream>
-
 #define FJ_LOG_PREFIX "FJ: "
 
 namespace cuopt::linear_programming::detail {
@@ -189,7 +186,7 @@ void fj_t<i_t, f_t>::initialize_deterministic_work_estimator()
   } else {
     // SpMV path: frontier_work ≈ A^T * (A * degree)
     // Overestimates by double-counting shared neighbors, but deterministic and
-    // properly load-balanced. Acceptable for a work-unit proxy.
+    // load-balanced. Acceptable for a work-unit proxy.
 
     // Step 1: y[c] = sum of degree[v] for v in constraint c
     rmm::device_uvector<double> y(num_cstrs, stream);
@@ -595,10 +592,6 @@ void fj_t<i_t, f_t>::climber_init(i_t climber_idx, const rmm::cuda_stream_view& 
   climber->best_objective.set_value_async(inf, climber_stream);
   climber->saved_solution_objective.set_value_async(inf, climber_stream);
   refresh_lhs_and_violation(climber_stream);
-
-  // printf("init: Violated constraints hash: %x\n", compute_hash(
-  //   make_span(climber->violated_constraints.contents, 0,
-  //   climber->violated_constraints.set_size.value(climber_stream)), climber_stream));
 
   // initialize the best_objective values according to the initial assignment
   f_t best_obj = compute_objective_from_vec<i_t, f_t>(
@@ -1036,172 +1029,6 @@ void fj_t<i_t, f_t>::refresh_lhs_and_violation(const rmm::cuda_stream_view& stre
 }
 
 template <typename i_t, typename f_t>
-std::map<std::string, float> fj_t<i_t, f_t>::get_feature_vector(i_t climber_idx) const
-{
-  auto& data          = *climbers[climber_idx];
-  auto climber_stream = data.stream.view();
-  if (climber_idx == 0) climber_stream = handle_ptr->get_stream();
-
-  std::map<std::string, float> features;
-
-  // Basic problem dimensions
-  features["n_variables"]   = (float)pb_ptr->n_variables;
-  features["n_constraints"] = (float)pb_ptr->n_constraints;
-  features["nnz"]           = (float)pb_ptr->coefficients.size();
-
-  // Matrix sparsity metrics (already computed)
-  features["sparsity"]       = (float)pb_ptr->sparsity;
-  features["nnz_stddev"]     = (float)pb_ptr->nnz_stddev;
-  features["unbalancedness"] = (float)pb_ptr->unbalancedness;
-
-  // Algorithm settings
-  features["time"]                   = (float)settings.work_limit;
-  features["n_of_minimums_for_exit"] = (float)settings.n_of_minimums_for_exit;
-  features["feasibility_run"]        = (float)settings.feasibility_run;
-
-  // Variable type metrics
-  features["n_integer_vars"] = (float)pb_ptr->n_integer_vars;
-  features["n_binary_vars"]  = (float)pb_ptr->n_binary_vars;
-  features["integer_ratio"] =
-    pb_ptr->n_variables > 0 ? (float)pb_ptr->n_integer_vars / pb_ptr->n_variables : 0.0f;
-  features["binary_ratio"] =
-    pb_ptr->n_variables > 0 ? (float)pb_ptr->n_binary_vars / pb_ptr->n_variables : 0.0f;
-
-  // Initial violation metrics (from current state)
-  features["initial_violation_count"] =
-    (float)data.violated_constraints.set_size.value(climber_stream);
-  // features["initial_violation_score"] = (float)data.violation_score.value(climber_stream);
-  // features["initial_weighted_violation"] =
-  // (float)data.weighted_violation_score.value(climber_stream);
-
-  // Load balancing decision
-  bool use_load_balancing         = use_load_balancing_codepath();
-  features["uses_load_balancing"] = (float)use_load_balancing;
-
-  // Related variables metrics (if available)
-  if (pb_ptr->related_variables_offsets.size() > 0) {
-    auto h_offsets = cuopt::host_copy(pb_ptr->related_variables_offsets, handle_ptr->get_stream());
-    i_t total_related = 0;
-    i_t max_related   = 0;
-    for (i_t i = 0; i < pb_ptr->n_variables; ++i) {
-      i_t count = h_offsets[i + 1] - h_offsets[i];
-      total_related += count;
-      max_related = std::max(max_related, count);
-    }
-    features["avg_related_vars_per_var"] =
-      pb_ptr->n_variables > 0 ? (float)total_related / pb_ptr->n_variables : 0.0f;
-    // features["max_related_vars"] = (float)max_related;
-  } else {
-    features["avg_related_vars_per_var"] = 0.0f;
-    // features["max_related_vars"]         = 0.0f;
-  }
-
-  // Constraint characteristics
-  auto h_lower    = cuopt::host_copy(pb_ptr->constraint_lower_bounds, handle_ptr->get_stream());
-  auto h_upper    = cuopt::host_copy(pb_ptr->constraint_upper_bounds, handle_ptr->get_stream());
-  i_t n_equality  = 0;
-  i_t n_tight     = 0;
-  f_t total_range = 0.0;
-  i_t n_range_constraints = 0;
-
-  for (i_t i = 0; i < pb_ptr->n_constraints; ++i) {
-    if (pb_ptr->integer_equal(h_lower[i], h_upper[i])) {
-      n_equality++;
-    } else {
-      f_t range = h_upper[i] - h_lower[i];
-      if (std::isfinite(range)) {
-        total_range += range;
-        n_range_constraints++;
-        if (range < 1.0) n_tight++;
-      }
-    }
-  }
-  features["equality_ratio"] =
-    pb_ptr->n_constraints > 0 ? (float)n_equality / pb_ptr->n_constraints : 0.0f;
-  features["avg_constraint_range"] =
-    n_range_constraints > 0 ? (float)(total_range / n_range_constraints) : 0.0f;
-  features["tight_constraint_ratio"] =
-    pb_ptr->n_constraints > 0 ? (float)n_tight / pb_ptr->n_constraints : 0.0f;
-
-  // Variable bound characteristics
-  auto h_var_bounds   = cuopt::host_copy(pb_ptr->variable_bounds, handle_ptr->get_stream());
-  i_t n_unbounded     = 0;
-  i_t n_fixed         = 0;
-  f_t total_var_range = 0.0;
-  i_t n_bounded_vars  = 0;
-
-  for (i_t i = 0; i < pb_ptr->n_variables; ++i) {
-    f_t lower = get_lower(h_var_bounds[i]);
-    f_t upper = get_upper(h_var_bounds[i]);
-
-    if (!std::isfinite(lower) || !std::isfinite(upper)) {
-      n_unbounded++;
-    } else if (pb_ptr->integer_equal(lower, upper)) {
-      n_fixed++;
-    } else {
-      f_t range = upper - lower;
-      total_var_range += range;
-      n_bounded_vars++;
-    }
-  }
-  features["unbounded_var_ratio"] =
-    pb_ptr->n_variables > 0 ? (float)n_unbounded / pb_ptr->n_variables : 0.0f;
-  features["fixed_var_ratio"] =
-    pb_ptr->n_variables > 0 ? (float)n_fixed / pb_ptr->n_variables : 0.0f;
-  features["avg_variable_range"] =
-    n_bounded_vars > 0 ? (float)(total_var_range / n_bounded_vars) : 0.0f;
-
-  // Objective characteristics
-  auto h_obj_coeffs = cuopt::host_copy(pb_ptr->objective_coefficients, handle_ptr->get_stream());
-  i_t n_obj_vars    = 0;
-  f_t total_obj_magnitude = 0.0;
-  for (i_t i = 0; i < pb_ptr->n_variables; ++i) {
-    if (h_obj_coeffs[i] != 0.0) {
-      n_obj_vars++;
-      total_obj_magnitude += std::abs(h_obj_coeffs[i]);
-    }
-  }
-  features["obj_var_ratio"] =
-    pb_ptr->n_variables > 0 ? (float)n_obj_vars / pb_ptr->n_variables : 0.0f;
-  features["avg_obj_coeff_magnitude"] =
-    n_obj_vars > 0 ? (float)(total_obj_magnitude / n_obj_vars) : 0.0f;
-
-  // Matrix density patterns
-  auto h_offsets      = cuopt::host_copy(pb_ptr->offsets, handle_ptr->get_stream());
-  i_t max_nnz_per_row = 0;
-  i_t min_nnz_per_row = pb_ptr->n_variables;
-  f_t sum_sq_dev      = 0.0;
-  f_t mean_nnz =
-    pb_ptr->n_constraints > 0 ? (f_t)pb_ptr->coefficients.size() / pb_ptr->n_constraints : 0.0f;
-
-  for (i_t i = 0; i < pb_ptr->n_constraints; ++i) {
-    i_t nnz_row     = h_offsets[i + 1] - h_offsets[i];
-    max_nnz_per_row = std::max(max_nnz_per_row, nnz_row);
-    min_nnz_per_row = std::min(min_nnz_per_row, nnz_row);
-    f_t dev         = nnz_row - mean_nnz;
-    sum_sq_dev += dev * dev;
-  }
-  features["max_nnz_per_row"] = (float)max_nnz_per_row;
-  features["min_nnz_per_row"] = (float)min_nnz_per_row;
-  features["nnz_variance"] =
-    pb_ptr->n_constraints > 0 ? (float)(sum_sq_dev / pb_ptr->n_constraints) : 0.0f;
-
-  // Average variable degree (avg constraints per variable)
-  features["avg_var_degree"] =
-    pb_ptr->n_variables > 0 ? (float)pb_ptr->coefficients.size() / pb_ptr->n_variables : 0.0f;
-
-  // Derived complexity metrics
-  features["problem_size_score"] =
-    (float)(pb_ptr->n_variables * pb_ptr->n_constraints) * (float)pb_ptr->sparsity;
-  features["structural_complexity"] =
-    (features["integer_ratio"] + 1.0f) * (float)pb_ptr->unbalancedness;
-  features["constraint_var_ratio"] =
-    pb_ptr->n_variables > 0 ? (float)pb_ptr->n_constraints / pb_ptr->n_variables : 0.0f;
-
-  return features;
-}
-
-template <typename i_t, typename f_t>
 i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
 {
   auto& data = *climbers[climber_idx];
@@ -1498,9 +1325,6 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
   handle_ptr->sync_stream();
 
   if (deterministic) { initialize_deterministic_work_estimator(); }
-
-  // Compute and store feature vector for later logging
-  if (deterministic) { feature_vector = get_feature_vector(0); }
 
   i_t iterations = host_loop(solution);
   RAFT_CHECK_CUDA(handle_ptr->get_stream());

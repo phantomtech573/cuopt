@@ -129,8 +129,6 @@ struct fj_move_t {
   bool operator!=(const fj_move_t& rhs) const { return !(*this == rhs); }
 };
 
-// TODO: use 32bit integers instead,
-// as we dont need them to be floating point per the FJ2 scoring scheme
 // sizeof(fj_staged_score_t) <= 8 is needed to allow for atomic loads
 struct fj_staged_score_t {
   int32_t base{std::numeric_limits<int32_t>::lowest()};
@@ -646,7 +644,6 @@ class fj_t {
   std::vector<std::unique_ptr<climber_data_t>> climbers;
   rmm::device_uvector<typename climber_data_t::view_t> climber_views;
   fj_settings_t settings;
-  std::map<std::string, float> feature_vector;
   std::vector<double> deterministic_frontier_work_by_var_;
   double deterministic_average_frontier_work_{0.0};
   double deterministic_refresh_work_{0.0};
@@ -656,7 +653,6 @@ class fj_t {
 
  private:
   bool use_load_balancing_codepath() const;
-  std::map<std::string, float> get_feature_vector(i_t climber_idx = 0) const;
 };
 
 }  // namespace cuopt::linear_programming::detail

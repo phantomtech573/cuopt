@@ -761,8 +761,6 @@ bool constraint_prop_t<i_t, f_t>::run_repair_procedure(problem_t<i_t, f_t>& prob
                                                        work_limit_timer_t& timer,
                                                        const raft::handle_t* handle_ptr)
 {
-  CUOPT_LOG_TRACE("Running repair procedure");
-
   // select the first probing value
   i_t select = 0;
   multi_probe.set_updated_bounds(problem, select, handle_ptr);
@@ -881,7 +879,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
                sol.problem_ptr->integer_indices.data(),
                sol.problem_ptr->n_integer_vars,
                sol.handle_ptr->get_stream());
-    CUOPT_LOG_DEBUG("sol hash 0x%x", sol.get_hash());
+    CUOPT_DETERMINISM_LOG("sol hash 0x%x", sol.get_hash());
   } else {
     find_unset_integer_vars(sol, unset_integer_vars);
     sort_by_frac(sol, make_span(unset_integer_vars));
@@ -906,16 +904,16 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
     set_bounds_on_fixed_vars(sol);
   }
 
-  CUOPT_LOG_TRACE("Bounds propagation rounding: unset vars %lu", unset_integer_vars.size());
+  CUOPT_DETERMINISM_LOG("Bounds propagation rounding: unset vars %lu", unset_integer_vars.size());
   if (unset_integer_vars.size() == 0) {
-    CUOPT_LOG_TRACE("No integer variables provided in the bounds prop rounding");
+    CUOPT_DETERMINISM_LOG("No integer variables provided in the bounds prop rounding");
     expand_device_copy(orig_sol.assignment, sol.assignment, sol.handle_ptr->get_stream());
     cuopt_func_call(orig_sol.test_variable_bounds());
     return orig_sol.compute_feasibility();
   }
   // this is needed for the sort inside of the loop
   bool problem_ii = is_problem_ii(*sol.problem_ptr);
-  CUOPT_LOG_TRACE("is problem ii %d", problem_ii);
+  CUOPT_DETERMINISM_LOG("is problem ii %d", problem_ii);
   //  if the problem is ii, run the bounds prop in the beginning
   if (problem_ii) {
     bool bounds_repaired =
@@ -941,8 +939,8 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   bool timeout_happened          = false;
   i_t n_failed_repair_iterations = 0;
   while (set_count < unset_integer_vars.size()) {
-    CUOPT_LOG_TRACE("n_set_vars %d vars to set %lu", set_count, unset_integer_vars.size());
-    CUOPT_LOG_TRACE("unset_integer_vars size %lu", unset_integer_vars.size());
+    CUOPT_DETERMINISM_LOG("n_set_vars %d vars to set %lu", set_count, unset_integer_vars.size());
+    CUOPT_DETERMINISM_LOG("unset_integer_vars size %lu", unset_integer_vars.size());
     const size_t set_count_before = set_count;
     update_host_assignment(sol);
     if (max_timer.check_time_limit()) {
@@ -1046,7 +1044,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
     // which is the unchanged problem bounds
     multi_probe.update_host_bounds(sol.handle_ptr, make_span(sol.problem_ptr->variable_bounds));
   }
-  CUOPT_LOG_TRACE(
+  CUOPT_DETERMINISM_LOG(
     "Bounds propagation rounding end: ii constraint count first buffer %d, second buffer %d",
     multi_probe.infeas_constraints_count_0,
     multi_probe.infeas_constraints_count_1);
@@ -1103,7 +1101,7 @@ bool constraint_prop_t<i_t, f_t>::apply_round(
   f_t bounds_prop_end_time = max_timer.remaining_time();
   repair_stats.total_time_spent_on_bounds_prop += bounds_prop_start_time - bounds_prop_end_time;
 
-  CUOPT_LOG_TRACE(
+  CUOPT_DETERMINISM_LOG(
     "repair_success %lu repair_attempts %lu intermediate_repair_success %lu total_repair_loops"
     "%lu total_time_spent_on_repair %f total_time_spent_bounds_prop_after_repair %f "
     "total_time_spent_on_bounds_prop %f",

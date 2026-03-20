@@ -910,8 +910,9 @@ DI void update_changed_constraints(typename fj_t<i_t, f_t>::climber_data_t::view
   if (blockIdx.x == 0) {
     if (threadIdx.x == 0) {
       // sort changed constraints to guarantee determinism
-      // TODO: horribly slow as it is... block-parallelize at least? but not trivial for arbitrary
-      // sizes w/ CUB
+      // TODO: usually csontraint changed few, but thats still rather dreadful...
+      // block-parallelize at least? but not trivial for arbitrary sizes w/ CUB
+      // TODO: replace once focus shifts to tuning deterministic GPU heuristics
       if (fj.settings->work_limit != std::numeric_limits<double>::infinity()) {
         thrust::sort(thrust::seq,
                      fj.constraints_changed.begin(),
