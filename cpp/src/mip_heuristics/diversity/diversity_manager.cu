@@ -260,8 +260,12 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit,
   //   problem_ptr->get_host_user_problem(host_problem);
   //   std::shared_ptr<clique_table_t<i_t, f_t>> clique_table;
   //   constexpr bool modify_problem_with_cliques = false;
-  //   find_initial_cliques(
-  //     host_problem, context.settings.tolerances, clique_timer, modify_problem_with_cliques);
+  //   find_initial_cliques(host_problem,
+  //                        context.settings.tolerances,
+  //                        &clique_table,
+  //                        clique_timer,
+  //                        modify_problem_with_cliques,
+  //                        nullptr);
   //   if (modify_problem_with_cliques) {
   //     problem_ptr->set_constraints_from_host_user_problem(host_problem);
   //     cuopt_assert(host_problem.lower.size() == static_cast<size_t>(problem_ptr->n_variables),
@@ -327,7 +331,10 @@ void diversity_manager_t<i_t, f_t>::generate_quick_feasible_solution()
     auto& feas_sol = initial_sol_vector.back().get_feasible()
                        ? initial_sol_vector.back()
                        : initial_sol_vector[initial_sol_vector.size() - 2];
-    CUOPT_LOG_INFO("Generated fast solution with objective %f", feas_sol.get_user_objective());
+    CUOPT_LOG_INFO("Generated fast solution in %f seconds with objective %f, hash 0x%x",
+                   timer.elapsed_time(),
+                   feas_sol.get_user_objective(),
+                   feas_sol.get_hash());
   }
   problem_ptr->handle_ptr->sync_stream();
 }
@@ -356,10 +363,6 @@ void diversity_manager_t<i_t, f_t>::run_fj_alone(solution_t<i_t, f_t>& solution)
   ls.fj.settings.feasibility_run        = false;
   ls.fj.settings.time_limit             = timer.remaining_time();
   ls.fj.solve(solution);
-  if (solution.get_feasible()) {
-    population.add_solution(std::move(solution),
-                            internals::mip_solution_origin_t::FEASIBILITY_JUMP);
-  }
   CUOPT_LOG_INFO("FJ alone finished!");
 }
 
@@ -367,9 +370,8 @@ void diversity_manager_t<i_t, f_t>::run_fj_alone(solution_t<i_t, f_t>& solution)
 template <typename i_t, typename f_t>
 void diversity_manager_t<i_t, f_t>::run_fp_alone()
 {
-  CUOPT_DETERMINISM_LOG("Deterministic FP alone enter");
+  CUOPT_LOG_DEBUG("Running FP alone!");
   solution_t<i_t, f_t> sol(population.best_feasible());
-  sol.handle_ptr->sync_stream();
   CUOPT_DETERMINISM_LOG(
     "Deterministic FP alone input: hash=0x%x feasible=%d obj=%.16e excess=%.16e",
     sol.get_hash(),
@@ -377,7 +379,6 @@ void diversity_manager_t<i_t, f_t>::run_fp_alone()
     sol.get_user_objective(),
     sol.get_total_excess());
   ls.run_fp(sol, timer, &population, diversity_config.n_fp_iterations);
-  sol.handle_ptr->sync_stream();
   CUOPT_DETERMINISM_LOG(
     "Deterministic FP alone output: hash=0x%x feasible=%d obj=%.16e excess=%.16e",
     sol.get_hash(),
@@ -388,7 +389,6 @@ void diversity_manager_t<i_t, f_t>::run_fp_alone()
     population.add_solution(std::move(sol), internals::mip_solution_origin_t::LOCAL_SEARCH);
   }
   auto& best_sol = population.best_feasible();
-  best_sol.handle_ptr->sync_stream();
   CUOPT_DETERMINISM_LOG(
     "Deterministic FP alone population best after: hash=0x%x feasible=%d obj=%.16e excess=%.16e",
     best_sol.get_hash(),
@@ -419,7 +419,6 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   auto timer_raii_guard =
     cuopt::scope_guard([&]() { stats.total_solve_time = timer.elapsed_time(); });
   auto log_return_solution = [&](const char* reason, solution_t<i_t, f_t>& sol) {
-    sol.handle_ptr->sync_stream();
     CUOPT_DETERMINISM_LOG(
       "Deterministic run_solver return: reason=%s hash=0x%x feasible=%d "
       "obj=%.16e excess=%.16e",
@@ -447,9 +446,20 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     population.initialize_population();
     population.allocate_solutions();
 
+    // Start CPUFJ in deterministic mode with B&B integration
+    if (context.branch_and_bound_ptr != nullptr) {
+      ls.start_cpufj_deterministic(*context.branch_and_bound_ptr);
+    }
+
     while (!check_b_b_preemption()) {
+      if (timer.check_time_limit()) break;
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+
+    // Stop CPUFJ when B&B is done
+    ls.stop_cpufj_deterministic();
+
+    population.add_external_solutions_to_population();
     auto& best_sol = population.best_feasible();
     log_return_solution("heuristics_disabled", best_sol);
     return best_sol;
@@ -508,8 +518,8 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     return best_sol;
   }
   add_user_given_solutions(initial_sol_vector);
-  CUOPT_LOG_DEBUG("DM bootstrap: initial_sol_vector size after user solutions = %lu",
-                  initial_sol_vector.size());
+  CUOPT_DETERMINISM_LOG("DM bootstrap: initial_sol_vector size after user solutions = %lu",
+                        initial_sol_vector.size());
   // Run CPUFJ early to find quick initial solutions
   ls_cpufj_raii_guard_t ls_cpufj_raii_guard(ls);  // RAII to stop cpufj threads on solve stop
 
@@ -538,6 +548,8 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     f_t absolute_tolerance = context.settings.tolerances.absolute_tolerance;
 
     auto lp_result = [&]() {
+      // no concurrent root solve in determinism mode, reuse the work-accounted relaxed_lp machinery
+      // for this
       if (timer.deterministic) {
         relaxed_lp_settings_t lp_settings{};
         lp_settings.time_limit              = lp_time_limit;

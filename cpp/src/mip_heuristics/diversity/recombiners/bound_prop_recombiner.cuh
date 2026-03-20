@@ -190,7 +190,8 @@ class bound_prop_recombiner_t : public recombiner_t<i_t, f_t> {
       CUOPT_LOG_DEBUG("Returning false because all vars are common or different");
       return std::make_tuple(offspring, false, 0.0);
     }
-    double work = static_cast<double>(n_vars_from_other);
+    // TODO: REPLACE!
+    double work = static_cast<double>(n_vars_from_other) / 1e8;
 
     cuopt_assert(a.problem_ptr == b.problem_ptr,
                  "The two solutions should not refer to different problems");

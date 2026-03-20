@@ -66,7 +66,7 @@ class fp_recombiner_t : public recombiner_t<i_t, f_t> {
       return std::make_tuple(offspring, false, 0.0);
     }
     // TODO: CHANGE
-    double work = static_cast<double>(n_vars_from_other);
+    double work = static_cast<double>(n_vars_from_other) / 1e8;
     CUOPT_LOG_DEBUG(
       "n_vars_from_guiding %d n_vars_from_other %d", n_vars_from_guiding, n_vars_from_other);
     CUOPT_DETERMINISM_LOG(

@@ -245,10 +245,7 @@ class recombiner_t {
       enabled_recombiners.erase(recombiner_enum_t::SUB_MIP);
     }
     // submip not supported in deterministic mode yet
-    if (disable_submip_for_determinism) {
-      // temp, added for debugging
-      enabled_recombiners.erase(recombiner_enum_t::SUB_MIP);
-    }
+    if (disable_submip_for_determinism) { enabled_recombiners.erase(recombiner_enum_t::SUB_MIP); }
     recombiner_t::enabled_recombiners =
       std::vector<recombiner_enum_t>(enabled_recombiners.begin(), enabled_recombiners.end());
     cuopt_assert(!recombiner_t::enabled_recombiners.empty(), "No recombiners enabled after init");

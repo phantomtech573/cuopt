@@ -85,7 +85,7 @@ class line_segment_recombiner_t : public recombiner_t<i_t, f_t> {
     i_t n_different_vars =
       this->assign_same_integer_values(guiding_solution, other_solution, offspring);
     // TODO: CHANGE
-    double work                           = static_cast<double>(n_different_vars);
+    double work                           = static_cast<double>(n_different_vars) / 1e8;
     rmm::device_uvector<f_t> delta_vector = generate_delta_vector(
       guiding_solution, other_solution, offspring, n_points_to_search, n_different_vars);
     line_segment_search.fj.copy_weights(weights, offspring.handle_ptr);
