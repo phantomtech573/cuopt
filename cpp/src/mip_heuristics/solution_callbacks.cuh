@@ -56,15 +56,30 @@ class solution_publication_t {
     payload.callback_info.origin         = origin;
     payload.callback_info.work_timestamp = work_timestamp;
     solution_t<i_t, f_t> temp_sol(sol);
+    CUOPT_LOG_DEBUG("build_callback_payload: pre_postprocess size=%zu handle=%p problem_handle=%p",
+                    temp_sol.assignment.size(),
+                    (void*)sol.handle_ptr,
+                    (void*)problem_ptr->handle_ptr);
     problem_ptr->post_process_assignment(temp_sol.assignment, true, sol.handle_ptr);
+    CUOPT_LOG_DEBUG("build_callback_payload: post_postprocess size=%zu",
+                    temp_sol.assignment.size());
     if (settings.mip_scaling) {
       rmm::device_uvector<f_t> dummy(0, temp_sol.handle_ptr->get_stream());
       scaling.unscale_solutions(temp_sol.assignment, dummy);
+      CUOPT_LOG_DEBUG("build_callback_payload: post_unscale size=%zu", temp_sol.assignment.size());
     }
     if (problem_ptr->has_papilo_presolve_data()) {
+      CUOPT_LOG_DEBUG("build_callback_payload: pre_papilo size=%zu papilo_reduced_size=%zu",
+                      temp_sol.assignment.size(),
+                      problem_ptr->get_papilo_original_num_variables());
       problem_ptr->papilo_uncrush_assignment(temp_sol.assignment, sol.handle_ptr);
+      CUOPT_LOG_DEBUG("build_callback_payload: post_papilo size=%zu", temp_sol.assignment.size());
     }
-    payload.assignment = temp_sol.get_host_assignment();
+    payload.assignment = cuopt::host_copy(temp_sol.assignment, temp_sol.handle_ptr->get_stream());
+    CUOPT_LOG_DEBUG("build_callback_payload: final payload size=%zu obj=%.6g origin=%s",
+                    payload.assignment.size(),
+                    payload.user_objective,
+                    internals::mip_solution_origin_to_string(origin));
     return payload;
   }
 
