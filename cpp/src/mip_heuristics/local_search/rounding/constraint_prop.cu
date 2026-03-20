@@ -5,6 +5,7 @@
  */
 /* clang-format on */
 
+#include <mip_heuristics/logger.cuh>
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
 #include <mip_heuristics/utils.cuh>
@@ -783,8 +784,24 @@ bool constraint_prop_t<i_t, f_t>::run_repair_procedure(problem_t<i_t, f_t>& prob
     }
     repair_stats.total_repair_loops++;
     collapse_crossing_bounds(problem, original_problem, handle_ptr);
+    if (timer.deterministic) {
+      CUOPT_DETERMINISM_LOG(
+        "run_repair_procedure pre-repair: loop=%d bounds_hash=0x%x infeas_count=%d timer_rem=%.6f",
+        n_of_repairs_needed_for_feasible,
+        detail::compute_hash(make_span(problem.variable_bounds), handle_ptr->get_stream()),
+        bounds_update.infeas_constraints_count,
+        timer.remaining_time());
+    }
     bool bounds_repaired =
       bounds_repair.repair_problem(problem, original_problem, timer, handle_ptr);
+    if (timer.deterministic) {
+      CUOPT_DETERMINISM_LOG(
+        "run_repair_procedure post-repair: loop=%d repaired=%d bounds_hash=0x%x timer_rem=%.6f",
+        n_of_repairs_needed_for_feasible,
+        (int)bounds_repaired,
+        detail::compute_hash(make_span(problem.variable_bounds), handle_ptr->get_stream()),
+        timer.remaining_time());
+    }
     if (bounds_repaired) {
       repair_stats.intermediate_repair_success++;
       CUOPT_LOG_DEBUG("Bounds repair success, running bounds prop to verify feasibility!");
@@ -991,9 +1008,28 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
       work_limit_timer_t repair_timer(
         context.gpu_heur_loop, timer.remaining_time() / 5, *context.termination);
       save_bounds(sol);
-      // update bounds and run repair procedure
+      if (timer.deterministic) {
+        CUOPT_DETERMINISM_LOG(
+          "find_integer pre-repair: bounds_hash=0x%x assignment_hash=0x%x infeas_count=%d "
+          "timer_rem=%.6f",
+          detail::compute_hash(make_span(sol.problem_ptr->variable_bounds),
+                               sol.handle_ptr->get_stream()),
+          detail::compute_hash(make_span(sol.assignment), sol.handle_ptr->get_stream()),
+          bounds_update.infeas_constraints_count,
+          timer.remaining_time());
+      }
       bool bounds_repaired =
         run_repair_procedure(*sol.problem_ptr, *orig_sol.problem_ptr, repair_timer, sol.handle_ptr);
+      if (timer.deterministic) {
+        CUOPT_DETERMINISM_LOG(
+          "find_integer post-repair: repaired=%d bounds_hash=0x%x assignment_hash=0x%x "
+          "timer_rem=%.6f",
+          (int)bounds_repaired,
+          detail::compute_hash(make_span(sol.problem_ptr->variable_bounds),
+                               sol.handle_ptr->get_stream()),
+          detail::compute_hash(make_span(sol.assignment), sol.handle_ptr->get_stream()),
+          timer.remaining_time());
+      }
       if (!bounds_repaired) {
         restore_bounds(sol);
         n_failed_repair_iterations++;

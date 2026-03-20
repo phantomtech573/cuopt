@@ -18,6 +18,13 @@
 
 #include <cmath>
 
+// uncomment to enable detailed detemrinism logs
+#undef CUOPT_DETERMINISM_LOG
+#define CUOPT_DETERMINISM_LOG(...) \
+  do {                             \
+    CUOPT_LOG_INFO(__VA_ARGS__);   \
+  } while (0)
+
 namespace cuopt::linear_programming::detail {
 
 namespace {
@@ -200,10 +207,13 @@ template <typename i_t, typename f_t>
 i_t bounds_repair_t<i_t, f_t>::get_random_cstr()
 {
   std::uniform_int_distribution<> dist(0, h_n_violated_cstr - 1);
-  // Generate random number
-  i_t random_number = dist(gen);
-  i_t cstr_idx      = violated_constraints.element(random_number, handle_ptr->get_stream());
+  i_t random_index = dist(gen);
+  i_t cstr_idx     = violated_constraints.element(random_index, handle_ptr->get_stream());
   CUOPT_LOG_TRACE("Repair: selected random cstr %d", cstr_idx);
+  CUOPT_DETERMINISM_LOG("Repair cstr select: random_index=%d cstr=%d n_violated=%d",
+                        random_index,
+                        cstr_idx,
+                        h_n_violated_cstr);
   return cstr_idx;
 }
 
@@ -513,6 +523,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
       setup_work);
   }
   i_t no_candidate_in_a_row = 0;
+  const char* exit_reason   = "FEASIBLE";
   // TODO: do this better
   i_t iter_limit = std::numeric_limits<i_t>::max();
   if (timer.deterministic) { iter_limit = 20; }
@@ -537,7 +548,10 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
         timer.remaining_time(),
         total_estimated_work);
     }
-    if (timer.check_time_limit()) { break; }
+    if (timer.check_time_limit()) {
+      exit_reason = "TIME_LIMIT";
+      break;
+    }
     i_t curr_cstr = get_random_cstr();
     // best way would be to check a variable cycle, but this is easier and more performant
     bool is_cycle = detect_cycle(curr_cstr);
@@ -550,7 +564,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
       record_estimated_work(timer, &total_estimated_work, shift_work);
       CUOPT_DETERMINISM_LOG(
         "Repair iter shift: iter=%d curr_cstr=%d cycle=%d n_candidates=%d cand_var_hash=0x%x "
-        "cand_shift_hash=0x%x shift_work=%.6f timer_rem=%.6f total_work=%.6f",
+        "cand_shift_hash=0x%x singleton_moved=%d shift_work=%.6f timer_rem=%.6f total_work=%.6f",
         repair_iterations,
         curr_cstr,
         (int)is_cycle,
@@ -559,6 +573,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
                              handle_ptr->get_stream()),
         detail::compute_hash(make_span(candidates.bound_shift, 0, n_candidates),
                              handle_ptr->get_stream()),
+        (int)candidates.at_least_one_singleton_moved.value(handle_ptr->get_stream()),
         shift_work,
         timer.remaining_time(),
         total_estimated_work);
@@ -569,6 +584,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
       if (no_candidate_in_a_row++ == 10 || h_n_violated_cstr == 1) {
         CUOPT_LOG_DEBUG("Repair: no candidate var found on last violated constraint %d. Exiting...",
                         curr_cstr);
+        exit_reason = "NO_CANDIDATE";
         break;
       }
       continue;
@@ -577,38 +593,38 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
     CUOPT_LOG_TRACE("Repair: number of candidates %d", n_candidates);
     // among the ones that have a valid shift value, compute the damage
     compute_damages(problem, n_candidates);
-    double damage_work = 0.0;
+    // get the best damage
+    i_t best_cstr_delta = candidates.cstr_delta.front_element(handle_ptr->get_stream());
+    f_t best_damage     = candidates.damage.front_element(handle_ptr->get_stream());
+    double damage_work  = 0.0;
     if (timer.deterministic) {
       damage_work = estimate_bounds_repair_damage_work(problem, n_candidates);
       record_estimated_work(timer, &total_estimated_work, damage_work);
       CUOPT_DETERMINISM_LOG(
         "Repair iter damage: iter=%d curr_cstr=%d cand_cdelta_hash=0x%x cand_damage_hash=0x%x "
-        "damage_work=%.6f timer_rem=%.6f total_work=%.6f",
+        "best_cstr_delta=%d best_damage=%.6f damage_work=%.6f timer_rem=%.6f total_work=%.6f",
         repair_iterations,
         curr_cstr,
         detail::compute_hash(make_span(candidates.cstr_delta, 0, n_candidates),
                              handle_ptr->get_stream()),
         detail::compute_hash(make_span(candidates.damage, 0, n_candidates),
                              handle_ptr->get_stream()),
+        best_cstr_delta,
+        best_damage,
         damage_work,
         timer.remaining_time(),
         total_estimated_work);
     }
-    // get the best damage
-    i_t best_cstr_delta = candidates.cstr_delta.front_element(handle_ptr->get_stream());
-    f_t best_damage     = candidates.damage.front_element(handle_ptr->get_stream());
     CUOPT_LOG_TRACE(
       "Repair: best_cstr_delta value %d best_damage %f", best_cstr_delta, best_damage);
     i_t best_move_idx;
     i_t n_of_eligible_candidates = -1;
 
-    // if the best damage is positive and we are within the prop (paper uses 0.75)
-    if ((best_cstr_delta > 0 && rand_double(0, 1, gen) < p) || is_cycle) {
-      // pick a random move from the candidate list
+    const double rand_u01         = rand_double(0, 1, gen);
+    const bool took_random_branch = (best_cstr_delta > 0 && rand_u01 < p) || is_cycle;
+    if (took_random_branch) {
       best_move_idx = get_random_idx(n_candidates);
     } else {
-      // filter the moves with best_damage(it can be zero or not) and then pick a candidate among
-      // them
       n_of_eligible_candidates =
         find_cutoff_index(candidates, best_cstr_delta, best_damage, n_candidates);
       cuopt_assert(n_of_eligible_candidates > 0, "");
@@ -621,6 +637,23 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
                     candidates.bound_shift.element(best_move_idx, handle_ptr->get_stream()),
                     candidates.cstr_delta.element(best_move_idx, handle_ptr->get_stream()),
                     candidates.damage.element(best_move_idx, handle_ptr->get_stream()));
+    if (timer.deterministic) {
+      CUOPT_DETERMINISM_LOG(
+        "Repair iter select: iter=%d cycle=%d rand_u01=%.12f took_random=%d "
+        "cutoff_idx=%d n_eligible=%d chosen_idx=%d chosen_var=%d chosen_shift=%.6f "
+        "chosen_cdelta=%d chosen_damage=%.6f",
+        repair_iterations,
+        (int)is_cycle,
+        rand_u01,
+        (int)took_random_branch,
+        (int)(took_random_branch ? -1 : n_of_eligible_candidates),
+        (int)(took_random_branch ? n_candidates : n_of_eligible_candidates),
+        best_move_idx,
+        candidates.variable_index.element(best_move_idx, handle_ptr->get_stream()),
+        candidates.bound_shift.element(best_move_idx, handle_ptr->get_stream()),
+        candidates.cstr_delta.element(best_move_idx, handle_ptr->get_stream()),
+        candidates.damage.element(best_move_idx, handle_ptr->get_stream()));
+    }
     apply_move(problem, original_problem, best_move_idx);
     reset();
     // TODO we might optimize this to only calculate the changed constraints
@@ -661,11 +694,22 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
       best_bounds.update_from(problem, handle_ptr);
     }
   }
-  // fill the problem with the best bounds
+  if (h_n_violated_cstr > 0 && iter_limit <= 0) { exit_reason = "ITER_LIMIT"; }
   bool feasible = h_n_violated_cstr == 0;
-  // copy best bounds into problem
   best_bounds.update_to(problem, handle_ptr);
   CUOPT_LOG_DEBUG("Repair: returning with feas: %d vio %f", feasible, best_violation);
+  if (timer.deterministic) {
+    CUOPT_DETERMINISM_LOG(
+      "Repair exit: reason=%s iters=%d feasible=%d n_violated=%d best_violation=%.6f "
+      "total_work=%.6f timer_rem=%.6f",
+      exit_reason,
+      repair_iterations,
+      (int)feasible,
+      h_n_violated_cstr,
+      best_violation,
+      total_estimated_work,
+      timer.remaining_time());
+  }
   return feasible;
 }
 
