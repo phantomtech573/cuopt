@@ -195,6 +195,16 @@ f_t user_relative_gap(const lp_problem_t<i_t, f_t>& lp, f_t obj_value, f_t lower
   return user_mip_gap;
 }
 
+template <typename i_t, typename f_t>
+f_t user_absolute_gap(const lp_problem_t<i_t, f_t>& lp, f_t obj_value, f_t lower_bound)
+{
+  f_t user_obj         = compute_user_objective(lp, obj_value);
+  f_t user_lower_bound = compute_user_objective(lp, lower_bound);
+  f_t user_mip_gap     = std::abs(user_obj - user_lower_bound);
+  if (std::isnan(user_mip_gap)) { return std::numeric_limits<f_t>::infinity(); }
+  return user_mip_gap;
+}
+
 template <typename f_t>
 std::string user_mip_gap(f_t obj_value, f_t lower_bound)
 {
@@ -697,9 +707,9 @@ void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& 
     settings_.heuristic_preemption_callback();
   }
 
-  f_t gap              = upper_bound_ - lower_bound;
   f_t obj              = compute_user_objective(original_lp_, upper_bound_.load());
   f_t user_bound       = compute_user_objective(original_lp_, lower_bound);
+  f_t gap              = std::abs(obj - user_bound);
   f_t gap_rel          = user_relative_gap(original_lp_, upper_bound_.load(), lower_bound);
   bool is_maximization = original_lp_.obj_scale < 0.0;
 
@@ -1454,7 +1464,6 @@ void branch_and_bound_t<i_t, f_t>::plunge_with(branch_and_bound_worker_t<i_t, f_
 
     f_t lower_bound = node_ptr->lower_bound;
     f_t upper_bound = upper_bound_;
-    f_t rel_gap     = user_relative_gap(original_lp_, upper_bound, lower_bound);
 
     // This is based on three assumptions:
     // - The stack only contains sibling nodes, i.e., the current node and it sibling (if
@@ -1567,7 +1576,6 @@ void branch_and_bound_t<i_t, f_t>::dive_with(branch_and_bound_worker_t<i_t, f_t>
 
     f_t lower_bound     = node_ptr->lower_bound;
     f_t upper_bound     = upper_bound_;
-    f_t rel_gap         = user_relative_gap(original_lp_, upper_bound, lower_bound);
     worker->lower_bound = lower_bound;
 
     if (node_ptr->lower_bound > upper_bound) {
@@ -1639,7 +1647,7 @@ void branch_and_bound_t<i_t, f_t>::run_scheduler()
 #endif
 
   f_t lower_bound     = get_lower_bound();
-  f_t abs_gap         = upper_bound_ - lower_bound;
+  f_t abs_gap         = user_absolute_gap(original_lp_, upper_bound_.load(), lower_bound);
   f_t rel_gap         = user_relative_gap(original_lp_, upper_bound_.load(), lower_bound);
   i_t last_node_depth = 0;
   i_t last_int_infeas = 0;
@@ -1649,7 +1657,7 @@ void branch_and_bound_t<i_t, f_t>::run_scheduler()
          (active_workers_per_strategy_[0] > 0 || node_queue_.best_first_queue_size() > 0)) {
     bool launched_any_task = false;
     lower_bound            = get_lower_bound();
-    abs_gap                = upper_bound_ - lower_bound;
+    abs_gap                = user_absolute_gap(original_lp_, upper_bound_.load(), lower_bound);
     rel_gap                = user_relative_gap(original_lp_, upper_bound_.load(), lower_bound);
 
     repair_heuristic_solutions();
@@ -1778,14 +1786,14 @@ void branch_and_bound_t<i_t, f_t>::single_threaded_solve()
   branch_and_bound_worker_t<i_t, f_t> worker(0, original_lp_, Arow_, var_types_, settings_);
 
   f_t lower_bound = get_lower_bound();
-  f_t abs_gap     = upper_bound_ - lower_bound;
+  f_t abs_gap     = user_absolute_gap(original_lp_, upper_bound_.load(), lower_bound);
   f_t rel_gap     = user_relative_gap(original_lp_, upper_bound_.load(), lower_bound);
 
   while (solver_status_ == mip_status_t::UNSET && abs_gap > settings_.absolute_mip_gap_tol &&
          rel_gap > settings_.relative_mip_gap_tol && node_queue_.best_first_queue_size() > 0) {
     bool launched_any_task = false;
     lower_bound            = get_lower_bound();
-    abs_gap                = upper_bound_ - lower_bound;
+    abs_gap                = user_absolute_gap(original_lp_, upper_bound_.load(), lower_bound);
     rel_gap                = user_relative_gap(original_lp_, upper_bound_.load(), lower_bound);
 
     repair_heuristic_solutions();
@@ -1823,7 +1831,19 @@ void branch_and_bound_t<i_t, f_t>::single_threaded_solve()
       continue;
     }
 
-    worker.init_best_first(start_node.value(), original_lp_);
+    mutex_original_lp_.lock();
+    bool feasible = worker.init_best_first(start_node.value(), original_lp_);
+    mutex_original_lp_.unlock();
+
+    if (!feasible) {
+      // This node was put on the heap earlier but its variables bounds now violates the
+      // bounds at the root node
+      search_tree_.graphviz_node(
+        settings_.log, start_node.value(), "cutoff", start_node.value()->lower_bound);
+      search_tree_.update(start_node.value(), node_status_t::FATHOMED);
+      continue;
+    }
+
     plunge_with(&worker);
   }
 }
@@ -2450,7 +2470,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       report(' ', obj, root_objective_, 0, num_fractional);
 
       f_t rel_gap = user_relative_gap(original_lp_, upper_bound_.load(), root_objective_);
-      f_t abs_gap = upper_bound_.load() - root_objective_;
+      f_t abs_gap = user_absolute_gap(original_lp_, upper_bound_.load(), root_objective_);
       if (rel_gap < settings_.relative_mip_gap_tol || abs_gap < settings_.absolute_mip_gap_tol) {
         set_solution_at_root(solution, cut_info);
         set_final_solution(solution, root_objective_);
@@ -3066,7 +3086,7 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sync_callback()
 
   f_t lower_bound = deterministic_compute_lower_bound();
   f_t upper_bound = upper_bound_.load();
-  f_t abs_gap     = upper_bound - lower_bound;
+  f_t abs_gap     = user_absolute_gap(original_lp_, upper_bound, lower_bound);
   f_t rel_gap     = user_relative_gap(original_lp_, upper_bound, lower_bound);
 
   if (abs_gap <= settings_.absolute_mip_gap_tol || rel_gap <= settings_.relative_mip_gap_tol) {

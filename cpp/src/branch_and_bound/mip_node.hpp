@@ -104,14 +104,14 @@ class mip_node_t {
   bool check_variable_bounds(const std::vector<f_t>& start_lower,
                              const std::vector<f_t>& start_upper)
   {
-    if (branch_var_upper > start_upper[branch_var] || branch_var_lower < start_lower[branch_var]) {
+    if (branch_var_upper < start_lower[branch_var] || branch_var_lower > start_upper[branch_var]) {
       return false;
     }
 
     mip_node_t* parent_ptr = parent;
     while (parent_ptr != nullptr && parent_ptr->node_id != 0) {
-      if (parent_ptr->branch_var_upper > start_upper[parent_ptr->branch_var] ||
-          parent_ptr->branch_var_lower < start_lower[parent_ptr->branch_var]) {
+      if (parent_ptr->branch_var_upper < start_lower[parent_ptr->branch_var] ||
+          parent_ptr->branch_var_lower > start_upper[parent_ptr->branch_var]) {
         return false;
       }
       parent_ptr = parent_ptr->parent;
@@ -164,7 +164,7 @@ class mip_node_t {
 
     // If the start bounds has changed (via reduced cost strengthening), check if the
     // bounds in the node is still valid.
-    if (branch_var_upper > start_upper[branch_var] || branch_var_lower < start_lower[branch_var]) {
+    if (branch_var_upper < start_lower[branch_var] || branch_var_lower > start_upper[branch_var]) {
       return false;
     }
 

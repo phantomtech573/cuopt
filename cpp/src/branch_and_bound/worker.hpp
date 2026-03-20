@@ -166,7 +166,6 @@ class branch_and_bound_worker_t {
     if (recompute_bounds) {
       feasible = node_ptr->get_variable_bounds(
         start_lower, start_upper, leaf_problem.lower, leaf_problem.upper, bounds_changed);
-
     } else {
       feasible = node_ptr->update_branched_variable_bounds(
         start_lower, start_upper, leaf_problem.lower, leaf_problem.upper, bounds_changed);
@@ -176,7 +175,6 @@ class branch_and_bound_worker_t {
       feasible = node_presolver.bounds_strengthening(
         settings, bounds_changed, leaf_problem.lower, leaf_problem.upper);
     }
-
     return feasible;
   }
 
