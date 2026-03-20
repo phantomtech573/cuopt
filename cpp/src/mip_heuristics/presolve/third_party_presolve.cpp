@@ -626,7 +626,12 @@ third_party_presolve_result_t<i_t, f_t> third_party_presolve_t<i_t, f_t>::apply_
   } else {
     cuopt_expects(
       false, error_type_t::ValidationError, "PSLP presolver only supports double precision");
-    return third_party_presolve_result_t<i_t, f_t>{third_party_presolve_status_t::UNCHANGED, optimization_problem_t<i_t, f_t>(op_problem.get_handle_ptr()), {}, {}, {}};
+    return third_party_presolve_result_t<i_t, f_t>{
+      third_party_presolve_status_t::UNCHANGED,
+      optimization_problem_t<i_t, f_t>(op_problem.get_handle_ptr()),
+      {},
+      {},
+      {}};
   }
 }
 
