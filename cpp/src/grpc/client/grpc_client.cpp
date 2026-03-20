@@ -468,12 +468,15 @@ bool grpc_client_t::stream_logs(
 
   cuopt::remote::LogMessage log_msg;
   while (reader->Read(&log_msg)) {
-    bool should_continue = callback(log_msg.line(), log_msg.job_complete());
-    if (!should_continue) {
-      context.TryCancel();
-      break;
+    bool done = log_msg.job_complete();
+    if (!log_msg.line().empty()) {
+      bool should_continue = callback(log_msg.line(), done);
+      if (!should_continue) {
+        context.TryCancel();
+        break;
+      }
     }
-    if (log_msg.job_complete()) { break; }
+    if (done) { break; }
   }
 
   auto status = reader->Finish();

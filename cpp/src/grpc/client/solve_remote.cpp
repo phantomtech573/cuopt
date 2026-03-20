@@ -111,10 +111,10 @@ static void apply_env_overrides(grpc_client_config_t& config)
     }
   }
 
-  CUOPT_LOG_INFO("gRPC client config: chunk_size=%lld max_message=%lld tls=%s",
-                 static_cast<long long>(config.chunk_size_bytes),
-                 static_cast<long long>(config.max_message_bytes),
-                 config.enable_tls ? "on" : "off");
+  CUOPT_LOG_DEBUG("gRPC client config: chunk_size=%lld max_message=%lld tls=%s",
+                  static_cast<long long>(config.chunk_size_bytes),
+                  static_cast<long long>(config.max_message_bytes),
+                  config.enable_tls ? "on" : "off");
 }
 
 // ============================================================================
@@ -128,7 +128,7 @@ std::unique_ptr<lp_solution_interface_t<i_t, f_t>> solve_lp_remote(
 {
   init_logger_t log(settings.log_file, settings.log_to_console);
 
-  CUOPT_LOG_INFO("solve_lp_remote (CPU problem) - connecting to gRPC server");
+  CUOPT_LOG_INFO("Using remote GPU backend");
 
   // Build gRPC client configuration
   grpc_client_config_t config;
@@ -136,10 +136,22 @@ std::unique_ptr<lp_solution_interface_t<i_t, f_t>> solve_lp_remote(
   config.timeout_seconds = solver_timeout_seconds(settings.time_limit);
   apply_env_overrides(config);
 
-  // Configure log streaming based on settings
-  if (settings.log_to_console) {
+  // Stream the server's solver log to the client.  The server already
+  // filters by the requested log level, so we just pass lines through to
+  // stdout and/or the log file as-is.
+  std::unique_ptr<std::ofstream> log_file_stream;
+  if (!settings.log_file.empty()) {
+    log_file_stream = std::make_unique<std::ofstream>(settings.log_file, std::ios::app);
+  }
+  bool want_console = settings.log_to_console;
+  bool want_file    = log_file_stream && log_file_stream->is_open();
+
+  if (want_console || want_file) {
     config.stream_logs  = true;
-    config.log_callback = [](const std::string& line) { std::cout << line << std::endl; };
+    config.log_callback = [want_console, want_file, &log_file_stream](const std::string& line) {
+      if (want_console) { std::cout << line << std::endl; }
+      if (want_file) { *log_file_stream << line << std::endl; }
+    };
   }
 
   // Create client and connect
@@ -148,9 +160,9 @@ std::unique_ptr<lp_solution_interface_t<i_t, f_t>> solve_lp_remote(
     throw std::runtime_error("Failed to connect to gRPC server: " + client.get_last_error());
   }
 
-  CUOPT_LOG_INFO("solve_lp_remote - connected to %s, submitting problem (timeout=%ds)",
-                 config.server_address.c_str(),
-                 config.timeout_seconds);
+  CUOPT_LOG_DEBUG("solve_lp_remote - connected to %s, submitting problem (timeout=%ds)",
+                  config.server_address.c_str(),
+                  config.timeout_seconds);
 
   // Call the remote solver
   auto result = client.solve_lp(cpu_problem, settings);
@@ -159,7 +171,7 @@ std::unique_ptr<lp_solution_interface_t<i_t, f_t>> solve_lp_remote(
     throw std::runtime_error("Remote LP solve failed: " + result.error_message);
   }
 
-  CUOPT_LOG_INFO("solve_lp_remote - solve completed successfully");
+  CUOPT_LOG_DEBUG("solve_lp_remote - solve completed successfully");
 
   return std::move(result.solution);
 }
@@ -171,7 +183,7 @@ std::unique_ptr<mip_solution_interface_t<i_t, f_t>> solve_mip_remote(
 {
   init_logger_t log(settings.log_file, settings.log_to_console);
 
-  CUOPT_LOG_INFO("solve_mip_remote (CPU problem) - connecting to gRPC server");
+  CUOPT_LOG_INFO("Using remote GPU backend");
 
   // Build gRPC client configuration
   grpc_client_config_t config;
@@ -179,10 +191,20 @@ std::unique_ptr<mip_solution_interface_t<i_t, f_t>> solve_mip_remote(
   config.timeout_seconds = solver_timeout_seconds(settings.time_limit);
   apply_env_overrides(config);
 
-  // Configure log streaming based on settings
-  if (settings.log_to_console) {
+  // Stream server log — same passthrough logic as the LP callback above.
+  std::unique_ptr<std::ofstream> log_file_stream;
+  if (!settings.log_file.empty()) {
+    log_file_stream = std::make_unique<std::ofstream>(settings.log_file, std::ios::app);
+  }
+  bool want_console = settings.log_to_console;
+  bool want_file    = log_file_stream && log_file_stream->is_open();
+
+  if (want_console || want_file) {
     config.stream_logs  = true;
-    config.log_callback = [](const std::string& line) { std::cout << line << std::endl; };
+    config.log_callback = [want_console, want_file, &log_file_stream](const std::string& line) {
+      if (want_console) { std::cout << line << std::endl; }
+      if (want_file) { *log_file_stream << line << std::endl; }
+    };
   }
 
   // Check if user has set incumbent callbacks
@@ -228,7 +250,7 @@ std::unique_ptr<mip_solution_interface_t<i_t, f_t>> solve_mip_remote(
     throw std::runtime_error("Failed to connect to gRPC server: " + client.get_last_error());
   }
 
-  CUOPT_LOG_INFO(
+  CUOPT_LOG_DEBUG(
     "solve_mip_remote - connected to %s, submitting problem (incumbents=%s, timeout=%ds)",
     config.server_address.c_str(),
     enable_tracking ? "enabled" : "disabled",
@@ -241,7 +263,7 @@ std::unique_ptr<mip_solution_interface_t<i_t, f_t>> solve_mip_remote(
     throw std::runtime_error("Remote MIP solve failed: " + result.error_message);
   }
 
-  CUOPT_LOG_INFO("solve_mip_remote - solve completed successfully");
+  CUOPT_LOG_DEBUG("solve_mip_remote - solve completed successfully");
 
   return std::move(result.solution);
 }

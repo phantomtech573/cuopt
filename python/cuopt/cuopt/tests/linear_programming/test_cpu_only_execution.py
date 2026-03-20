@@ -583,8 +583,7 @@ class TestCuoptCliCPUOnly:
         return combined
 
     _REMOTE_INDICATORS = [
-        "connecting to gRPC server",
-        "solve completed successfully",
+        "Using remote GPU backend",
     ]
 
     def _assert_remote_execution(self, output):
