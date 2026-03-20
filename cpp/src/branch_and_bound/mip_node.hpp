@@ -54,6 +54,27 @@ class mip_node_t {
     children[1] = nullptr;
   }
 
+  ~mip_node_t()
+  {
+    // Iterative tree teardown to avoid stack overflow on deep trees.
+    // Detach all descendants breadth-first, then destroy them as leaves.
+    std::vector<std::unique_ptr<mip_node_t>> nodes;
+    for (auto& c : children) {
+      if (c) { nodes.push_back(std::move(c)); }
+    }
+    // nodes.size() grows so that this loop only terminates when only leaves remain
+    for (size_t i = 0; i < nodes.size(); ++i) {
+      for (auto& c : nodes[i]->children) {
+        if (c) { nodes.push_back(std::move(c)); }
+      }
+    }
+
+    // scope-exit ensure destruction of all detached leaves
+  }
+
+  mip_node_t(mip_node_t&&)            = default;
+  mip_node_t& operator=(mip_node_t&&) = default;
+
   mip_node_t(f_t root_lower_bound, const std::vector<variable_status_t>& basis)
     : status(node_status_t::PENDING),
       lower_bound(root_lower_bound),
