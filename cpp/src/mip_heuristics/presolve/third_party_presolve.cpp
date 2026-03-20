@@ -520,6 +520,8 @@ void set_presolve_methods(papilo::Presolve<f_t>& presolver,
   // exhaustive presolvers
   presolver.addPresolveMethod(uptr(new papilo::ImplIntDetection<f_t>()));
   presolver.addPresolveMethod(uptr(new papilo::DominatedCols<f_t>()));
+  // Papilo's Probing presolver is nondeterministic.
+  // TODO: push an upstream PR
   if (!deterministic) { presolver.addPresolveMethod(uptr(new papilo::Probing<f_t>())); }
 
   if (!dual_postsolve) {

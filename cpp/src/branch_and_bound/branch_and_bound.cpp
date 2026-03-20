@@ -2284,8 +2284,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       work_unit_context_.work_unit_scale = 0.0;
     } else {
       // GPU heuristics race with B&B pre-exploration, so B&B work must advance normally.
-      work_unit_context_.work_unit_scale =
-        detail::BB_BASE_WORK_SCALE * settings_.bb_work_unit_scale;
+      work_unit_context_.work_unit_scale = BB_BASE_WORK_SCALE * settings_.bb_work_unit_scale;
     }
 
     // Detach the scheduler during the serial root/cuts/SB phase.
@@ -2918,7 +2917,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       work_unit_context_.work_unit_scale,
       (int)work_unit_context_.deterministic);
     work_unit_context_.scheduler       = saved_scheduler;
-    work_unit_context_.work_unit_scale = detail::BB_BASE_WORK_SCALE * settings_.bb_work_unit_scale;
+    work_unit_context_.work_unit_scale = BB_BASE_WORK_SCALE * settings_.bb_work_unit_scale;
     settings_.log.printf(
       " | Explored | Unexplored |    Objective    |     Bound     | IntInf | Depth | Iter/Node "
       "|   Gap    |  Work |  Time  |\n");

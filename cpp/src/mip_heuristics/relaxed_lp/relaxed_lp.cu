@@ -72,6 +72,8 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   int estim_iters                       = pdlp_settings.iteration_limit;
   if (determinism_mode) {
     // try to estimate the iteration count based on the requested work limit
+    // TODO: replace with an actual model. this is a rather ugly hack to avoid having
+    // to touch the PDLP code for this initial PR
     estim_iters = 100;
     if (!std::isinf(work_limit)) {
       do {

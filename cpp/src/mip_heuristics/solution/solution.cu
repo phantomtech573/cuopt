@@ -105,7 +105,7 @@ void solution_t<i_t, f_t>::copy_from(const solution_t<i_t, f_t>& other_sol)
   h_infeasibility_cost = other_sol.h_infeasibility_cost;
   expand_device_copy(assignment, other_sol.assignment, handle_ptr->get_stream());
 
-  // slack, excess, and constraint value may be uninitialized (and computed later). Mark them as
+  // excess and constraint value may be uninitialized (and computed later). Mark them as
   // such
   cuopt::mark_span_as_initialized(make_span(other_sol.lower_excess), handle_ptr->get_stream());
   cuopt::mark_span_as_initialized(make_span(other_sol.upper_excess), handle_ptr->get_stream());
