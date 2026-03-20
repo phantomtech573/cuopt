@@ -63,6 +63,8 @@ struct mip_solver_context_t {
   const mip_solver_settings_t<i_t, f_t> settings;
   pdlp_initial_scaling_strategy_t<i_t, f_t>& scaling;
   solver_stats_t<i_t, f_t> stats;
+  // Work limit context for tracking work units in deterministic mode (shared across all timers in
+  // GPU heuristic loop)
   work_limit_context_t gpu_heur_loop{"GPUHeur"};
   solution_publication_t<i_t, f_t> solution_publication;
   solution_injection_t<i_t, f_t> solution_injection;

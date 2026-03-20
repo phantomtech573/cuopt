@@ -100,15 +100,6 @@ class solution_publication_t {
     return true;
   }
 
-  void publish_terminal_solution(const solution_callback_payload_t<i_t, f_t>& payload)
-  {
-    {
-      std::lock_guard<std::mutex> lock(solution_callback_mutex_);
-      best_callback_feasible_objective_ = payload.solver_objective;
-    }
-    invoke_get_solution_callbacks(payload);
-  }
-
  private:
   void invoke_get_solution_callbacks(const solution_callback_payload_t<i_t, f_t>& payload)
   {

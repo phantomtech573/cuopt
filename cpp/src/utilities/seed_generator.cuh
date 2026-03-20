@@ -57,7 +57,7 @@ class seed_generator {
                           const char* file   = __builtin_FILE(),
                           int line           = __builtin_LINE())
   {
-    printf("&&&&&&& SEED CALLED BY %s:%d: %s() ***\n", file, line, caller);
+    printf("SEED CALLED BY %s:%d: %s() ***\n", file, line, caller);
     return local_state().counter++;
   }
 #else

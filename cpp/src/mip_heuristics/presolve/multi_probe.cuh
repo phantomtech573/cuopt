@@ -13,6 +13,7 @@
 #include <mip_heuristics/utils.cuh>
 
 #include <utilities/timer.hpp>
+#include <utilities/work_limit_timer.hpp>
 
 #include "bounds_update_data.cuh"
 #include "utils.cuh"
@@ -54,7 +55,7 @@ class multi_probe_t {
                           i_t select_update);
   termination_criterion_t bound_update_loop(problem_t<i_t, f_t>& pb,
                                             const raft::handle_t* handle_ptr,
-                                            timer_t timer);
+                                            work_limit_timer_t& timer);
   void set_interval_bounds(
     const std::tuple<i_t, std::pair<f_t, f_t>, std::pair<f_t, f_t>>& var_interval_vals,
     problem_t<i_t, f_t>& pb,

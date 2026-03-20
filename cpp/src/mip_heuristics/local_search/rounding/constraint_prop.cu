@@ -24,6 +24,40 @@
 
 namespace cuopt::linear_programming::detail {
 
+namespace {
+template <typename i_t, typename f_t>
+void log_unset_var_ordering(const char* label,
+                            const rmm::device_uvector<i_t>& vars,
+                            const rmm::device_uvector<f_t>& assignment,
+                            const raft::handle_t* handle_ptr)
+{
+  const size_t n   = vars.size();
+  const size_t cap = std::min(n, (size_t)16);
+  std::vector<i_t> h_vars(cap);
+  raft::copy(h_vars.data(), vars.data(), cap, handle_ptr->get_stream());
+  handle_ptr->sync_stream();
+  std::string ids_str, frac_str;
+  for (size_t k = 0; k < cap; ++k) {
+    if (k) {
+      ids_str += ",";
+      frac_str += ",";
+    }
+    ids_str += std::to_string(h_vars[k]);
+    f_t val  = assignment.element(h_vars[k], handle_ptr->get_stream());
+    f_t frac = val - std::floor(val);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.4f", frac);
+    frac_str += buf;
+  }
+  CUOPT_DETERMINISM_LOG("%s: n=%zu hash=0x%x first_ids=[%s] first_frac=[%s]",
+                        label,
+                        n,
+                        detail::compute_hash(make_span(vars), handle_ptr->get_stream()),
+                        ids_str.c_str(),
+                        frac_str.c_str());
+}
+}  // namespace
+
 template <typename i_t, typename f_t>
 repair_stats_t constraint_prop_t<i_t, f_t>::repair_stats;
 
@@ -729,6 +763,10 @@ void constraint_prop_t<i_t, f_t>::update_host_assignment(const solution_t<i_t, f
              sol.assignment.data(),
              sol.problem_ptr->n_variables,
              sol.handle_ptr->get_stream());
+  sol.handle_ptr->sync_stream();
+  CUOPT_DETERMINISM_LOG(
+    "update_host_assignment: device_hash=0x%x",
+    detail::compute_hash(make_span(sol.assignment), sol.handle_ptr->get_stream()));
 }
 
 template <typename i_t, typename f_t>
@@ -871,6 +909,10 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
 {
   using crit_t             = termination_criterion_t;
   auto& unset_integer_vars = unset_vars;
+  CUOPT_DETERMINISM_LOG("find_integer entry: seed=%lld hash=0x%x rem=%.6f",
+                        (long long)cuopt::seed_generator::peek_seed(),
+                        sol.get_hash(),
+                        timer.remaining_time());
   std::mt19937 rng(cuopt::seed_generator::get_seed());
   lb_restore.resize(sol.problem_ptr->n_variables, sol.handle_ptr->get_stream());
   ub_restore.resize(sol.problem_ptr->n_variables, sol.handle_ptr->get_stream());
@@ -900,6 +942,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   } else {
     find_unset_integer_vars(sol, unset_integer_vars);
     sort_by_frac(sol, make_span(unset_integer_vars));
+    log_unset_var_ordering("post-sort_by_frac", unset_integer_vars, sol.assignment, sol.handle_ptr);
     // round first unset_integer_vars.size() - 50, leave last 50 to be rounded by the algo
     i_t n_to_round = std::max(unset_integer_vars.size() - 50, 0lu);
     if (n_to_round > 0) {
@@ -917,6 +960,8 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
                                                   rng);
         });
       find_unset_integer_vars(sol, unset_integer_vars);
+      log_unset_var_ordering(
+        "post-round-remaining", unset_integer_vars, sol.assignment, sol.handle_ptr);
     }
     set_bounds_on_fixed_vars(sol);
   }
@@ -950,8 +995,13 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
     // this is a sort to have initial shuffling, so that stable sort within will keep the order and
     // some randomness will be achieved
     sort_by_interval_and_frac(sol, make_span(unset_integer_vars), rng);
+    log_unset_var_ordering(
+      "post-sort_by_interval_and_frac", unset_integer_vars, sol.assignment, sol.handle_ptr);
   }
   set_host_bounds(sol);
+  CUOPT_DETERMINISM_LOG("find_integer pre-loop: seed=%lld hash=0x%x",
+                        (long long)cuopt::seed_generator::peek_seed(),
+                        sol.get_hash());
   size_t set_count               = 0;
   bool timeout_happened          = false;
   i_t n_failed_repair_iterations = 0;
@@ -995,10 +1045,32 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
                unset_integer_vars.data() + set_count,
                n_vars_to_set,
                sol.handle_ptr->get_stream());
+    sol.handle_ptr->sync_stream();
     auto var_probe_vals =
       generate_bulk_rounding_vector(sol, orig_sol, host_vars_to_set, probing_config);
+    if (timer.deterministic) {
+      const auto& vids = std::get<0>(var_probe_vals);
+      const auto& fp   = std::get<1>(var_probe_vals);
+      const auto& sp   = std::get<2>(var_probe_vals);
+      std::string probe_str;
+      for (size_t k = 0; k < std::min(vids.size(), (size_t)8); ++k) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), " (%d,%.4f,%.4f)", vids[k], fp[k], sp[k]);
+        probe_str += buf;
+      }
+      CUOPT_DETERMINISM_LOG(
+        "find_integer loop: set_count=%zu n_vars_to_set=%d seed=%lld probes=[%s]",
+        set_count,
+        n_vars_to_set,
+        (long long)cuopt::seed_generator::peek_seed(),
+        probe_str.c_str());
+    }
     probe(
       sol, orig_sol.problem_ptr, var_probe_vals, &set_count, unset_integer_vars, probing_config);
+    CUOPT_DETERMINISM_LOG("find_integer post-probe: seed=%lld set_count=%zu hash=0x%x",
+                          (long long)cuopt::seed_generator::peek_seed(),
+                          set_count,
+                          sol.get_hash());
     [[maybe_unused]] bool repair_attempted = false;
     bool bounds_repaired                   = false;
     i_t n_fixed_vars                       = 0;
@@ -1109,6 +1181,10 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   }
   bool res_feasible = orig_sol.compute_feasibility();
   orig_sol.handle_ptr->sync_stream();
+  CUOPT_DETERMINISM_LOG("find_integer exit: seed=%lld feasible=%d hash=0x%x",
+                        (long long)cuopt::seed_generator::peek_seed(),
+                        (int)res_feasible,
+                        orig_sol.get_hash());
   return res_feasible;
 }
 
@@ -1290,6 +1366,13 @@ bool constraint_prop_t<i_t, f_t>::probe(
   }
   selected_update = 0;
   if (first_bounds_update_ii) { selected_update = 1; }
+  CUOPT_DETERMINISM_LOG(
+    "probe result: infeas_0=%d infeas_1=%d selected_update=%d recovery=%d rounding_ii=%d",
+    multi_probe.infeas_constraints_count_0,
+    multi_probe.infeas_constraints_count_1,
+    selected_update,
+    (int)recovery_mode,
+    (int)rounding_ii);
   // if we are doing single rounding
   if (probing_config.has_value() && probing_config.value().get().use_balanced_probing) {
     cuopt_assert(std::get<0>(var_probe_vals).size() == 1,

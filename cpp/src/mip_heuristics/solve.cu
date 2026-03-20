@@ -97,6 +97,7 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
     solution.compute_objective();  // just to ensure h_user_obj is set
     auto stats = solver_stats_t<i_t, f_t>{};
     stats.set_solution_bound(solution.get_user_objective());
+    // log the objective for scripts which need it
     CUOPT_LOG_INFO("Best feasible: %f", solution.get_user_objective());
     {
       detail::solution_callback_payload_t<i_t, f_t> payload{};
@@ -108,7 +109,7 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
       }
       payload.assignment = temp_sol.get_host_assignment();
       detail::solution_publication_t<i_t, f_t> pub(settings, stats);
-      pub.publish_terminal_solution(payload);
+      pub.publish_new_best_feasible(payload);
     }
     return solution.get_solution(true, stats, false);
   }
@@ -271,7 +272,7 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
       // allocate not more than 10% of the time limit to presolve.
       // Note that this is not the presolve time, but the time limit for presolve.
       double presolve_time_limit = std::min(0.1 * time_limit, 60.0);
-      if (deterministic_run) { presolve_time_limit = std::numeric_limits<double>::infinity(); }
+      if (deterministic_run) { presolve_time_limit = timer.remaining_time(); }
       presolver = std::make_unique<detail::third_party_presolve_t<i_t, f_t>>();
       presolver->set_deterministic(deterministic_run);
       auto result = presolver->apply(op_problem,

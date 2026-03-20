@@ -19,16 +19,15 @@
 #include <dual_simplex/solve.hpp>
 #include <utilities/determinism_log.hpp>
 
-#undef CUOPT_DETERMINISM_LOG
-#define CUOPT_DETERMINISM_LOG(...) CUOPT_LOG_INFO(__VA_ARGS__)
-
 #include <raft/sparse/detail/cusparse_wrappers.h>
 #include <raft/core/cusparse_macros.hpp>
 
 #include <cmath>
 #include <future>
 #include <memory>
-#include <thread>
+
+#undef CUOPT_DETERMINISM_LOG
+#define CUOPT_DETERMINISM_LOG(...) CUOPT_LOG_INFO(__VA_ARGS__)
 
 namespace cuopt::linear_programming::detail {
 
@@ -60,8 +59,8 @@ mip_solver_t<i_t, f_t>::mip_solver_t(const problem_t<i_t, f_t>& op_problem,
 }
 
 template <typename i_t, typename f_t>
-struct bb_observer_adapter_t {
-  bb_observer_adapter_t(mip_solver_context_t<i_t, f_t>* context, diversity_manager_t<i_t, f_t>* dm)
+struct bb_callback_adapter_t {
+  bb_callback_adapter_t(mip_solver_context_t<i_t, f_t>* context, diversity_manager_t<i_t, f_t>* dm)
     : context(context), dm(dm) {};
 
   void new_incumbent_callback(std::vector<f_t>& solution,
@@ -78,7 +77,7 @@ struct bb_observer_adapter_t {
       temp_sol.compute_feasibility();
       const auto payload = context->solution_publication.build_callback_payload(
         context->problem_ptr, context->scaling, temp_sol, info.origin, work_timestamp);
-      context->solution_publication.publish_new_best_feasible(payload, dm->timer.elapsed_time());
+      context->solution_publication.publish_new_best_feasible(payload, work_timestamp);
     }
     if (context->diversity_manager_ptr != nullptr &&
         !(context->settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS)) {
@@ -122,7 +121,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     sol.set_problem_fully_reduced();
     const auto payload = context.solution_publication.build_callback_payload(
       context.problem_ptr, context.scaling, sol, internals::mip_solution_origin_t::PRESOLVE, 0.0);
-    context.solution_publication.publish_terminal_solution(payload);
+    context.solution_publication.publish_new_best_feasible(payload);
     context.problem_ptr->post_process_solution(sol);
     return sol;
   }
@@ -153,7 +152,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     sol.set_problem_fully_reduced();
     const auto payload = context.solution_publication.build_callback_payload(
       context.problem_ptr, context.scaling, sol, internals::mip_solution_origin_t::PRESOLVE, 0.0);
-    context.solution_publication.publish_terminal_solution(payload);
+    context.solution_publication.publish_new_best_feasible(payload);
     context.problem_ptr->post_process_solution(sol);
     return sol;
   }
@@ -188,7 +187,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     if (opt_sol.get_termination_status() == pdlp_termination_status_t::Optimal) {
       const auto payload = context.solution_publication.build_callback_payload(
         context.problem_ptr, context.scaling, sol, internals::mip_solution_origin_t::PRESOLVE, 0.0);
-      context.solution_publication.publish_terminal_solution(payload);
+      context.solution_publication.publish_new_best_feasible(payload);
     }
     context.problem_ptr->post_process_solution(sol);
     return sol;
@@ -206,7 +205,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   branch_and_bound_problem.objective_is_integral = context.problem_ptr->is_objective_integral();
   dual_simplex::simplex_solver_settings_t<i_t, f_t> branch_and_bound_settings;
   std::unique_ptr<dual_simplex::branch_and_bound_t<i_t, f_t>> branch_and_bound;
-  bb_observer_adapter_t solution_helper(&context, &dm);
+  bb_callback_adapter_t solution_helper(&context, &dm);
   dual_simplex::mip_solution_t<i_t, f_t> branch_and_bound_solution(1);
 
   bool run_bb = !context.settings.heuristics_only;
@@ -262,24 +261,24 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     CUOPT_LOG_INFO("Using %d CPU threads for B&B", branch_and_bound_settings.num_threads);
 
     branch_and_bound_settings.new_incumbent_callback =
-      std::bind(&bb_observer_adapter_t<i_t, f_t>::new_incumbent_callback,
+      std::bind(&bb_callback_adapter_t<i_t, f_t>::new_incumbent_callback,
                 &solution_helper,
                 std::placeholders::_1,
                 std::placeholders::_2,
                 std::placeholders::_3,
                 std::placeholders::_4);
     branch_and_bound_settings.heuristic_preemption_callback =
-      std::bind(&bb_observer_adapter_t<i_t, f_t>::preempt_heuristic_solver, &solution_helper);
+      std::bind(&bb_callback_adapter_t<i_t, f_t>::preempt_heuristic_solver, &solution_helper);
     if (!(context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       branch_and_bound_settings.set_simplex_solution_callback =
-        std::bind(&bb_observer_adapter_t<i_t, f_t>::set_simplex_solution,
+        std::bind(&bb_callback_adapter_t<i_t, f_t>::set_simplex_solution,
                   &solution_helper,
                   std::placeholders::_1,
                   std::placeholders::_2,
                   std::placeholders::_3);
 
       branch_and_bound_settings.node_processed_callback =
-        std::bind(&bb_observer_adapter_t<i_t, f_t>::node_processed_callback,
+        std::bind(&bb_callback_adapter_t<i_t, f_t>::node_processed_callback,
                   &solution_helper,
                   std::placeholders::_1,
                   std::placeholders::_2);

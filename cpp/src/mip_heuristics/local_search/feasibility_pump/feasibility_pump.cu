@@ -305,6 +305,13 @@ bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
 {
   bool result;
   CUOPT_LOG_DEBUG("Rounding the point");
+  const int64_t seed_before  = cuopt::seed_generator::peek_seed();
+  const uint32_t hash_before = solution.get_hash();
+  CUOPT_DETERMINISM_LOG("FP round entry: hash=0x%x seed=%lld rem=%.6f",
+                        hash_before,
+                        (long long)seed_before,
+                        timer.remaining_time());
+
   f_t bounds_prop_time_limit = std::min((f_t)0.5, timer.remaining_time() / 10.);
   if (timer.deterministic) {
     bounds_prop_time_limit = std::max((f_t)0.0, bounds_prop_time_limit);
@@ -321,13 +328,20 @@ bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
   result = constraint_prop.apply_round(solution, lp_run_time_after_feasible, bounds_prop_timer);
   constraint_prop.round_all_vars           = old_var;
   constraint_prop.max_time_for_bounds_prop = old_time;
-  // result = solution.round_nearest();
   cuopt_func_call(solution.test_variable_bounds(true));
-  // copy the last rounding
   raft::copy(last_rounding.data(),
              solution.assignment.data(),
              solution.assignment.size(),
              solution.handle_ptr->get_stream());
+
+  const int64_t seed_after = cuopt::seed_generator::peek_seed();
+  CUOPT_DETERMINISM_LOG("FP round exit: hash=0x%x seed=%lld seed_delta=%lld feasible=%d rem=%.6f",
+                        solution.get_hash(),
+                        (long long)seed_after,
+                        (long long)(seed_after - seed_before),
+                        (int)result,
+                        timer.remaining_time());
+
   if (result) {
     CUOPT_LOG_DEBUG("New feasible solution with objective %g", solution.get_user_objective());
   }
