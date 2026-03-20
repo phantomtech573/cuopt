@@ -587,7 +587,8 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
                           (int)solution.get_feasible(),
                           solution.get_user_objective(),
                           timer.remaining_time());
-    bool preempt = (context.diversity_manager_ptr->check_b_b_preemption());
+    bool preempt = context.diversity_manager_ptr != nullptr &&
+                   context.diversity_manager_ptr->check_b_b_preemption();
     if (preempt || timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("FP time limit reached!");
       round(solution);

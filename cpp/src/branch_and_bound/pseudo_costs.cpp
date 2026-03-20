@@ -752,7 +752,7 @@ i_t reliable_variable_selection_core(mip_node_t<i_t, f_t>* node_ptr,
   }
 
   if (unreliable_list.empty()) {
-    settings.log.printf(
+    settings.log.debug(
       "pc branching on %d. Value %e. Score %e\n", branch_var, solution[branch_var], max_score);
 
     return branch_var;

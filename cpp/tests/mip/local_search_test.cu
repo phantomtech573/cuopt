@@ -76,7 +76,7 @@ enum local_search_mode_t {
 };
 
 // Helper function to setup MIP solver and run FJ with given settings and initial solution
-static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
+static uint32_t run_fp(std::string test_instance, local_search_mode_t mode, double work_limit = 4.0)
 {
   const raft::handle_t handle_{};
   std::cout << "Running: " << test_instance << std::endl;
@@ -150,7 +150,7 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
 
   work_limit_context_t work_limit_context("LocalSearch");
   work_limit_context.deterministic = true;
-  local_search.fp.timer            = work_limit_timer_t(work_limit_context, 10, timer);
+  local_search.fp.timer            = work_limit_timer_t(work_limit_context, work_limit, timer);
 
   detail::ls_config_t<int, double> ls_config{};
 
@@ -170,12 +170,13 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
     }
   } else if (mode == local_search_mode_t::FJ_LINE_SEGMENT) {
     local_search.run_fj_line_segment(
-      solution, work_limit_timer_t(work_limit_context, 6000, timer), ls_config);
+      solution, work_limit_timer_t(work_limit_context, work_limit, timer), ls_config);
   } else if (mode == local_search_mode_t::FJ_ON_ZERO) {
-    local_search.run_fj_on_zero(solution, work_limit_timer_t(work_limit_context, 6000, timer));
+    local_search.run_fj_on_zero(solution,
+                                work_limit_timer_t(work_limit_context, work_limit, timer));
   } else if (mode == local_search_mode_t::FJ_ANNEALING) {
     local_search.run_fj_annealing(
-      solution, work_limit_timer_t(work_limit_context, 6000, timer), ls_config);
+      solution, work_limit_timer_t(work_limit_context, work_limit, timer), ls_config);
   }
 
   std::vector<uint32_t> hashes;
@@ -183,27 +184,16 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode)
   printf("hashes: 0x%x, hash of the hash: 0x%x\n", hashes[0], detail::compute_hash(hashes));
 
   return detail::compute_hash(hashes);
-  // return {host_copy(solution_vector, problem.handle_ptr->get_stream()), iterations};
 }
 
 static uint32_t run_fp_check_determinism(std::string test_instance,
                                          local_search_mode_t mode,
-                                         unsigned long seed)
+                                         unsigned long seed,
+                                         double work_limit = 4.0)
 {
   cuopt::seed_generator::set_seed(seed);
 
-  return run_fp(test_instance, mode);
-
-  //    auto state     = run_fp(test_instance, fj_settings);
-  //    auto& solution = state.solution;
-
-  //    CUOPT_LOG_DEBUG("%s: Solution generated with FJ: is_feasible %d, objective %g (raw %g)",
-  //                    test_instance.c_str(),
-  //                    solution.get_feasible(),
-  //                    solution.get_user_objective(),
-  //                    solution.get_objective());
-
-  //    static auto first_val = solution.get_user_objective();
+  return run_fp(test_instance, mode, work_limit);
 }
 
 class LocalSearchTestParams : public testing::TestWithParam<std::tuple<local_search_mode_t>> {};
@@ -220,28 +210,25 @@ TEST_P(LocalSearchTestParams, local_search_operator_determinism)
 
   auto mode = std::get<0>(GetParam());
 
-  for (const auto& instance : {
-         //"thor50dday.mps",
-         "gen-ip054.mps",
-         "50v-10.mps",
-         "seymour1.mps",
-         "rmatr200-p5.mps",
-         "tr12-30.mps",
-         //"sct2.mps",
-         //"uccase9.mps"
+  struct instance_config_t {
+    const char* name;
+    double work_limit;
+  };
+  for (const auto& cfg : {
+         instance_config_t{"gen-ip054.mps", 4.0},
+         instance_config_t{"50v-10.mps", 2.0},
+         // instance_config_t{"n2seq36q.mps", 4.0},
+         instance_config_t{"neos5.mps", 2.0},
+         // instance_config_t{"neos8.mps", 2.0},
        }) {
-    // for (int i = 0; i < 10; i++)
-    //  while (true) {
-    //    run_fp_check_determinism(instance, 1000);
-    //  }
-
     unsigned long seed = std::getenv("CUOPT_SEED")
                            ? (unsigned long)std::stoi(std::getenv("CUOPT_SEED"))
                            : (unsigned long)std::random_device{}();
-    std::cerr << "Tested with seed " << seed << "\n";
+    std::cerr << "Tested with seed " << seed << " instance " << cfg.name << " work_limit "
+              << cfg.work_limit << "\n";
     uint32_t gold_hash = 0;
     for (int i = 0; i < 5; ++i) {
-      uint32_t hash = run_fp_check_determinism(instance, mode, seed);
+      uint32_t hash = run_fp_check_determinism(cfg.name, mode, seed, cfg.work_limit);
       if (i == 0) {
         gold_hash = hash;
         printf("Gold hash: 0x%x\n", gold_hash);
@@ -255,10 +242,9 @@ TEST_P(LocalSearchTestParams, local_search_operator_determinism)
 
 INSTANTIATE_TEST_SUITE_P(LocalSearchTests,
                          LocalSearchTestParams,
-                         testing::Values(
-                           // std::make_tuple(local_search_mode_t::FP)
-                           //                std::make_tuple(local_search_mode_t::FJ_LINE_SEGMENT),
-                           //                std::make_tuple(local_search_mode_t::FJ_ON_ZERO),
-                           std::make_tuple(local_search_mode_t::FJ_ANNEALING)));
+                         testing::Values(std::make_tuple(local_search_mode_t::FP),
+                                         std::make_tuple(local_search_mode_t::FJ_LINE_SEGMENT),
+                                         // std::make_tuple(local_search_mode_t::FJ_ON_ZERO),
+                                         std::make_tuple(local_search_mode_t::FJ_ANNEALING)));
 
 }  // namespace cuopt::linear_programming::test

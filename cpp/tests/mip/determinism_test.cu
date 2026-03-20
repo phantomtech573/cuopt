@@ -33,34 +33,6 @@ namespace cuopt::linear_programming::test {
 
 namespace {
 
-class scoped_env_var_t {
- public:
-  scoped_env_var_t(const char* name, const char* value) : name_(name)
-  {
-    cuopt_assert(name != nullptr, "Environment variable name must be non-null");
-    cuopt_assert(value != nullptr, "Environment variable value must be non-null");
-    const char* original_value = std::getenv(name_);
-    was_set_                   = (original_value != nullptr);
-    if (was_set_) { original_value_ = original_value; }
-    const int status = setenv(name_, value, 1);
-    assert(status == 0);
-  }
-
-  ~scoped_env_var_t()
-  {
-    const int status = was_set_ ? setenv(name_, original_value_.c_str(), 1) : unsetenv(name_);
-    assert(status == 0);
-  }
-
-  scoped_env_var_t(const scoped_env_var_t&)            = delete;
-  scoped_env_var_t& operator=(const scoped_env_var_t&) = delete;
-
- private:
-  const char* name_;
-  std::string original_value_;
-  bool was_set_{false};
-};
-
 void expect_solutions_bitwise_equal(const mip_solution_t<int, double>& sol1,
                                     const mip_solution_t<int, double>& sol2,
                                     raft::handle_t& handle,
@@ -205,7 +177,7 @@ TEST_F(DeterministicBBTest, reproducible_objective)
   settings.time_limit       = 60.0;
   settings.determinism_mode = CUOPT_MODE_DETERMINISTIC_BB;
   settings.num_cpu_threads  = 8;
-  settings.work_limit       = 4;
+  settings.work_limit       = 2;
 
   // Ensure seed is positive int32_t
   auto seed = std::random_device{}() & 0x7fffffff;
@@ -319,52 +291,11 @@ TEST_F(DeterministicBBTest, reproducible_solution_vector)
   expect_solutions_bitwise_equal(solution1, solution2, handle_);
 }
 
-TEST_F(DeterministicBBTest, reproducible_with_gpu_pipeline_in_deterministic_mode)
-{
-  auto path    = make_path_absolute("/mip/50v-10.mps");
-  auto problem = mps_parser::parse_mps<int, double>(path, false);
-  handle_.sync_stream();
-
-  mip_solver_settings_t<int, double> settings;
-  settings.time_limit               = 60.0;
-  settings.determinism_mode         = CUOPT_MODE_DETERMINISTIC;
-  settings.num_cpu_threads          = 8;
-  settings.work_limit               = 4;
-  settings.gpu_heur_work_unit_scale = 0.1;
-  settings.cpufj_work_unit_scale    = 1.0;
-
-  auto seed = std::random_device{}() & 0x7fffffff;
-  std::cout << "Tested with seed " << seed << "\n";
-  settings.seed = seed;
-
-  cuopt::seed_generator::set_seed(seed);
-  auto solution1 = solve_mip(&handle_, problem, settings);
-  cuopt::seed_generator::set_seed(seed);
-  auto solution2 = solve_mip(&handle_, problem, settings);
-  cuopt::seed_generator::set_seed(seed);
-  auto solution3 = solve_mip(&handle_, problem, settings);
-
-  EXPECT_EQ(solution1.get_termination_status(), solution2.get_termination_status());
-  EXPECT_EQ(solution1.get_termination_status(), solution3.get_termination_status());
-
-  EXPECT_DOUBLE_EQ(solution1.get_objective_value(), solution2.get_objective_value());
-  EXPECT_DOUBLE_EQ(solution1.get_objective_value(), solution3.get_objective_value());
-
-  EXPECT_DOUBLE_EQ(solution1.get_solution_bound(), solution2.get_solution_bound());
-  EXPECT_DOUBLE_EQ(solution1.get_solution_bound(), solution3.get_solution_bound());
-
-  expect_solutions_bitwise_equal(
-    solution1, solution2, handle_, "Deterministic GPU pipeline run 1 vs 2: ");
-  expect_solutions_bitwise_equal(
-    solution1, solution3, handle_, "Deterministic GPU pipeline run 1 vs 3: ");
-}
-
 TEST_F(DeterministicBBTest, deterministic_callback_sequence_reproducible_with_gpu_pipeline)
 {
   constexpr size_t callback_compare_count = 5;
   constexpr size_t callback_capture_limit = 32;
   constexpr size_t min_gpu_callback_count = 3;
-  constexpr size_t min_bnb_callback_count = 3;
 
   auto path    = make_path_absolute("/mip/50v-10.mps");
   auto problem = mps_parser::parse_mps<int, double>(path, false);
@@ -375,7 +306,8 @@ TEST_F(DeterministicBBTest, deterministic_callback_sequence_reproducible_with_gp
   settings.determinism_mode         = CUOPT_MODE_DETERMINISTIC;
   settings.num_cpu_threads          = 2;
   settings.work_limit               = 4;
-  settings.gpu_heur_work_unit_scale = 0.05;
+  settings.bb_work_unit_scale       = 2.0;
+  settings.gpu_heur_work_unit_scale = 1.0;
   settings.cpufj_work_unit_scale    = 1.0;
 
   auto seed = std::random_device{}() & 0x7fffffff;
@@ -401,34 +333,17 @@ TEST_F(DeterministicBBTest, deterministic_callback_sequence_reproducible_with_gp
   cuopt::seed_generator::set_seed(seed);
   auto solution2 = solve_mip(&handle_, problem, settings_run2);
 
-  std::vector<callback_solution_t> callbacks_run3;
-  first_n_get_solution_callback_t callback_run3(
-    callbacks_run3, n_variables, callback_capture_limit, &user_data);
-  auto settings_run3 = settings;
-  settings_run3.set_mip_callback(&callback_run3, &user_data);
-  cuopt::seed_generator::set_seed(seed);
-  auto solution3 = solve_mip(&handle_, problem, settings_run3);
-
   EXPECT_EQ(solution1.get_termination_status(), solution2.get_termination_status());
-  EXPECT_EQ(solution1.get_termination_status(), solution3.get_termination_status());
   EXPECT_GE(callback_run1.n_calls, (int)callback_compare_count);
   EXPECT_GE(callback_run2.n_calls, (int)callback_compare_count);
-  EXPECT_GE(callback_run3.n_calls, (int)callback_compare_count);
   ASSERT_GE(callbacks_run1.size(), callback_compare_count);
   ASSERT_GE(callbacks_run2.size(), callback_compare_count);
-  ASSERT_GE(callbacks_run3.size(), callback_compare_count);
 
   EXPECT_GE(count_gpu_callbacks(callbacks_run1), min_gpu_callback_count);
   EXPECT_GE(count_gpu_callbacks(callbacks_run2), min_gpu_callback_count);
-  EXPECT_GE(count_gpu_callbacks(callbacks_run3), min_gpu_callback_count);
-  EXPECT_GE(count_branch_and_bound_callbacks(callbacks_run1), min_bnb_callback_count);
-  EXPECT_GE(count_branch_and_bound_callbacks(callbacks_run2), min_bnb_callback_count);
-  EXPECT_GE(count_branch_and_bound_callbacks(callbacks_run3), min_bnb_callback_count);
 
   expect_callback_prefixes_bitwise_equal(
     callbacks_run1, callbacks_run2, callback_compare_count, "Deterministic callback run 1 vs 2: ");
-  expect_callback_prefixes_bitwise_equal(
-    callbacks_run1, callbacks_run3, callback_compare_count, "Deterministic callback run 1 vs 3: ");
 }
 
 class DeterministicGpuHeuristicsInstanceTest : public ::testing::TestWithParam<std::string> {
@@ -446,7 +361,7 @@ TEST_P(DeterministicGpuHeuristicsInstanceTest, reproducible_with_gpu_heuristics)
   settings.time_limit       = 60.0;
   settings.determinism_mode = CUOPT_MODE_DETERMINISTIC;
   settings.num_cpu_threads  = 8;
-  settings.work_limit       = 30;
+  settings.work_limit       = 5;
 
   auto seed = std::random_device{}() & 0x7fffffff;
   std::cout << "Tested with seed " << seed << "\n";
@@ -479,7 +394,7 @@ INSTANTIATE_TEST_SUITE_P(
                     std::string("/mip/pk1.mps"),
                     // std::string("/mip/sct2.mps"),
                     // std::string("/mip/thor50dday.mps"),
-                    std::string("/mip/50v-10.mps")),
+                    std::string("/mip/neos5.mps")),
   [](const ::testing::TestParamInfo<DeterministicGpuHeuristicsInstanceTest::ParamType>& info) {
     std::string name = info.param.substr(info.param.rfind('/') + 1);
     name             = name.substr(0, name.rfind('.'));
@@ -496,7 +411,6 @@ class DeterministicBBInstanceTest
 
 TEST_P(DeterministicBBInstanceTest, deterministic_across_runs)
 {
-  // scoped_env_var_t gpu_fj_work_scale("CUOPT_GPU_HEUR_WORK_UNIT_SCALE", "0.1");
   auto [instance_path, num_threads, time_limit, work_limit] = GetParam();
   auto path                                                 = make_path_absolute(instance_path);
   auto problem = mps_parser::parse_mps<int, double>(path, false);

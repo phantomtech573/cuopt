@@ -283,25 +283,4 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_tuple(
       false, false, false, cuopt::linear_programming::mip_termination_status_t::Optimal)));
 
-// TEST_P(MILPTestParams, TestDeterminism)
-// {
-//   bool maximize                    = std::get<0>(GetParam());
-//   bool scaling                     = std::get<1>(GetParam());
-//   bool heuristics_only             = std::get<2>(GetParam());
-//   auto expected_termination_status = std::get<3>(GetParam());
-
-//   raft::handle_t handle;
-//   auto problem = create_std_milp_problem(maximize);
-
-//   cuopt::linear_programming::mip_solver_settings_t<int, double> settings{};
-//   settings.mip_scaling     = true;
-//   settings.heuristics_only = true;
-//   settings.presolve        = true;
-//   settings.deterministic   = true;
-
-//   auto result = cuopt::linear_programming::solve_mip(&handle, problem, settings);
-
-//   EXPECT_EQ(result.get_termination_status(), expected_termination_status);
-// }
-
 }  // namespace cuopt::linear_programming::test

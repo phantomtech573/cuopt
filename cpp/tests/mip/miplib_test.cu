@@ -33,9 +33,7 @@ struct result_map_t {
   double cost;
 };
 
-void test_miplib_file(result_map_t test_instance,
-                      mip_solver_settings_t<int, double> settings,
-                      bool heuristic = false)
+void test_miplib_file(result_map_t test_instance, mip_solver_settings_t<int, double> settings)
 {
   const raft::handle_t handle_{};
 
@@ -51,7 +49,6 @@ void test_miplib_file(result_map_t test_instance,
 #endif
 
   settings.time_limit                  = test_time_limit;
-  settings.heuristics_only             = heuristic;
   mip_solution_t<int, double> solution = solve_mip(&handle_, problem, settings);
   bool is_feasible = solution.get_termination_status() == mip_termination_status_t::FeasibleFound ||
                      solution.get_termination_status() == mip_termination_status_t::Optimal;
@@ -72,14 +69,5 @@ TEST(mip_solve, run_small_tests)
     test_miplib_file(test_instance, settings);
   }
 }
-
-// TEST(mip_solve, run_small_tests_determinism)
-// {
-//   std::vector<result_map_t> test_instances = {
-//     {"mip/50v-10.mps", 11311031.}, {"mip/neos5.mps", 15.}, {"mip/swath1.mps", 1300.}};
-//   for (const auto& test_instance : test_instances) {
-//     test_miplib_file(test_instance, true);
-//   }
-// }
 
 }  // namespace cuopt::linear_programming::test

@@ -377,15 +377,16 @@ TEST_P(DiversityTestParams, initial_solution_deterministic)
   }
 }
 
-TEST_P(DiversityTestParams, full_run_deterministic)
+// Disabled as it takes too long to run in CI and overlaps with other determinism full run tests.
+TEST_P(DiversityTestParams, DISABLED_full_run_deterministic)
 {
   cuopt::init_logger_t log("", true);
   // cuopt::default_logger().set_pattern("[%n] [%-6l] %v");
   cuopt::default_logger().set_level(rapids_logger::level_enum::debug);
   cuopt::default_logger().flush_on(rapids_logger::level_enum::debug);
 
-  // spin_stream_raii_t spin_stream_1;
-  // spin_stream_raii_t spin_stream_2;
+  spin_stream_raii_t spin_stream_1;
+  spin_stream_raii_t spin_stream_2;
 
   auto test_instance     = std::get<0>(GetParam());
   const float work_limit = std::get<1>(GetParam());
@@ -418,9 +419,9 @@ INSTANTIATE_TEST_SUITE_P(DiversityTest,
                          testing::Values(
                            // std::make_tuple("mip/gen-ip054.mps", 5.0f),
                            // std::make_tuple("mip/pk1.mps", 5.0f),
-                           std::make_tuple("mip/uccase9.mps", 5.0f),
-                           std::make_tuple("mip/sct2.mps", 5.0f),
-                           std::make_tuple("mip/thor50dday.mps", 5.0f),
+                           std::make_tuple("mip/neos5.mps", 5.0f),
+                           std::make_tuple("mip/gen-ip054.mps", 5.0f),
+                           std::make_tuple("mip/pk1.mps", 5.0f),
                            //  std::make_tuple("uccase9.mps"),
                            // std::make_tuple("mip/neos5.mps", 5.0f),
                            std::make_tuple("mip/50v-10.mps", 5.0f)
