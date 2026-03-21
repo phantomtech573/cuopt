@@ -928,6 +928,14 @@ void branch_and_bound_t<i_t, f_t>::set_final_solution(mip_solution_t<i_t, f_t>& 
           crushed, obj, queued_solution.origin, queued_solution.work_timestamp);
       }
     }
+    size_t n_drained = pending.size();
+    CUOPT_DETERMINISM_LOG(
+      settings_.log,
+      "Post-drain: user_upper=%.16e has_incumbent=%d drained=%zu user_lower_arg=%.16e\n",
+      compute_user_objective(original_lp_, upper_bound_.load()),
+      (int)incumbent_.has_incumbent,
+      n_drained,
+      compute_user_objective(original_lp_, lower_bound));
   }
 
   if (upper_bound_ != inf) {
@@ -2962,6 +2970,13 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   if (deterministic_mode_enabled_) {
     lower_bound    = deterministic_compute_lower_bound();
     solver_status_ = deterministic_global_termination_status_;
+    CUOPT_DETERMINISM_LOG(
+      settings_.log,
+      "Final lower bound: user_lb=%.16e user_ub=%.16e status=%d has_incumbent=%d\n",
+      compute_user_objective(original_lp_, lower_bound),
+      compute_user_objective(original_lp_, upper_bound_.load()),
+      (int)deterministic_global_termination_status_,
+      (int)incumbent_.has_incumbent);
   } else {
     if (node_queue_.best_first_queue_size() > 0) {
       // We need to clear the queue and use the info in the search tree for the lower bound
@@ -3443,6 +3458,19 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sync_callback()
   f_t abs_gap     = upper_bound - lower_bound;
   f_t rel_gap     = user_relative_gap(original_lp_, upper_bound, lower_bound);
 
+  CUOPT_DETERMINISM_LOG(
+    settings_.log,
+    "Sync termination check: horizon=%.6f user_lower=%.16e user_upper=%.16e abs_gap=%.6e "
+    "rel_gap=%.6e bfs_has_work=%d diving_has_work=%d status=%d\n",
+    deterministic_current_horizon_,
+    compute_user_objective(original_lp_, lower_bound),
+    compute_user_objective(original_lp_, upper_bound),
+    abs_gap,
+    rel_gap,
+    (int)deterministic_workers_->any_has_work(),
+    deterministic_diving_workers_ ? (int)deterministic_diving_workers_->any_has_work() : -1,
+    (int)deterministic_global_termination_status_);
+
   if (abs_gap <= settings_.absolute_mip_gap_tol || rel_gap <= settings_.relative_mip_gap_tol) {
     deterministic_global_termination_status_ = mip_status_t::OPTIMAL;
   }
@@ -3775,6 +3803,13 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
 
   f_t deterministic_lower = deterministic_compute_lower_bound();
   f_t current_upper       = upper_bound_.load();
+  CUOPT_DETERMINISM_LOG(
+    settings_.log,
+    "Sync replay begin: horizon=%.6f n_events=%zu n_solutions=%zu user_upper_before=%.16e\n",
+    deterministic_current_horizon_,
+    events.events.size(),
+    replay_solutions.size(),
+    compute_user_objective(original_lp_, current_upper));
   if (deterministic_current_horizon_ <= deterministic_horizon_step_) {
     CUOPT_DETERMINISM_LOG(
       settings_.log,
@@ -3898,6 +3933,15 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sort_replay_events(
     }
   }
 
+  CUOPT_DETERMINISM_LOG(
+    settings_.log,
+    "Sync replay done: horizon=%.6f user_upper_after=%.16e events_processed=%zu "
+    "solutions_processed=%zu\n",
+    deterministic_current_horizon_,
+    compute_user_objective(original_lp_, upper_bound_.load()),
+    event_idx,
+    solution_idx);
+
   // Merge and apply pseudo-cost updates from BFS workers
   deterministic_merge_pseudo_cost_updates(*deterministic_workers_);
 
@@ -4018,10 +4062,32 @@ f_t branch_and_bound_t<i_t, f_t>::deterministic_compute_lower_bound()
     }
   }
 
+  f_t min_from_workers = lower_bound;
+
   // Tree is exhausted
   if (lower_bound == std::numeric_limits<f_t>::infinity() && incumbent_.has_incumbent) {
     lower_bound = upper_bound_.load();
   }
+
+  lower_bound = std::min(lower_bound, upper_bound_.load());
+
+  CUOPT_DETERMINISM_LOG(
+    settings_.log,
+    "compute_lower_bound: user_min_bfs=%.16e user_upper=%.16e user_result=%.16e "
+    "has_incumbent=%d n_bfs_nodes=%d\n",
+    compute_user_objective(original_lp_, min_from_workers),
+    compute_user_objective(original_lp_, upper_bound_.load()),
+    compute_user_objective(original_lp_, lower_bound),
+    (int)incumbent_.has_incumbent,
+    [&]() {
+      int count = 0;
+      for (const auto& w : *deterministic_workers_) {
+        count += (w.current_node != nullptr ? 1 : 0);
+        count += (int)w.plunge_stack.size();
+        count += (int)w.backlog.size();
+      }
+      return count;
+    }());
 
   return lower_bound;
 }

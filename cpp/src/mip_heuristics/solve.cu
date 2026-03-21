@@ -175,6 +175,7 @@ mip_solution_t<i_t, f_t> run_mip(detail::problem_t<i_t, f_t>& problem,
 
   int hidesol =
     std::getenv("CUOPT_MIP_HIDE_SOLUTION") ? atoi(std::getenv("CUOPT_MIP_HIDE_SOLUTION")) : 0;
+  hidesol = 0;
   if (!hidesol) { detail::print_solution(scaled_problem.handle_ptr, sol.get_solution()); }
   return sol;
 }

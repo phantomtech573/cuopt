@@ -362,16 +362,21 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       context.stats.set_solution_bound(
         context.problem_ptr->get_user_obj_from_solver_obj(branch_and_bound_solution.lower_bound));
     }
+    CUOPT_LOG_DEBUG(
+      "B&B solution reconstruction: det_bb=%d obj_finite=%d obj=%.16e bb_status=%d "
+      "has_incumbent=%d sol_size=%zu",
+      (int)(context.settings.determinism_mode & CUOPT_DETERMINISM_BB),
+      (int)std::isfinite(branch_and_bound_solution.objective),
+      branch_and_bound_solution.objective,
+      (int)bb_status,
+      (int)branch_and_bound_solution.has_incumbent,
+      branch_and_bound_solution.x.size());
     if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB) &&
         std::isfinite(branch_and_bound_solution.objective)) {
       solution_t<i_t, f_t> bb_sol(*context.problem_ptr);
       bb_sol.copy_new_assignment(branch_and_bound_solution.x);
-      bool bb_feasible = bb_sol.compute_feasibility();
-      if (bb_feasible) {
-        sol = std::move(bb_sol);
-      } else {
-        sol = solution_t<i_t, f_t>(*context.problem_ptr);
-      }
+      bb_sol.compute_feasibility();
+      sol = std::move(bb_sol);
     } else if ((context.settings.determinism_mode & CUOPT_DETERMINISM_BB)) {
       // In deterministic mode, only solutions formally retired by B&B are valid output.
       // Discard the GPU heuristic incumbent that B&B never processed.
