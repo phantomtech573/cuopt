@@ -763,9 +763,19 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     return best_sol;
   }
 
+  CUOPT_LOG_DEBUG("pre-run_fp_alone: gpu_work=%g gpu_prod=%g",
+                  context.gpu_heur_loop.current_work(),
+                  context.gpu_heur_loop.current_producer_work());
   run_fp_alone();
+  CUOPT_LOG_DEBUG("post-run_fp_alone: gpu_work=%g gpu_prod=%g",
+                  context.gpu_heur_loop.current_work(),
+                  context.gpu_heur_loop.current_producer_work());
   population.add_external_solutions_to_population();
   auto& best_sol = population.best_feasible();
+  CUOPT_LOG_DEBUG("post-fp handoff: feas=%d obj=%g hash=0x%x",
+                  (int)best_sol.get_feasible(),
+                  best_sol.get_user_objective(),
+                  best_sol.get_hash());
   log_return_solution("post_fp_alone", best_sol);
   return best_sol;
 };

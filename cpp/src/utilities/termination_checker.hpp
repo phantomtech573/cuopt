@@ -163,9 +163,20 @@ class termination_checker_t {
     } else {
       local_remaining = timer.remaining_time();
     }
-    // don't let the root's global time limit contaimnate work limits further down
+    // don't let the root's global time limit contaminate work limits further down
     if (parent_ != nullptr && !(deterministic && !parent_->deterministic)) {
       local_remaining = std::min(local_remaining, parent_->remaining_units());
+    }
+    if (!std::isfinite(local_remaining)) {
+      CUOPT_LOG_WARN(
+        "remaining_units non-finite: %g det=%d work_limit=%g start=%g "
+        "ctx_work=%g has_parent=%d",
+        local_remaining,
+        (int)deterministic,
+        work_limit,
+        work_units_at_start,
+        work_context ? work_context->current_work() : -1.0,
+        parent_ != nullptr);
     }
     return local_remaining;
   }

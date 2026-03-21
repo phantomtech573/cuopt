@@ -70,7 +70,18 @@ struct work_limit_context_t {
 
   double current_work() const noexcept { return global_work_units_elapsed; }
 
-  double current_producer_work() const noexcept { return current_work() * producer_progress_scale; }
+  double current_producer_work() const noexcept
+  {
+    double result = current_work() * producer_progress_scale;
+    if (!std::isfinite(result)) {
+      CUOPT_LOG_WARN("current_producer_work non-finite: %g (work=%g scale=%g) ctx=%s",
+                     result,
+                     current_work(),
+                     producer_progress_scale,
+                     name.c_str());
+    }
+    return result;
+  }
 
   std::atomic<double>* producer_progress_ptr() noexcept
   {
@@ -91,6 +102,12 @@ struct work_limit_context_t {
   void set_current_work(double total_work, bool notify_producer = true)
   {
     if (!deterministic) return;
+    if (!std::isfinite(total_work)) {
+      CUOPT_LOG_WARN("set_current_work non-finite: %g (prev=%g) ctx=%s",
+                     total_work,
+                     global_work_units_elapsed,
+                     name.c_str());
+    }
     cuopt_assert(total_work + 1e-12 >= global_work_units_elapsed,
                  "Deterministic work progress must be monotonic");
     global_work_units_elapsed = total_work;
