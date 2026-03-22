@@ -70,7 +70,6 @@ class deterministic_worker_base_t : public branch_and_bound_worker_t<i_t, f_t> {
   using base_t = branch_and_bound_worker_t<i_t, f_t>;
 
  public:
-  double clock{0.0};
   work_limit_context_t work_context;
 
   pseudo_cost_snapshot_t<i_t, f_t> pc_snapshot;
@@ -212,7 +211,7 @@ class deterministic_bfs_worker_t
   void record_branched(
     mip_node_t<i_t, f_t>* node, i_t down_child_id, i_t up_child_id, i_t branch_var, f_t branch_val)
   {
-    record_event(bb_event_t<i_t, f_t>::make_branched(this->clock,
+    record_event(bb_event_t<i_t, f_t>::make_branched(this->work_context.current_work(),
                                                      this->worker_id,
                                                      node->creation_seq,
                                                      down_child_id,
@@ -228,7 +227,7 @@ class deterministic_bfs_worker_t
   void record_integer_solution(mip_node_t<i_t, f_t>* node, f_t objective)
   {
     record_event(bb_event_t<i_t, f_t>::make_integer_solution(
-      this->clock, this->worker_id, node->creation_seq, objective));
+      this->work_context.current_work(), this->worker_id, node->creation_seq, objective));
     ++nodes_processed_this_horizon;
     ++this->total_nodes_processed;
     ++this->total_integer_solutions;
@@ -237,7 +236,7 @@ class deterministic_bfs_worker_t
   void record_fathomed(mip_node_t<i_t, f_t>* node, f_t lower_bound)
   {
     record_event(bb_event_t<i_t, f_t>::make_fathomed(
-      this->clock, this->worker_id, node->creation_seq, lower_bound));
+      this->work_context.current_work(), this->worker_id, node->creation_seq, lower_bound));
     ++nodes_processed_this_horizon;
     ++this->total_nodes_processed;
     ++total_nodes_pruned;
@@ -245,8 +244,8 @@ class deterministic_bfs_worker_t
 
   void record_infeasible(mip_node_t<i_t, f_t>* node)
   {
-    record_event(
-      bb_event_t<i_t, f_t>::make_infeasible(this->clock, this->worker_id, node->creation_seq));
+    record_event(bb_event_t<i_t, f_t>::make_infeasible(
+      this->work_context.current_work(), this->worker_id, node->creation_seq));
     ++nodes_processed_this_horizon;
     ++this->total_nodes_processed;
     ++total_nodes_infeasible;
@@ -254,8 +253,8 @@ class deterministic_bfs_worker_t
 
   void record_numerical(mip_node_t<i_t, f_t>* node)
   {
-    record_event(
-      bb_event_t<i_t, f_t>::make_numerical(this->clock, this->worker_id, node->creation_seq));
+    record_event(bb_event_t<i_t, f_t>::make_numerical(
+      this->work_context.current_work(), this->worker_id, node->creation_seq));
     ++nodes_processed_this_horizon;
     ++this->total_nodes_processed;
   }
@@ -346,7 +345,7 @@ class deterministic_diving_worker_t
        depth,
        this->worker_id,
        this->next_solution_seq++,
-       this->clock,
+       this->work_context.current_work(),
        cuopt::internals::mip_solution_origin_t::BRANCH_AND_BOUND_DIVING});
     ++this->total_integer_solutions;
   }

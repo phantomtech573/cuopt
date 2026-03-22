@@ -1209,8 +1209,11 @@ struct deterministic_policy_base_t : tree_update_policy_t<i_t, f_t> {
                    ? node->fractional_val - std::floor(node->fractional_val)
                    : std::ceil(node->fractional_val) - node->fractional_val;
     if (frac > 1e-10) {
-      worker.pc_snapshot.queue_update(
-        node->branch_var, node->branch_dir, change / frac, worker.clock, worker.worker_id);
+      worker.pc_snapshot.queue_update(node->branch_var,
+                                      node->branch_dir,
+                                      change / frac,
+                                      worker.work_context.current_work(),
+                                      worker.worker_id);
     }
   }
 
@@ -1254,13 +1257,21 @@ struct deterministic_bfs_policy_t
         return;
       }
       this->worker.local_upper_bound = obj;
+      CUOPT_DETERMINISM_LOG(
+        bnb.settings_.log,
+        "BFS integer solution queued: worker=%d clock=%.6f ctx_work=%.6f obj=%.6e depth=%d\n",
+        this->worker.worker_id,
+        this->worker.work_context.current_work(),
+        this->worker.work_context.global_work_units_elapsed,
+        obj,
+        node->depth);
       this->worker.integer_solutions.push_back(
         {obj,
          x,
          node->depth,
          this->worker.worker_id,
          this->worker.next_solution_seq++,
-         this->worker.clock,
+         this->worker.work_context.current_work(),
          cuopt::internals::mip_solution_origin_t::BRANCH_AND_BOUND_NODE});
     }
   }
@@ -1276,7 +1287,8 @@ struct deterministic_bfs_policy_t
 
       sb_update_callback_t<i_t, f_t> on_sb_update = [&](
                                                       i_t j, rounding_direction_t dir, f_t delta) {
-        snap.record_update(j, dir, delta, this->worker.clock, this->worker.worker_id);
+        snap.record_update(
+          j, dir, delta, this->worker.work_context.current_work(), this->worker.worker_id);
       };
 
       var = reliable_variable_selection_core(node,
@@ -3171,16 +3183,17 @@ void branch_and_bound_t<i_t, f_t>::run_deterministic_coordinator(const csr_matri
     }
   }
 
-  deterministic_scheduler_ = std::make_unique<work_unit_scheduler_t>(deterministic_horizon_step_);
+  deterministic_scheduler_ =
+    std::make_unique<work_unit_scheduler_t>(deterministic_horizon_step_, pre_exploration_work_);
 
   scoped_context_registrations_t context_registrations(*deterministic_scheduler_);
   for (auto& worker : *deterministic_workers_) {
-    worker.clock = pre_exploration_work_;
+    worker.work_context.set_current_work(pre_exploration_work_, false);
     context_registrations.add(worker.work_context);
   }
   if (deterministic_diving_workers_) {
     for (auto& worker : *deterministic_diving_workers_) {
-      worker.clock = pre_exploration_work_;
+      worker.work_context.set_current_work(pre_exploration_work_, false);
       context_registrations.add(worker.work_context);
     }
   }
@@ -3366,7 +3379,8 @@ void branch_and_bound_t<i_t, f_t>::deterministic_sync_callback()
   {
     std::string worker_clocks_str;
     for (const auto& w : *deterministic_workers_) {
-      worker_clocks_str += std::to_string(w.worker_id) + ":" + std::to_string(w.clock) + "/" +
+      worker_clocks_str += std::to_string(w.worker_id) + ":" +
+                           std::to_string(w.work_context.current_work()) + "/" +
                            std::to_string(w.integer_solutions.size()) + " ";
     }
     CUOPT_DETERMINISM_LOG(
@@ -3627,9 +3641,6 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node_deterministic(
                                                                          &worker.work_context);
     lp_status                 = convert_lp_status_to_dual_status(second_status);
   }
-
-  double work_performed = worker.work_context.global_work_units_elapsed - work_units_at_start;
-  worker.clock += work_performed;
 
   exploration_stats_.total_lp_solve_time += toc(lp_start_time);
   exploration_stats_.total_lp_iters += node_iter;
@@ -4335,7 +4346,6 @@ void branch_and_bound_t<i_t, f_t>::deterministic_dive(
     }
 
     worker.lp_iters_this_dive += node_iter;
-    worker.clock = pre_exploration_work_ + worker.work_context.global_work_units_elapsed;
 
     if (lp_status == dual::status_t::TIME_LIMIT || lp_status == dual::status_t::WORK_LIMIT ||
         lp_status == dual::status_t::ITERATION_LIMIT) {
