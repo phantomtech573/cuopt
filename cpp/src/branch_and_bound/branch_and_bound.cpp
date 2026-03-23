@@ -565,7 +565,7 @@ void branch_and_bound_t<i_t, f_t>::emit_solution_callback(
                         work_timestamp,
                         cuopt::internals::mip_solution_origin_to_string(origin));
     cuopt::internals::mip_solution_callback_info_t callback_info{};
-    callback_info.origin         = origin;
+    callback_info.origin         = (uint32_t)origin;
     callback_info.work_timestamp = work_timestamp;
     settings_.new_incumbent_callback(original_x, objective, callback_info, work_timestamp);
   }

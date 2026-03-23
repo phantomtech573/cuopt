@@ -17,18 +17,6 @@
 #pragma once
 
 #ifndef CUOPT_DETERMINISM_LOG
-#define CUOPT_DETERMINISM_LOG(logger, ...) \
-  do {                                     \
-  } while (0)
-#endif
-
-#ifndef CUOPT_DETERMINISM_LOG
-#define CUOPT_DETERMINISM_LOG(...) \
-  do {                             \
-  } while (0)
-#endif
-
-#ifndef CUOPT_DETERMINISM_LOG
 #define CUOPT_DETERMINISM_LOG(...) \
   do {                             \
   } while (0)

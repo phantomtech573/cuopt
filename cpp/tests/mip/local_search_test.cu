@@ -157,7 +157,7 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode, doub
   if (mode == local_search_mode_t::FP) {
     bool is_feasible = false;
     int iterations   = 0;
-    while (true) {
+    while (!local_search.fp.timer.check_time_limit()) {
       is_feasible = local_search.fp.run_single_fp_descent(solution);
       printf("fp_loop it %d, is_feasible %d\n", iterations, is_feasible);
       if (is_feasible) {

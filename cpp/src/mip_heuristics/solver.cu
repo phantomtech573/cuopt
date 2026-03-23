@@ -79,13 +79,17 @@ struct bb_callback_adapter_t {
       temp_sol.copy_new_assignment(solution);
       temp_sol.compute_feasibility();
       const auto payload = context->solution_publication.build_callback_payload(
-        context->problem_ptr, context->scaling, temp_sol, info.origin, work_timestamp);
+        context->problem_ptr,
+        context->scaling,
+        temp_sol,
+        (internals::mip_solution_origin_t)info.origin,
+        work_timestamp);
       context->solution_publication.publish_new_best_feasible(payload, work_timestamp);
     }
     if (context->diversity_manager_ptr != nullptr &&
         !(context->settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS)) {
       context->diversity_manager_ptr->population.add_external_solution(
-        solution, objective, info.origin);
+        solution, objective, (internals::mip_solution_origin_t)info.origin);
       context->diversity_manager_ptr->rins.new_best_incumbent_callback(solution);
     }
   }
@@ -112,6 +116,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 {
   //  we need to keep original problem const
   cuopt_assert(context.problem_ptr != nullptr, "invalid problem pointer");
+  cuopt_assert(context.termination != nullptr, "termination checker must be set before run_solver");
   context.problem_ptr->tolerances = context.settings.get_tolerances();
   cuopt_expects(context.problem_ptr->preprocess_called,
                 error_type_t::RuntimeError,

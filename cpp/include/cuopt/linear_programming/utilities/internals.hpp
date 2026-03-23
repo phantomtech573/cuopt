@@ -61,11 +61,7 @@ constexpr const char* mip_solution_origin_to_string(mip_solution_origin_t origin
   }
 }
 
-struct mip_solution_callback_info_t {
-  uint64_t struct_size{sizeof(mip_solution_callback_info_t)};
-  mip_solution_origin_t origin{mip_solution_origin_t::UNKNOWN};
-  double work_timestamp{-1.0};
-};
+using mip_solution_callback_info_t = cuOptMIPSolutionCallbackInfo;
 
 // get_solution_ext was added to support passing additional information to the get_solution callback
 // without inducing a breaking ABI change

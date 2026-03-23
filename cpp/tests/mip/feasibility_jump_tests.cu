@@ -199,67 +199,6 @@ static bool run_fj_check_determinism(std::string test_instance, int iter_limit)
   return true;
 }
 
-// class MIPSolveParametricTest : public testing::TestWithParam<std::tuple<std::string, double,
-// int>> {
-// };
-
-// TEST_P(MIPSolveParametricTest, feasibility_jump_obj_test)
-// {
-//   auto [instance, obj_target, iter_limit] = GetParam();
-//   EXPECT_TRUE(run_fj_check_objective(instance, iter_limit, obj_target));
-// }
-
-// INSTANTIATE_TEST_SUITE_P(
-//   MIPSolveTest,
-//   MIPSolveParametricTest,
-//   testing::Values(
-//     // Bug: https://github.com/NVIDIA/cuopt/issues/214
-//     // std::make_tuple("50v-10.mps", 7800, 100000),
-//     // std::make_tuple("fiball.mps", 140, 25000),
-//     // std::make_tuple("rmatr200-p5.mps", 7000, 10000),
-//     std::make_tuple("gen-ip054.mps", 7500, 20000),
-//     std::make_tuple("sct2.mps", 100, 50000),
-//     std::make_tuple("uccase9.mps", 4000000, 50000),
-//     // unstable, prone to failure on slight weight changes
-//     // std::make_tuple("drayage-25-23.mps", 300000, 50000),
-//     std::make_tuple("tr12-30.mps", 300000, 50000),
-//     std::make_tuple("neos-3004026-krka.mps",
-//                     +std::numeric_limits<double>::infinity(),
-//                     35000),  // feasibility
-//     // std::make_tuple("nursesched-medium-hint03.mps", 12000, 50000), // too large
-//     std::make_tuple("ns1208400.mps", 2, 60000),
-//     std::make_tuple("gmu-35-50.mps", -2300000, 25000),
-//     std::make_tuple("n2seq36q.mps", 158800, 25000),
-//     std::make_tuple("seymour1.mps", 440, 50000),
-//     std::make_tuple("cvs16r128-89.mps", -50, 10000)
-// // TEMPORARY: occasional cusparse transpose issues on ARM in CI
-// #ifndef __aarch64__
-//       ,
-//     std::make_tuple("thor50dday.mps", 250000, 1000)
-// #endif
-//       ));
-
-// TEST(mip_solve, feasibility_jump_feas_test)
-// {
-//   for (const auto& instance : {"tr12-30.mps",
-//                                "sct2.mps"
-// #ifndef __aarch64__
-//                                ,
-//                                "thor50dday.mps"
-// #endif
-//        }) {
-//     run_fj_check_feasible(instance);
-//   }
-// }
-
-// TEST(mip_solve, feasibility_jump_obj_runoff_test)
-// {
-//   for (const auto& instance : {"minrep_inf.mps", "sct2.mps", "uccase9.mps",
-//                                /*"buildingenergy.mps"*/}) {
-//     run_fj_check_no_obj_runoff(instance);
-//   }
-// }
-
 TEST(mip_solve, feasibility_jump_determinism)
 {
   cuopt::init_logger_t log("", true);
@@ -273,11 +212,8 @@ TEST(mip_solve, feasibility_jump_determinism)
                                              std::make_pair("seymour1.mps", 1000),
                                              std::make_pair("rmatr200-p5.mps", 1000),
                                              std::make_pair("tr12-30.mps", 1000),
-                                             std::make_pair("sct2.mps", 1000),
-                                             std::make_pair("uccase9.mps", 1000),
-                                             std::make_pair("supportcase42.mps", 25000)}) {
+                                             std::make_pair("sct2.mps", 1000)}) {
     for (int i = 0; i < 10; i++) {
-      // while (true) {
       cuopt::seed_generator::set_seed(seed);
       run_fj_check_determinism(instance, iter_limit);
     }

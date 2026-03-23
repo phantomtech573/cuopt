@@ -1280,11 +1280,12 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
   pb_ptr->check_problem_representation(true);
   resize_vectors(solution.handle_ptr);
 
-  CUOPT_LOG_DEBUG("FJ: work_limit %f time_limit %f sol hash %x pb hash %x",
-                  settings.work_limit,
-                  settings.time_limit,
-                  solution.get_hash(),
-                  pb_ptr->get_fingerprint());
+  CUOPT_LOG_DEBUG(
+    "FJ: work_limit %f time_limit %f sol hash %x pb hash %x",
+    settings.work_limit < std::numeric_limits<double>::max() ? settings.work_limit : -1.0,
+    settings.time_limit < std::numeric_limits<double>::max() ? settings.time_limit : -1.0,
+    solution.get_hash(),
+    pb_ptr->get_fingerprint());
   CUOPT_LOG_DEBUG("FJ: weights hash %x, left weights hash %x, right weights hash %x",
                   detail::compute_hash(cstr_weights, handle_ptr->get_stream()),
                   detail::compute_hash(cstr_left_weights, handle_ptr->get_stream()),

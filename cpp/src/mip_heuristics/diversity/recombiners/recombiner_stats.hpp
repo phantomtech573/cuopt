@@ -75,9 +75,9 @@ struct all_recombine_stats {
 
   // enum of the last attempted recombiner
   std::optional<recombiner_enum_t> last_attempt;
-  double last_recombiner_time;
+  double last_recombiner_time{0.0};
   std::chrono::high_resolution_clock::time_point last_recombiner_start_time;
-  double last_recombiner_work;
+  double last_recombiner_work{0.0};
 
   void set_recombiner_work(double work) { last_recombiner_work = work; }
 

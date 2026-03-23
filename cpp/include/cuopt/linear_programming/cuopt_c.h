@@ -737,8 +737,7 @@ typedef void (*cuOptMIPGetSolutionCallback)(const cuopt_float_t* solution,
  * @param[in] solution - Pointer to incumbent solution values.
  * @param[in] objective_value - Pointer to incumbent objective value.
  * @param[in] solution_bound - Pointer to current solution (dual/user) bound.
- * @param[in] callback_info - Pointer to callback metadata. `struct_size` is always set and can be
- * used to detect future extensions safely.
+ * @param[in] callback_info - Pointer to callback metadata.
  * @param[in] user_data - Pointer to user data.
  * @note All pointer arguments refer to host memory and are only valid during the callback
  * invocation. Do not pass device/GPU pointers. Copy any data you need to keep after the callback

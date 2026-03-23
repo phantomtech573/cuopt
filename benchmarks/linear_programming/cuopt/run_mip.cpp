@@ -158,13 +158,13 @@ class incumbent_tracker_t : public cuopt::internals::get_solution_callback_ext_t
                     const cuopt::internals::mip_solution_callback_info_t* info,
                     void* user_data) override
   {
-    double obj = *static_cast<double*>(cost);
-    double wt  = (info != nullptr) ? info->work_timestamp : -1.0;
-    auto origin =
-      (info != nullptr) ? info->origin : cuopt::internals::mip_solution_origin_t::UNKNOWN;
+    double obj    = *static_cast<double*>(cost);
+    double wt     = (info != nullptr) ? info->work_timestamp : -1.0;
+    auto origin   = (info != nullptr) ? (cuopt::internals::mip_solution_origin_t)info->origin
+                                      : cuopt::internals::mip_solution_origin_t::UNKNOWN;
     auto now      = std::chrono::high_resolution_clock::now();
     double wall_s = std::chrono::duration<double>(now - start_time_).count();
-    records_.push_back({obj, wt, wall_s, origin});
+    records_.push_back({obj, wt, wall_s, (cuopt::internals::mip_solution_origin_t)origin});
   }
 
   void write_csv(const std::string& path) const
@@ -296,7 +296,7 @@ int run_single_file(std::string file_path,
     benchmark_info.objective_of_initial_population,
     benchmark_info.last_improvement_of_best_feasible,
     benchmark_info.last_improvement_after_recombination);
-  // 1solution.write_to_sol_file(base_filename + ".sol", handle_.get_stream());
+  // solution.write_to_sol_file(base_filename + ".sol", handle_.get_stream());
   std::chrono::milliseconds duration;
   auto end = std::chrono::high_resolution_clock::now();
   duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start_run_solver);

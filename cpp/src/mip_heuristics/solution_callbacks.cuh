@@ -53,7 +53,7 @@ class solution_publication_t {
     solution_callback_payload_t<i_t, f_t> payload{};
     payload.user_objective               = sol.get_user_objective();
     payload.solver_objective             = sol.get_objective();
-    payload.callback_info.origin         = origin;
+    payload.callback_info.origin         = (uint32_t)origin;
     payload.callback_info.work_timestamp = work_timestamp;
     solution_t<i_t, f_t> temp_sol(sol);
     CUOPT_LOG_DEBUG("build_callback_payload: pre_postprocess size=%zu handle=%p problem_handle=%p",
@@ -107,7 +107,8 @@ class solution_publication_t {
     CUOPT_LOG_DEBUG("Publishing incumbent: obj=%g wut=%.6f origin=%s callbacks=%zu",
                     payload.user_objective,
                     payload.callback_info.work_timestamp,
-                    internals::mip_solution_origin_to_string(payload.callback_info.origin),
+                    internals::mip_solution_origin_to_string(
+                      (internals::mip_solution_origin_t)payload.callback_info.origin),
                     user_callbacks.size());
 
     for (auto callback : user_callbacks) {

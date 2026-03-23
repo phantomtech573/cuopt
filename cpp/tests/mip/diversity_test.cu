@@ -292,7 +292,7 @@ static uint32_t test_recombiners_determinism(std::string path,
                    j,
                    hash_map[std::make_tuple(path, i, j, recombiner)],
                    offspring_hash);
-            exit(1);
+            ADD_FAILURE() << "hash mismatch";
           }
         }
         hashes.push_back(offspring_hash);

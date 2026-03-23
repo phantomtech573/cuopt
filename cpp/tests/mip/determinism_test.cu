@@ -75,7 +75,6 @@ class first_n_get_solution_callback_t : public cuopt::internals::get_solution_ca
   {
     EXPECT_EQ(user_data, expected_user_data);
     ASSERT_NE(callback_info, nullptr);
-    EXPECT_GE(callback_info->struct_size, sizeof(internals::mip_solution_callback_info_t));
     n_calls++;
 
     auto assignment_ptr     = static_cast<double*>(data);
@@ -90,7 +89,7 @@ class first_n_get_solution_callback_t : public cuopt::internals::get_solution_ca
     callback_solution.assignment.assign(assignment_ptr, assignment_ptr + n_variables);
     callback_solution.objective      = objective_ptr[0];
     callback_solution.solution_bound = solution_bound_ptr[0];
-    callback_solution.origin         = callback_info->origin;
+    callback_solution.origin         = (internals::mip_solution_origin_t)callback_info->origin;
     solutions.push_back(std::move(callback_solution));
   }
 

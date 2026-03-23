@@ -260,7 +260,7 @@ void solution_t<i_t, f_t>::assign_random_within_bounds(f_t ratio_of_vars_to_rand
 
   auto variable_bounds = cuopt::host_copy(problem_ptr->variable_bounds, stream);
   auto variable_types  = cuopt::host_copy(problem_ptr->variable_types, stream);
-  problem_ptr->handle_ptr->sync_stream();
+  handle_ptr->sync_stream();
   for (size_t i = 0; i < problem_ptr->variable_bounds.size(); ++i) {
     if (only_integers && variable_types[i] != var_t::INTEGER) { continue; }
     bool skip = unif_prob(rng) > ratio_of_vars_to_random_assign;
@@ -689,7 +689,8 @@ mip_solution_t<i_t, f_t> solution_t<i_t, f_t>::get_solution(bool output_feasible
 template <typename i_t, typename f_t>
 uint32_t solution_t<i_t, f_t>::get_hash() const
 {
-  auto h_assignment = host_copy(assignment, handle_ptr->get_stream());
+  auto h_assignment =
+    host_copy(assignment.data(), problem_ptr->n_variables, handle_ptr->get_stream());
   return compute_hash(h_assignment);
 }
 

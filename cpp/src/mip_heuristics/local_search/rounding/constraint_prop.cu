@@ -24,40 +24,6 @@
 
 namespace cuopt::linear_programming::detail {
 
-namespace {
-template <typename i_t, typename f_t>
-void log_unset_var_ordering(const char* label,
-                            const rmm::device_uvector<i_t>& vars,
-                            const rmm::device_uvector<f_t>& assignment,
-                            const raft::handle_t* handle_ptr)
-{
-  const size_t n   = vars.size();
-  const size_t cap = std::min(n, (size_t)16);
-  std::vector<i_t> h_vars(cap);
-  raft::copy(h_vars.data(), vars.data(), cap, handle_ptr->get_stream());
-  handle_ptr->sync_stream();
-  std::string ids_str, frac_str;
-  for (size_t k = 0; k < cap; ++k) {
-    if (k) {
-      ids_str += ",";
-      frac_str += ",";
-    }
-    ids_str += std::to_string(h_vars[k]);
-    f_t val  = assignment.element(h_vars[k], handle_ptr->get_stream());
-    f_t frac = val - std::floor(val);
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%.4f", frac);
-    frac_str += buf;
-  }
-  CUOPT_DETERMINISM_LOG("%s: n=%zu hash=0x%x first_ids=[%s] first_frac=[%s]",
-                        label,
-                        n,
-                        detail::compute_hash(make_span(vars), handle_ptr->get_stream()),
-                        ids_str.c_str(),
-                        frac_str.c_str());
-}
-}  // namespace
-
 template <typename i_t, typename f_t>
 repair_stats_t constraint_prop_t<i_t, f_t>::repair_stats;
 
@@ -942,7 +908,6 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   } else {
     find_unset_integer_vars(sol, unset_integer_vars);
     sort_by_frac(sol, make_span(unset_integer_vars));
-    log_unset_var_ordering("post-sort_by_frac", unset_integer_vars, sol.assignment, sol.handle_ptr);
     // round first unset_integer_vars.size() - 50, leave last 50 to be rounded by the algo
     i_t n_to_round = std::max(unset_integer_vars.size() - 50, 0lu);
     if (n_to_round > 0) {
@@ -960,8 +925,6 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
                                                   rng);
         });
       find_unset_integer_vars(sol, unset_integer_vars);
-      log_unset_var_ordering(
-        "post-round-remaining", unset_integer_vars, sol.assignment, sol.handle_ptr);
     }
     set_bounds_on_fixed_vars(sol);
   }
@@ -995,8 +958,6 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
     // this is a sort to have initial shuffling, so that stable sort within will keep the order and
     // some randomness will be achieved
     sort_by_interval_and_frac(sol, make_span(unset_integer_vars), rng);
-    log_unset_var_ordering(
-      "post-sort_by_interval_and_frac", unset_integer_vars, sol.assignment, sol.handle_ptr);
   }
   set_host_bounds(sol);
   CUOPT_DETERMINISM_LOG("find_integer pre-loop: seed=%lld hash=0x%x",
