@@ -66,6 +66,17 @@ enum method_t : int {
   Unset       = CUOPT_METHOD_UNSET
 };
 
+/// Returns the corresponding string from the enum `method_t`.
+inline std::string method_to_string(method_t method)
+{
+  switch (method) {
+    case method_t::DualSimplex: return "Dual Simplex";
+    case method_t::PDLP: return "PDLP";
+    case method_t::Barrier: return "Barrier";
+    default: return "Unset";
+  }
+}
+
 /**
  * @brief Enum representing the PDLP precision modes.
  *

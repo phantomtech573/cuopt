@@ -30,6 +30,8 @@
 #include <utilities/work_limit_context.hpp>
 #include <utilities/work_unit_scheduler.hpp>
 
+#include <cuopt/linear_programming/pdlp/solver_settings.hpp>
+
 #include <omp.h>
 
 #include <atomic>

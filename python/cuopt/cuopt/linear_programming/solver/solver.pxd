@@ -175,7 +175,7 @@ cdef extern from "cuopt/linear_programming/utilities/cython_solve.hpp" namespace
         double gap_
         int nb_iterations_
         double solve_time_
-        bool solved_by_
+        bool solved_by_pdlp_
         bool is_gpu()
 
     # Unified MIP solution struct — solution_ variant accessed via helpers

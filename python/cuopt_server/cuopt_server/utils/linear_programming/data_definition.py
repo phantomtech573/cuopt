@@ -700,7 +700,7 @@ class SolutionData(StrictModel):
         default=None,
         description=("Returns the engine solve time in seconds"),
     )
-    solved_by: bool = Field(
+    solved_by_pdlp: bool = Field(
         default=None,
         description=(
             "Returns whether problem was solved by PDLP or Dual Simplex"

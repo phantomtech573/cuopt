@@ -32,7 +32,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <cuopt/linear_programming/pdlp/solver_solution.hpp>
 #include <deque>
 #include <future>
 #include <limits>
