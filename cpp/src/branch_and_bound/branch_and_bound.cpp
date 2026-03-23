@@ -1941,7 +1941,7 @@ lp_status_t branch_and_bound_t<i_t, f_t>::solve_root_relaxation(
 
   settings_.log.printf("\n");
   if (root_status == lp_status_t::OPTIMAL) {
-    settings_.log.printf("Root relaxation solution found in %d iterations and %.2fs with %s\n",
+    settings_.log.printf("Root relaxation solution found in %d iterations and %.2fs by %s\n",
                          iter,
                          toc(start_time),
                          solver_name.c_str());
