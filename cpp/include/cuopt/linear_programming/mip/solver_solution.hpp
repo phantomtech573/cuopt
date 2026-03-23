@@ -30,6 +30,7 @@ enum class mip_termination_status_t : int8_t {
   Infeasible    = CUOPT_TERMINATION_STATUS_INFEASIBLE,
   Unbounded     = CUOPT_TERMINATION_STATUS_UNBOUNDED,
   TimeLimit     = CUOPT_TERMINATION_STATUS_TIME_LIMIT,
+  WorkLimit     = CUOPT_TERMINATION_STATUS_WORK_LIMIT,
 };
 
 template <typename i_t, typename f_t>

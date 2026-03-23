@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -66,8 +66,8 @@ class ThinClientSolution:
         Time used for pre-solve
     solve_time: Float64
         Solve time in seconds
-    solved_by: int
-        Whether the problem was solved by Dual Simplex(1), PDLP(2) or Barrier(3)
+    solved_by_pdlp: bool
+        Whether the problem was solved by PDLP or Dual Simplex
     """
 
     def __init__(
@@ -87,7 +87,7 @@ class ThinClientSolution:
         dual_objective=0.0,
         gap=0.0,
         nb_iterations=0,
-        solved_by=None,
+        solved_by_pdlp=None,
         mip_gap=0.0,
         solution_bound=0.0,
         presolve_time=0.0,
@@ -107,7 +107,7 @@ class ThinClientSolution:
         self.primal_objective = primal_objective
         self.dual_objective = dual_objective
         self.solve_time = solve_time
-        self.solved_by = solved_by
+        self.solved_by_pdlp = solved_by_pdlp
         self.vars = vars
         self.lp_stats = {
             "primal_residual": primal_residual,
@@ -191,11 +191,11 @@ class ThinClientSolution:
         """
         return self.solve_time
 
-    def get_solved_by(self):
+    def get_solved_by_pdlp(self):
         """
-        Returns whether the problem was solved by Dual Simplex(1), PDLP(2) or Barrier(3)
+        Returns whether the problem was solved by PDLP or Dual Simplex
         """
-        return self.solved_by
+        return self.solved_by_pdlp
 
     def get_vars(self):
         """

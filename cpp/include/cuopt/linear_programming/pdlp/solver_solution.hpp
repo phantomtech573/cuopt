@@ -37,16 +37,6 @@ enum class pdlp_termination_status_t : int8_t {
   ConcurrentLimit  = CUOPT_TERMINATION_STATUS_CONCURRENT_LIMIT
 };
 
-inline std::string method_to_string(method_t method)
-{
-  switch (method) {
-    case method_t::DualSimplex: return "Dual Simplex";
-    case method_t::PDLP: return "PDLP";
-    case method_t::Barrier: return "Barrier";
-    default: return "Unset";
-  }
-}
-
 /**
  * @brief A container of PDLP solver output
  * @tparam i_t Integer type. Currently only int is supported.

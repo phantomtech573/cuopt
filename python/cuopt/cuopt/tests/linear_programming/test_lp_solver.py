@@ -18,8 +18,8 @@ from cuopt.linear_programming.solver.solver_parameters import (
     CUOPT_ITERATION_LIMIT,
     CUOPT_METHOD,
     CUOPT_MIP_HEURISTICS_ONLY,
+    CUOPT_PDLP_PRECISION,
     CUOPT_PDLP_SOLVER_MODE,
-    CUOPT_PRESOLVE,
     CUOPT_PRIMAL_INFEASIBLE_TOLERANCE,
     CUOPT_RELATIVE_DUAL_TOLERANCE,
     CUOPT_RELATIVE_GAP_TOLERANCE,
@@ -27,6 +27,7 @@ from cuopt.linear_programming.solver.solver_parameters import (
     CUOPT_SOLUTION_FILE,
     CUOPT_TIME_LIMIT,
     CUOPT_USER_PROBLEM_FILE,
+    CUOPT_PRESOLVE,
 )
 from cuopt.linear_programming.solver.solver_wrapper import (
     ErrorStatus,
@@ -66,6 +67,7 @@ def test_solver():
     settings.set_parameter(CUOPT_METHOD, SolverMethod.PDLP)
     # FIXME: Stable3 infinite-loops on this sample trivial problem
     settings.set_parameter(CUOPT_PDLP_SOLVER_MODE, PDLPSolverMode.Stable2)
+    settings.set_parameter(CUOPT_PRESOLVE, 0)
 
     solution = solver.Solve(data_model_obj, settings)
     assert solution.get_termination_reason() == "Optimal"
@@ -75,7 +77,7 @@ def test_solver():
     assert solution.get_primal_objective() == pytest.approx(0.0)
     assert solution.get_dual_objective() == pytest.approx(0.0)
     assert solution.get_lp_stats()["gap"] == pytest.approx(0.0)
-    assert solution.get_solved_by() == 2  # PDLP
+    assert solution.get_solved_by_pdlp()
 
 
 def test_parser_and_solver():
@@ -414,6 +416,7 @@ def test_parse_var_names():
     settings = solver_settings.SolverSettings()
     settings.set_parameter(CUOPT_METHOD, SolverMethod.PDLP)
     settings.set_parameter(CUOPT_PDLP_SOLVER_MODE, PDLPSolverMode.Stable2)
+    settings.set_parameter(CUOPT_PRESOLVE, 0)
     solution = solver.Solve(data_model_obj, settings)
 
     expected_dict = {
@@ -499,9 +502,11 @@ def test_warm_start():
     data_model_obj = cuopt_mps_parser.ParseMps(file_path)
 
     settings = solver_settings.SolverSettings()
+    settings.set_parameter(CUOPT_METHOD, SolverMethod.PDLP)
     settings.set_parameter(CUOPT_PDLP_SOLVER_MODE, PDLPSolverMode.Stable2)
     settings.set_optimality_tolerance(1e-3)
     settings.set_parameter(CUOPT_INFEASIBILITY_DETECTION, False)
+    settings.set_parameter(CUOPT_PRESOLVE, 0)
 
     # Solving from scratch until 1e-3
     solution = solver.Solve(data_model_obj, settings)
@@ -533,6 +538,7 @@ def test_warm_start_other_problem():
     settings.set_parameter(CUOPT_PDLP_SOLVER_MODE, PDLPSolverMode.Stable2)
     settings.set_optimality_tolerance(1e-1)
     settings.set_parameter(CUOPT_INFEASIBILITY_DETECTION, False)
+    settings.set_parameter(CUOPT_PRESOLVE, 0)
     solution = solver.Solve(data_model_obj, settings)
 
     file_path = (
@@ -578,14 +584,13 @@ def test_dual_simplex():
 
     settings = solver_settings.SolverSettings()
     settings.set_parameter(CUOPT_METHOD, SolverMethod.DualSimplex)
-    settings.set_parameter(CUOPT_PRESOLVE, True)
     settings.set_parameter(CUOPT_DUAL_POSTSOLVE, False)
 
     solution = solver.Solve(data_model_obj, settings)
 
     assert solution.get_termination_status() == LPTerminationStatus.Optimal
     assert solution.get_primal_objective() == pytest.approx(-464.7531)
-    assert solution.get_solved_by() == 1  # DualSimplex
+    assert not solution.get_solved_by_pdlp()
 
 
 def test_barrier():
@@ -600,10 +605,10 @@ def test_barrier():
     A_offsets = np.array([0, 2, 4])
     data_model_obj.set_csr_constraint_matrix(A_values, A_indices, A_offsets)
 
-    b = np.array([200, 160])
+    b = np.array([200.0, 160.0])
     data_model_obj.set_constraint_bounds(b)
 
-    c = np.array([5, 20])
+    c = np.array([5.0, 20.0])
     data_model_obj.set_objective_coefficients(c)
 
     row_types = np.array(["L", "L"])
@@ -613,6 +618,7 @@ def test_barrier():
 
     settings = solver_settings.SolverSettings()
     settings.set_parameter(CUOPT_METHOD, SolverMethod.Barrier)
+    settings.set_parameter(CUOPT_PRESOLVE, 0)
 
     solution = solver.Solve(data_model_obj, settings)
     assert solution.get_termination_reason() == "Optimal"
@@ -717,3 +723,43 @@ def test_write_files():
                 assert float(line.split()[-1]) == pytest.approx(80)
 
     os.remove("afiro.sol")
+
+
+def test_pdlp_precision_single():
+    file_path = (
+        RAPIDS_DATASET_ROOT_DIR + "/linear_programming/afiro_original.mps"
+    )
+    data_model_obj = cuopt_mps_parser.ParseMps(file_path)
+
+    settings = solver_settings.SolverSettings()
+    settings.set_parameter(CUOPT_METHOD, SolverMethod.PDLP)
+    settings.set_parameter(CUOPT_PDLP_PRECISION, 0)  # Single
+    settings.set_optimality_tolerance(1e-4)
+
+    solution = solver.Solve(data_model_obj, settings)
+
+    assert solution.get_termination_status() == LPTerminationStatus.Optimal
+    assert solution.get_primal_objective() == pytest.approx(
+        -464.7531, rel=1e-1
+    )
+    assert solution.get_solved_by_pdlp()
+
+
+def test_pdlp_precision_single_crossover():
+    file_path = (
+        RAPIDS_DATASET_ROOT_DIR + "/linear_programming/afiro_original.mps"
+    )
+    data_model_obj = cuopt_mps_parser.ParseMps(file_path)
+
+    settings = solver_settings.SolverSettings()
+    settings.set_parameter(CUOPT_METHOD, SolverMethod.PDLP)
+    settings.set_parameter(CUOPT_PDLP_PRECISION, 1)  # Single
+    settings.set_parameter("crossover", True)
+    settings.set_optimality_tolerance(1e-4)
+
+    solution = solver.Solve(data_model_obj, settings)
+
+    assert solution.get_termination_status() == LPTerminationStatus.Optimal
+    assert solution.get_primal_objective() == pytest.approx(
+        -464.7531, rel=1e-1
+    )

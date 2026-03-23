@@ -8,8 +8,10 @@
 #pragma once
 
 #include <cuopt/linear_programming/constants.h>
+#include <cuopt/linear_programming/cpu_pdlp_warm_start_data.hpp>
 #include <cuopt/linear_programming/pdlp/pdlp_hyper_params.cuh>
 #include <cuopt/linear_programming/pdlp/pdlp_warm_start_data.hpp>
+#include <cuopt/linear_programming/utilities/internals.hpp>
 #include <optional>
 #include <raft/core/device_span.hpp>
 #include <rmm/device_uvector.hpp>
@@ -62,6 +64,33 @@ enum method_t : int {
   DualSimplex = CUOPT_METHOD_DUAL_SIMPLEX,
   Barrier     = CUOPT_METHOD_BARRIER,
   Unset       = CUOPT_METHOD_UNSET
+};
+
+/// Returns the corresponding string from the enum `method_t`.
+inline std::string method_to_string(method_t method)
+{
+  switch (method) {
+    case method_t::DualSimplex: return "Dual Simplex";
+    case method_t::PDLP: return "PDLP";
+    case method_t::Barrier: return "Barrier";
+    case method_t::Concurrent: return "Concurrent";
+    default: return "Unset";
+  }
+}
+
+/**
+ * @brief Enum representing the PDLP precision modes.
+ *
+ * DefaultPrecision: Use the type of the problem (FP64 for double problems).
+ * SinglePrecision:  Run PDLP internally in FP32, converting inputs and outputs.
+ * DoublePrecision:  Explicitly run in FP64 (same as default for double problems).
+ * MixedPrecision:   Use mixed precision SpMV (FP32 matrix with FP64 vectors/compute).
+ */
+enum pdlp_precision_t : int {
+  DefaultPrecision = CUOPT_PDLP_DEFAULT_PRECISION,
+  SinglePrecision  = CUOPT_PDLP_SINGLE_PRECISION,
+  DoublePrecision  = CUOPT_PDLP_DOUBLE_PRECISION,
+  MixedPrecision   = CUOPT_PDLP_MIXED_PRECISION
 };
 
 template <typename i_t, typename f_t>
@@ -181,6 +210,20 @@ class pdlp_solver_settings_t {
   const pdlp_warm_start_data_t<i_t, f_t>& get_pdlp_warm_start_data() const noexcept;
   pdlp_warm_start_data_t<i_t, f_t>& get_pdlp_warm_start_data();
   const pdlp_warm_start_data_view_t<i_t, f_t>& get_pdlp_warm_start_data_view() const noexcept;
+
+  /**
+   * @brief Get the CPU-backed PDLP warm start data (for remote execution)
+   * @return Const reference to cpu_pdlp_warm_start_data_t
+   * @note Used when the solver runs on a CPU-only host via remote execution.
+   *       The data is std::vector-backed rather than device_uvector-backed.
+   */
+  const cpu_pdlp_warm_start_data_t<i_t, f_t>& get_cpu_pdlp_warm_start_data() const noexcept;
+
+  /**
+   * @brief Get mutable CPU-backed PDLP warm start data (for remote execution)
+   * @return Mutable reference to cpu_pdlp_warm_start_data_t
+   */
+  cpu_pdlp_warm_start_data_t<i_t, f_t>& get_cpu_pdlp_warm_start_data() noexcept;
   // TODO batch mode: tmp
   std::optional<f_t> get_initial_step_size() const;
   // TODO batch mode: tmp
@@ -211,7 +254,7 @@ class pdlp_solver_settings_t {
   bool detect_infeasibility{false};
   bool strict_infeasibility{false};
   i_t iteration_limit{std::numeric_limits<i_t>::max()};
-  double time_limit{std::numeric_limits<double>::infinity()};
+  f_t time_limit{std::numeric_limits<f_t>::infinity()};
   pdlp_solver_mode_t pdlp_solver_mode{pdlp_solver_mode_t::Stable3};
   bool log_to_console{true};
   std::string log_file{""};
@@ -226,9 +269,10 @@ class pdlp_solver_settings_t {
   i_t ordering{-1};
   i_t barrier_dual_initial_point{-1};
   bool eliminate_dense_columns{true};
+  pdlp_precision_t pdlp_precision{pdlp_precision_t::DefaultPrecision};
   bool save_best_primal_so_far{false};
   bool first_primal_feasible{false};
-  bool presolve{false};
+  presolver_t presolver{presolver_t::Default};
   bool dual_postsolve{true};
   int num_gpus{1};
   method_t method{method_t::Concurrent};
@@ -255,10 +299,12 @@ class pdlp_solver_settings_t {
   /** Initial primal weight */
   // TODO batch mode: tmp
   std::optional<f_t> initial_primal_weight_;
-  // For the C++ interface
+  /** GPU-backed warm start data (device_uvector), used by C++ API and local GPU solves */
   pdlp_warm_start_data_t<i_t, f_t> pdlp_warm_start_data_;
-  // For the Cython interface
+  /** Warm start data as spans over external memory, used by Cython/Python interface */
   pdlp_warm_start_data_view_t<i_t, f_t> pdlp_warm_start_data_view_;
+  /** CPU-backed warm start data (std::vector), used for remote execution on CPU-only hosts */
+  cpu_pdlp_warm_start_data_t<i_t, f_t> cpu_pdlp_warm_start_data_;
 
   friend class solver_settings_t<i_t, f_t>;
 };

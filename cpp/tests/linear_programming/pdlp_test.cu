@@ -5,11 +5,12 @@
  */
 /* clang-format on */
 
-#include <linear_programming/pdlp.cuh>
-#include <linear_programming/pdlp_constants.hpp>
-#include <linear_programming/solve.cuh>
-#include <linear_programming/utils.cuh>
 #include <mps_parser.hpp>
+#include <pdlp/cusparse_view.hpp>
+#include <pdlp/pdlp.cuh>
+#include <pdlp/pdlp_constants.hpp>
+#include <pdlp/solve.cuh>
+#include <pdlp/utils.cuh>
 #include "utilities/pdlp_test_utilities.cuh"
 
 #include <utilities/base_fixture.hpp>
@@ -20,14 +21,15 @@
 #include <cuopt/linear_programming/pdlp/solver_settings.hpp>
 #include <cuopt/linear_programming/pdlp/solver_solution.hpp>
 #include <cuopt/linear_programming/solve.hpp>
-#include <mip/problem/problem.cuh>
+#include <mip_heuristics/mip_constants.hpp>
+#include <mip_heuristics/problem/problem.cuh>
 #include <mps_parser/parser.hpp>
 
 #include <utilities/copy_helpers.hpp>
 #include <utilities/error.hpp>
 
-#include <raft/sparse/detail/cusparse_macros.h>
 #include <raft/sparse/detail/cusparse_wrappers.h>
+#include <raft/core/cusparse_macros.hpp>
 #include <raft/core/handle.hpp>
 #include <raft/util/cudart_utils.hpp>
 
@@ -45,10 +47,10 @@
 
 namespace cuopt::linear_programming::test {
 
-constexpr double afiro_primal_objective = -464;
-
+constexpr double afiro_primal_objective = -464.0;
 // Accept a 1% error
-static bool is_incorrect_objective(double reference, double objective)
+template <typename f_t>
+static bool is_incorrect_objective(f_t reference, f_t objective)
 {
   if (reference == 0) { return std::abs(objective) > 0.01; }
   if (objective == 0) { return std::abs(reference) > 0.01; }
@@ -71,6 +73,58 @@ TEST(pdlp_class, run_double)
   EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
   EXPECT_FALSE(is_incorrect_objective(
     afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
+}
+
+TEST(pdlp_class, precision_mixed)
+{
+  using namespace cuopt::linear_programming::detail;
+  if (!is_cusparse_runtime_mixed_precision_supported()) {
+    const raft::handle_t handle_{};
+    auto path = make_path_absolute("linear_programming/afiro_original.mps");
+    cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
+      cuopt::mps_parser::parse_mps<int, double>(path, true);
+
+    auto settings           = pdlp_solver_settings_t<int, double>{};
+    settings.method         = cuopt::linear_programming::method_t::PDLP;
+    settings.pdlp_precision = cuopt::linear_programming::pdlp_precision_t::MixedPrecision;
+
+    optimization_problem_solution_t<int, double> solution =
+      solve_lp(&handle_, op_problem, settings);
+    EXPECT_EQ(solution.get_error_status().get_error_type(), cuopt::error_type_t::ValidationError);
+    return;
+  }
+
+  const raft::handle_t handle_{};
+
+  auto path = make_path_absolute("linear_programming/afiro_original.mps");
+  cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
+    cuopt::mps_parser::parse_mps<int, double>(path, true);
+
+  auto settings_mixed           = pdlp_solver_settings_t<int, double>{};
+  settings_mixed.method         = cuopt::linear_programming::method_t::PDLP;
+  settings_mixed.pdlp_precision = cuopt::linear_programming::pdlp_precision_t::MixedPrecision;
+
+  optimization_problem_solution_t<int, double> solution_mixed =
+    solve_lp(&handle_, op_problem, settings_mixed);
+  EXPECT_EQ((int)solution_mixed.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
+  EXPECT_FALSE(is_incorrect_objective(
+    afiro_primal_objective,
+    solution_mixed.get_additional_termination_information().primal_objective));
+
+  auto settings_full           = pdlp_solver_settings_t<int, double>{};
+  settings_full.method         = cuopt::linear_programming::method_t::PDLP;
+  settings_full.pdlp_precision = cuopt::linear_programming::pdlp_precision_t::DefaultPrecision;
+
+  optimization_problem_solution_t<int, double> solution_full =
+    solve_lp(&handle_, op_problem, settings_full);
+  EXPECT_EQ((int)solution_full.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
+  EXPECT_FALSE(is_incorrect_objective(
+    afiro_primal_objective,
+    solution_full.get_additional_termination_information().primal_objective));
+
+  EXPECT_NEAR(solution_mixed.get_additional_termination_information().primal_objective,
+              solution_full.get_additional_termination_information().primal_objective,
+              1e-2);
 }
 
 TEST(pdlp_class, run_double_very_low_accuracy)
@@ -211,14 +265,17 @@ TEST(pdlp_class, run_sub_mittleman)
       auto settings             = pdlp_solver_settings_t<int, double>{};
       settings.pdlp_solver_mode = solver_mode;
       settings.dual_postsolve   = false;
-      for (auto [presolve, epsilon] : {std::pair{true, 1e-1}, std::pair{false, 1e-6}}) {
-        settings.presolve = presolve;
-        settings.method   = cuopt::linear_programming::method_t::PDLP;
+      for (auto [presolver, epsilon] :
+           {std::pair{presolver_t::Papilo, 1e-1}, std::pair{presolver_t::None, 1e-6}}) {
+        settings.presolver = presolver;
+        settings.method    = cuopt::linear_programming::method_t::PDLP;
         const raft::handle_t handle_{};
         optimization_problem_solution_t<int, double> solution =
           solve_lp(&handle_, op_problem, settings);
-        printf(
-          "running %s mode %d presolve? %d\n", name.c_str(), (int)solver_mode, settings.presolve);
+        printf("running %s mode %d presolve? %d\n",
+               name.c_str(),
+               (int)solver_mode,
+               (int)settings.presolve);
         EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
         EXPECT_FALSE(is_incorrect_objective(
           expected_objective_value,
@@ -231,7 +288,7 @@ TEST(pdlp_class, run_sub_mittleman)
                                solution.get_additional_termination_information(0),
                                solution.get_primal_solution(),
                                epsilon,
-                               presolve);
+                               presolver);
       }
     }
   }
@@ -842,6 +899,7 @@ TEST(pdlp_class, warm_start)
     solver_settings.set_optimality_tolerance(1e-2);
     solver_settings.detect_infeasibility = false;
     solver_settings.method               = cuopt::linear_programming::method_t::PDLP;
+    solver_settings.presolver            = presolver_t::None;
 
     cuopt::mps_parser::mps_data_model_t<int, double> mps_data_model =
       cuopt::mps_parser::parse_mps<int, double>(path);
@@ -883,6 +941,7 @@ TEST(pdlp_class, warm_start_stable3_not_supported)
   solver_settings.set_optimality_tolerance(1e-2);
   solver_settings.detect_infeasibility = false;
   solver_settings.method               = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver            = presolver_t::None;
 
   cuopt::mps_parser::mps_data_model_t<int, double> mps_data_model =
     cuopt::mps_parser::parse_mps<int, double>(path);
@@ -903,9 +962,9 @@ TEST(pdlp_class, dual_postsolve_size)
   cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
     cuopt::mps_parser::parse_mps<int, double>(path, true);
 
-  auto solver_settings     = pdlp_solver_settings_t<int, double>{};
-  solver_settings.method   = cuopt::linear_programming::method_t::PDLP;
-  solver_settings.presolve = true;
+  auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method    = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver = presolver_t::Papilo;
 
   {
     solver_settings.dual_postsolve = true;
@@ -928,7 +987,8 @@ TEST(dual_simplex, afiro)
 {
   cuopt::linear_programming::pdlp_solver_settings_t<int, double> settings =
     cuopt::linear_programming::pdlp_solver_settings_t<int, double>{};
-  settings.method = cuopt::linear_programming::method_t::DualSimplex;
+  settings.method    = cuopt::linear_programming::method_t::DualSimplex;
+  settings.presolver = presolver_t::None;
 
   const raft::handle_t handle_{};
 
@@ -951,8 +1011,9 @@ TEST(pdlp_class, run_empty_matrix_pdlp)
   cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
     cuopt::mps_parser::parse_mps<int, double>(path);
 
-  auto solver_settings   = pdlp_solver_settings_t<int, double>{};
-  solver_settings.method = cuopt::linear_programming::method_t::PDLP;
+  auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method    = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver = presolver_t::None;
 
   optimization_problem_solution_t<int, double> solution =
     solve_lp(&handle_, op_problem, solver_settings);
@@ -968,8 +1029,9 @@ TEST(pdlp_class, run_empty_matrix_dual_simplex)
   cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
     cuopt::mps_parser::parse_mps<int, double>(path);
 
-  auto solver_settings   = pdlp_solver_settings_t<int, double>{};
-  solver_settings.method = cuopt::linear_programming::method_t::Concurrent;
+  auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method    = cuopt::linear_programming::method_t::Concurrent;
+  solver_settings.presolver = presolver_t::None;
 
   optimization_problem_solution_t<int, double> solution =
     solve_lp(&handle_, op_problem, solver_settings);
@@ -988,6 +1050,7 @@ TEST(pdlp_class, test_max)
   auto solver_settings             = pdlp_solver_settings_t<int, double>{};
   solver_settings.method           = cuopt::linear_programming::method_t::PDLP;
   solver_settings.pdlp_solver_mode = cuopt::linear_programming::pdlp_solver_mode_t::Stable2;
+  solver_settings.presolver        = presolver_t::None;
 
   optimization_problem_solution_t<int, double> solution =
     solve_lp(&handle_, op_problem, solver_settings);
@@ -1004,8 +1067,9 @@ TEST(pdlp_class, test_max_with_offset)
   cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
     cuopt::mps_parser::parse_mps<int, double>(path);
 
-  auto solver_settings   = pdlp_solver_settings_t<int, double>{};
-  solver_settings.method = cuopt::linear_programming::method_t::PDLP;
+  auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method    = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver = presolver_t::None;
 
   optimization_problem_solution_t<int, double> solution =
     solve_lp(&handle_, op_problem, solver_settings);
@@ -1022,7 +1086,8 @@ TEST(pdlp_class, test_lp_no_constraints)
   cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
     cuopt::mps_parser::parse_mps<int, double>(path);
 
-  auto solver_settings = pdlp_solver_settings_t<int, double>{};
+  auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+  solver_settings.presolver = presolver_t::None;
 
   optimization_problem_solution_t<int, double> solution =
     solve_lp(&handle_, op_problem, solver_settings);
@@ -1048,8 +1113,9 @@ TEST(pdlp_class, simple_batch_afiro)
   cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
     cuopt::mps_parser::parse_mps<int, double>(path, true);
 
-  auto solver_settings   = pdlp_solver_settings_t<int, double>{};
-  solver_settings.method = cuopt::linear_programming::method_t::PDLP;
+  auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method    = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver = presolver_t::None;
 
   constexpr int batch_size = 5;
 
@@ -1131,8 +1197,9 @@ TEST(pdlp_class, simple_batch_different_bounds)
   cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
     cuopt::mps_parser::parse_mps<int, double>(path, true);
 
-  auto solver_settings   = pdlp_solver_settings_t<int, double>{};
-  solver_settings.method = cuopt::linear_programming::method_t::PDLP;
+  auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method    = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver = presolver_t::None;
 
   const std::vector<double>& variable_lower_bounds = op_problem.get_variable_lower_bounds();
   const std::vector<double>& variable_upper_bounds = op_problem.get_variable_upper_bounds();
@@ -1186,8 +1253,9 @@ TEST(pdlp_class, more_complex_batch_different_bounds)
   cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
     cuopt::mps_parser::parse_mps<int, double>(path, true);
 
-  auto solver_settings   = pdlp_solver_settings_t<int, double>{};
-  solver_settings.method = cuopt::linear_programming::method_t::PDLP;
+  auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method    = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver = presolver_t::None;
 
   constexpr int batch_size = 5;
 
@@ -1396,8 +1464,9 @@ TEST(pdlp_class, new_bounds)
   cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
     cuopt::mps_parser::parse_mps<int, double>(path, true);
 
-  auto solver_settings   = pdlp_solver_settings_t<int, double>{};
-  solver_settings.method = cuopt::linear_programming::method_t::PDLP;
+  auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method    = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver = presolver_t::None;
 
   // Manually changing the bounds and doing it through the solver settings should give the same
   // result
@@ -1440,8 +1509,9 @@ TEST(pdlp_class, big_batch_afiro)
   cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
     cuopt::mps_parser::parse_mps<int, double>(path, true);
 
-  auto solver_settings   = pdlp_solver_settings_t<int, double>{};
-  solver_settings.method = cuopt::linear_programming::method_t::PDLP;
+  auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method    = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver = presolver_t::None;
 
   constexpr int batch_size = 1000;
 
@@ -1529,6 +1599,7 @@ TEST(pdlp_class, DISABLED_simple_batch_optimal_and_infeasible)
   auto solver_settings                 = pdlp_solver_settings_t<int, double>{};
   solver_settings.method               = cuopt::linear_programming::method_t::PDLP;
   solver_settings.detect_infeasibility = true;
+  solver_settings.presolver            = presolver_t::None;
 
   const std::vector<double>& variable_lower_bounds = op_problem.get_variable_lower_bounds();
   const std::vector<double>& variable_upper_bounds = op_problem.get_variable_upper_bounds();
@@ -1609,7 +1680,7 @@ TEST(pdlp_class, strong_branching_test)
   auto solver_settings             = pdlp_solver_settings_t<int, double>{};
   solver_settings.method           = cuopt::linear_programming::method_t::PDLP;
   solver_settings.pdlp_solver_mode = pdlp_solver_mode_t::Stable3;
-  solver_settings.presolve         = false;
+  solver_settings.presolver        = cuopt::linear_programming::presolver_t::None;
 
   const int n_fractional = fractional.size();
   const int batch_size   = n_fractional * 2;
@@ -1736,10 +1807,11 @@ TEST(pdlp_class, many_different_bounds)
 
   // Solve each variant using PDLP
   for (int i = 0; i < batch_size; ++i) {
-    const auto& bounds     = custom_bounds[i];
-    auto solver_settings   = pdlp_solver_settings_t<int, double>{};
-    solver_settings.method = cuopt::linear_programming::method_t::PDLP;
-    auto ref_prob          = op_problem;
+    const auto& bounds        = custom_bounds[i];
+    auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+    solver_settings.method    = cuopt::linear_programming::method_t::PDLP;
+    solver_settings.presolver = presolver_t::None;
+    auto ref_prob             = op_problem;
     ref_prob.get_variable_lower_bounds()[std::get<0>(bounds)] = std::get<1>(bounds);
     ref_prob.get_variable_upper_bounds()[std::get<0>(bounds)] = std::get<2>(bounds);
     ref_problems.push_back(ref_prob);
@@ -1750,8 +1822,9 @@ TEST(pdlp_class, many_different_bounds)
       host_copy(solution.get_primal_solution(), solution.get_primal_solution().stream());
   }
 
-  auto solver_settings   = pdlp_solver_settings_t<int, double>{};
-  solver_settings.method = cuopt::linear_programming::method_t::PDLP;
+  auto solver_settings      = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method    = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver = presolver_t::None;
   for (int i = 0; i < batch_size; ++i) {
     solver_settings.new_bounds.push_back(custom_bounds[i]);
   }
@@ -1817,6 +1890,7 @@ TEST(pdlp_class, some_climber_hit_iteration_limit)
     auto solver_settings            = pdlp_solver_settings_t<int, double>{};
     solver_settings.method          = cuopt::linear_programming::method_t::PDLP;
     solver_settings.iteration_limit = 500;
+    solver_settings.presolver       = presolver_t::None;
     auto ref_prob                   = op_problem;
     ref_prob.get_variable_lower_bounds()[std::get<0>(bounds)] = std::get<1>(bounds);
     ref_prob.get_variable_upper_bounds()[std::get<0>(bounds)] = std::get<2>(bounds);
@@ -1830,6 +1904,7 @@ TEST(pdlp_class, some_climber_hit_iteration_limit)
 
   auto solver_settings            = pdlp_solver_settings_t<int, double>{};
   solver_settings.method          = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver       = presolver_t::None;
   solver_settings.iteration_limit = 500;
   for (int i = 0; i < batch_size; ++i) {
     solver_settings.new_bounds.push_back(custom_bounds[i]);
@@ -1865,6 +1940,107 @@ TEST(pdlp_class, some_climber_hit_iteration_limit)
                              false);
     }
   }
+}
+
+TEST(pdlp_class, precision_single)
+{
+  const raft::handle_t handle_{};
+
+  auto path = make_path_absolute("linear_programming/afiro_original.mps");
+  cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
+    cuopt::mps_parser::parse_mps<int, double>(path, true);
+
+  auto solver_settings           = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method         = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.pdlp_precision = cuopt::linear_programming::pdlp_precision_t::SinglePrecision;
+
+  optimization_problem_solution_t<int, double> solution =
+    solve_lp(&handle_, op_problem, solver_settings);
+  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
+
+  EXPECT_FALSE(is_incorrect_objective(
+    afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
+}
+
+TEST(pdlp_class, precision_single_crossover)
+{
+  const raft::handle_t handle_{};
+
+  auto path = make_path_absolute("linear_programming/afiro_original.mps");
+  cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
+    cuopt::mps_parser::parse_mps<int, double>(path, true);
+
+  auto solver_settings           = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method         = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.pdlp_precision = cuopt::linear_programming::pdlp_precision_t::SinglePrecision;
+  solver_settings.crossover      = true;
+
+  optimization_problem_solution_t<int, double> solution =
+    solve_lp(&handle_, op_problem, solver_settings);
+  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
+
+  EXPECT_FALSE(is_incorrect_objective(
+    afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
+}
+
+TEST(pdlp_class, precision_single_concurrent)
+{
+  const raft::handle_t handle_{};
+
+  auto path = make_path_absolute("linear_programming/afiro_original.mps");
+  cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
+    cuopt::mps_parser::parse_mps<int, double>(path, true);
+
+  auto solver_settings           = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method         = cuopt::linear_programming::method_t::Concurrent;
+  solver_settings.pdlp_precision = cuopt::linear_programming::pdlp_precision_t::SinglePrecision;
+
+  optimization_problem_solution_t<int, double> solution =
+    solve_lp(&handle_, op_problem, solver_settings);
+  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
+
+  EXPECT_FALSE(is_incorrect_objective(
+    afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
+}
+
+TEST(pdlp_class, precision_single_papilo_presolve)
+{
+  const raft::handle_t handle_{};
+
+  auto path = make_path_absolute("linear_programming/afiro_original.mps");
+  cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
+    cuopt::mps_parser::parse_mps<int, double>(path, true);
+
+  auto solver_settings           = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method         = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.pdlp_precision = cuopt::linear_programming::pdlp_precision_t::SinglePrecision;
+  solver_settings.presolver      = cuopt::linear_programming::presolver_t::Papilo;
+
+  optimization_problem_solution_t<int, double> solution =
+    solve_lp(&handle_, op_problem, solver_settings);
+  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
+  EXPECT_FALSE(is_incorrect_objective(
+    afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
+}
+
+TEST(pdlp_class, precision_single_pslp_presolve)
+{
+  const raft::handle_t handle_{};
+
+  auto path = make_path_absolute("linear_programming/afiro_original.mps");
+  cuopt::mps_parser::mps_data_model_t<int, double> op_problem =
+    cuopt::mps_parser::parse_mps<int, double>(path, true);
+
+  auto solver_settings           = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method         = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.pdlp_precision = cuopt::linear_programming::pdlp_precision_t::SinglePrecision;
+  solver_settings.presolver      = cuopt::linear_programming::presolver_t::PSLP;
+
+  optimization_problem_solution_t<int, double> solution =
+    solve_lp(&handle_, op_problem, solver_settings);
+  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
+  EXPECT_FALSE(is_incorrect_objective(
+    afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
 }
 
 }  // namespace cuopt::linear_programming::test

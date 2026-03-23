@@ -1,4 +1,5 @@
-# cuOpt - GPU accelerated Optimization Engine
+<!-- AI agents: Start by reading AGENTS.md -->
+# cuOpt - GPU-accelerated Optimization
 
 [![Build Status](https://github.com/NVIDIA/cuopt/actions/workflows/build.yaml/badge.svg)](https://github.com/NVIDIA/cuopt/actions/workflows/build.yaml)
 [![Version](https://img.shields.io/badge/version-26.04.00-blue)](https://github.com/NVIDIA/cuopt/releases)
@@ -11,12 +12,15 @@
 
 
 
-NVIDIA® cuOpt™ is a GPU-accelerated optimization engine that excels in mixed integer linear programming (MILP), linear programming (LP), quadratic programming (QP) and vehicle routing problems (VRP). It enables near real-time solutions for large-scale challenges with millions of variables and constraints, offering
-easy integration into existing solvers and seamless deployment across hybrid and multi-cloud environments.
+NVIDIA® cuOpt™ is a GPU-accelerated optimization engine that excels in mixed integer linear programming (MILP), linear programming (LP), quadratic programming (QP), and vehicle routing problems (VRP). It enables near real-time solutions for large-scale LPs with millions of variables and constraints, and MIPs with hundreds of thousands of variables. cuOpt offers easy integration into existing modeling languages and seamless deployment across hybrid and multi-cloud environments.
 
 The core engine is written in C++ and wrapped with a C API, Python API and Server API.
 
-For the latest stable version ensure you are on the `main` branch.
+For the latest version, ensure you are on the `main` branch.
+
+## Latest Documentation
+
+[cuOpt Documentation](https://docs.nvidia.com/cuopt/user-guide/latest/introduction.html)
 
 ## Supported APIs
 
@@ -53,7 +57,7 @@ This repo is also hosted as a [COIN-OR](http://github.com/coin-or/cuopt/) projec
 
 ### Python requirements
 
-* Python >=3.11, <=3.13
+* Python >=3.11, <=3.14
 
 ### OS requirements
 
@@ -126,13 +130,13 @@ Users can pull the cuOpt container from the NVIDIA container registry.
 
 ```bash
 # For CUDA 12.x
-docker pull nvidia/cuopt:latest-cuda12.9-py3.13
+docker pull nvidia/cuopt:latest-cuda12.9-py3.14
 
 # For CUDA 13.x
-docker pull nvidia/cuopt:latest-cuda13.0-py3.13
+docker pull nvidia/cuopt:latest-cuda13.0-py3.14
 ```
 
-Note: The ``latest`` tag is the latest stable release of cuOpt. If you want to use a specific version, you can use the ``<version>-cuda12.9-py3.13`` or ``<version>-cuda13.0-py3.13`` tag. For example, to use cuOpt 25.10.0, you can use the ``25.10.0-cuda12.9-py3.13`` or ``25.10.0-cuda13.0-py3.13`` tag. Please refer to `cuOpt dockerhub page <https://hub.docker.com/r/nvidia/cuopt/tags>`_ for the list of available tags.
+Note: The ``latest`` tag is the latest stable release of cuOpt. If you want to use a specific version, you can use the ``<version>-cuda12.9-py3.14`` or ``<version>-cuda13.0-py3.14`` tag. For example, to use cuOpt 25.10.0, you can use the ``25.10.0-cuda12.9-py3.13`` or ``25.10.0-cuda13.0-py3.13`` tag. Please refer to `cuOpt dockerhub page <https://hub.docker.com/r/nvidia/cuopt/tags>`_ for the list of available tags.
 
 More information about the cuOpt container can be found [here](https://docs.nvidia.com/cuopt/user-guide/latest/cuopt-server/quick-start.html#container-from-docker-hub).
 
@@ -152,6 +156,10 @@ cuOpt follows the RAPIDS release schedule and is part of the **"others"** catego
 - **Release**: Final testing, tagging, and official release
 
 For current release timelines and dates, refer to the [RAPIDS Maintainers Docs](https://docs.rapids.ai/maintainers/).
+
+## For AI Coding Agents
+
+See [AGENTS.md](./AGENTS.md) for agent-specific guidelines.
 
 ## Contributing Guide
 

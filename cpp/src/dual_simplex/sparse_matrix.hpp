@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -48,7 +48,12 @@ class csc_matrix_t {
   // Adjust to i and x vectors for a new number of nonzeros
   void reallocate(i_t new_nz);
 
+  // Get the number of nonzeros in the matrix
   i_t nnz() const { return col_start[n]; }
+
+  // Get the number of nonzeros in column j
+  i_t col_length(i_t j) const { return col_start[j + 1] - col_start[j]; }
+
   // Convert the CSC matrix to a CSR matrix
   i_t to_compressed_row(
     cuopt::linear_programming::dual_simplex::csr_matrix_t<i_t, f_t>& Arow) const;
@@ -145,14 +150,23 @@ class csr_matrix_t {
   {
   }
 
+  // Get the number of nonzeros in row i
+  i_t row_length(i_t i) const { return row_start[i + 1] - row_start[i]; }
+
   // Convert the CSR matrix to CSC
   i_t to_compressed_col(csc_matrix_t<i_t, f_t>& Acol) const;
 
   // Create a new matrix with the marked rows removed
   i_t remove_rows(std::vector<i_t>& row_marker, csr_matrix_t<i_t, f_t>& Aout) const;
 
+  // Append rows from another CSR matrix
+  i_t append_rows(const csr_matrix_t<i_t, f_t>& C);
+
+  // Append a row from a sparse vector
+  i_t append_row(const sparse_vector_t<i_t, f_t>& c);
+
   // Ensures no repeated column indices within a row
-  void check_matrix(std::string matrix_name = "") const;
+  i_t check_matrix(std::string matrix_name = "") const;
 
   bool is_diagonal() const
   {
@@ -167,12 +181,14 @@ class csr_matrix_t {
     return true;
   }
 
+  // get constraint range
+  std::pair<i_t, i_t> get_constraint_range(i_t cstr_idx) const;
   i_t nz_max;                  // maximum number of nonzero entries
   i_t m;                       // number of rows
   i_t n;                       // number of cols
   std::vector<i_t> row_start;  // row pointers (size m + 1)
-  std::vector<i_t> j;          // column inidices, size nz_max
-  std::vector<f_t> x;          // numerical valuse, size nz_max
+  std::vector<i_t> j;          // column indices, size nz_max
+  std::vector<f_t> x;          // numerical values, size nz_max
 
   static_assert(std::is_signed_v<i_t>);
 };
@@ -264,12 +280,9 @@ i_t matrix_transpose_vector_multiply(const csc_matrix_t<i_t, f_t>& A,
 }
 
 // y <- alpha*A*x + beta*y
-template <typename i_t, typename f_t, typename AllocatorA, typename AllocatorB>
-i_t matrix_vector_multiply(const csc_matrix_t<i_t, f_t>& A,
-                           f_t alpha,
-                           const std::vector<f_t, AllocatorA>& x,
-                           f_t beta,
-                           std::vector<f_t, AllocatorB>& y)
+template <typename i_t, typename f_t, typename VectorX, typename VectorY>
+i_t matrix_vector_multiply(
+  const csc_matrix_t<i_t, f_t>& A, f_t alpha, const VectorX& x, f_t beta, VectorY& y)
 {
   // y <- alpha*A*x + beta*y
   i_t m = A.m;

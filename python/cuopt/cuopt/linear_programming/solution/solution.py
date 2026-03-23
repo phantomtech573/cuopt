@@ -117,8 +117,8 @@ class Solution:
         Time used for pre-solve
     solve_time: Float64
         Solve time in seconds
-    solved_by: int
-        Whether the problem was solved by Dual Simplex(1), PDLP(2) or Barrier(3)
+    solved_by_pdlp: bool
+        Whether the problem was solved by PDLP or Dual Simplex
     """
 
     def __init__(
@@ -155,7 +155,7 @@ class Solution:
         dual_objective=0.0,
         gap=0.0,
         nb_iterations=0,
-        solved_by=None,
+        solved_by_pdlp=None,
         mip_gap=0.0,
         solution_bound=0.0,
         presolve_time=0.0,
@@ -168,25 +168,28 @@ class Solution:
         self.problem_category = problem_category
         self.primal_solution = primal_solution
         self.dual_solution = dual_solution
-        self.pdlp_warm_start_data = PDLPWarmStartData(
-            current_primal_solution,
-            current_dual_solution,
-            initial_primal_average,
-            initial_dual_average,
-            current_ATY,
-            sum_primal_solutions,
-            sum_dual_solutions,
-            last_restart_duality_gap_primal_solution,
-            last_restart_duality_gap_dual_solution,
-            initial_primal_weight,
-            initial_step_size,
-            total_pdlp_iterations,
-            total_pdhg_iterations,
-            last_candidate_kkt_score,
-            last_restart_kkt_score,
-            sum_solution_weight,
-            iterations_since_last_restart,
-        )
+        if problem_category == ProblemCategory.LP:
+            self.pdlp_warm_start_data = PDLPWarmStartData(
+                current_primal_solution,
+                current_dual_solution,
+                initial_primal_average,
+                initial_dual_average,
+                current_ATY,
+                sum_primal_solutions,
+                sum_dual_solutions,
+                last_restart_duality_gap_primal_solution,
+                last_restart_duality_gap_dual_solution,
+                initial_primal_weight,
+                initial_step_size,
+                total_pdlp_iterations,
+                total_pdhg_iterations,
+                last_candidate_kkt_score,
+                last_restart_kkt_score,
+                sum_solution_weight,
+                iterations_since_last_restart,
+            )
+        else:
+            self.pdlp_warm_start_data = None
         self._set_termination_status(termination_status)
         self.error_status = error_status
         self.error_message = error_message
@@ -217,8 +220,17 @@ class Solution:
     def _set_termination_status(self, ts):
         if self.problem_category == ProblemCategory.LP:
             self.termination_status = LPTerminationStatus(ts)
-        else:
+        elif self.problem_category in (
+            ProblemCategory.MIP,
+            ProblemCategory.IP,
+        ):
             self.termination_status = MILPTerminationStatus(ts)
+        else:
+            raise ValueError(
+                f"Unknown problem_category: {self.problem_category!r}. "
+                "Expected one of ProblemCategory.LP, ProblemCategory.MIP, "
+                "ProblemCategory.IP."
+            )
 
     def raise_if_milp_solution(self, function_name):
         if self.problem_category in (ProblemCategory.MIP, ProblemCategory.IP):
@@ -243,7 +255,7 @@ class Solution:
         Note: Applicable to only LP
         Returns the dual solution as numpy.array with float64 type.
         """
-        self.raise_if_milp_solution(__name__)
+        self.raise_if_milp_solution("get_dual_solution")
         return self.dual_solution
 
     def get_primal_objective(self):
@@ -257,7 +269,7 @@ class Solution:
         Note: Applicable to only LP
         Returns the dual objective as a float64.
         """
-        self.raise_if_milp_solution(__name__)
+        self.raise_if_milp_solution("get_dual_objective")
         return self.dual_objective
 
     def get_termination_status(self):
@@ -290,11 +302,11 @@ class Solution:
         """
         return self.solve_time
 
-    def get_solved_by(self):
+    def get_solved_by_pdlp(self):
         """
-        Returns whether the problem was solved by Dual Simplex(1), PDLP(2) or Barrier(3)
+        Returns whether the problem was solved by PDLP or Dual Simplex
         """
-        return self.solved_by
+        return self.solved_by_pdlp
 
     def get_vars(self):
         """
@@ -326,14 +338,16 @@ class Solution:
             Number of iterations the LP solver did before converging.
         """
 
-        self.raise_if_milp_solution(__name__)
+        self.raise_if_milp_solution("get_lp_stats")
 
         return self.lp_stats
 
     def get_reduced_cost(self):
         """
+        Note: Applicable to only LP
         Returns the reduced cost as numpy.array with float64 type.
         """
+        self.raise_if_milp_solution("get_reduced_cost")
         return self.reduced_cost
 
     def get_pdlp_warm_start_data(self):
@@ -344,6 +358,7 @@ class Solution:
 
         See `SolverSettings.set_pdlp_warm_start_data` for more details.
         """
+        self.raise_if_milp_solution("get_pdlp_warm_start_data")
         return self.pdlp_warm_start_data
 
     def get_milp_stats(self):
@@ -387,7 +402,7 @@ class Solution:
             Number of simplex iterations performed during the MIP solve
         """
 
-        self.raise_if_lp_solution(__name__)
+        self.raise_if_lp_solution("get_milp_stats")
 
         return self.milp_stats
 
