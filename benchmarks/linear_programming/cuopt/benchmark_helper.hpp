@@ -7,16 +7,16 @@
 
 #pragma once
 
-#include <cuopt/linear_programming/optimization_problem.hpp>
+#include <cuopt/linear_programming/optimization_problem_interface.hpp>
 #include <cuopt/linear_programming/pdlp/pdlp_hyper_params.cuh>
 #include <cuopt/linear_programming/pdlp/solver_solution.hpp>
 #include <cuopt/linear_programming/solve.hpp>
 #include <mps_parser/parser.hpp>
 
-#include <raft/sparse/detail/cusparse_macros.h>
 #include <raft/sparse/detail/cusparse_wrappers.h>
-#include <raft/common/nvtx.hpp>
+#include <raft/core/cusparse_macros.hpp>
 #include <raft/core/handle.hpp>
+#include <raft/core/nvtx.hpp>
 #include <raft/sparse/linalg/transpose.cuh>
 
 #include <rmm/device_scalar.hpp>

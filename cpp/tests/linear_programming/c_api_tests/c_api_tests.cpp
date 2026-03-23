@@ -7,14 +7,20 @@
 
 #include "c_api_tests.h"
 
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <string>
 
 #include <cuopt/linear_programming/cuopt_c.h>
-#include <linear_programming/cuopt_c_internal.hpp>
+#include <pdlp/cuopt_c_internal.hpp>
 
 #include <utilities/common_utils.hpp>
 #include <utilities/error.hpp>
+
+namespace cuopt::linear_programming::detail {
+bool is_cusparse_runtime_mixed_precision_supported();
+}
 
 #include <gtest/gtest.h>
 
@@ -146,6 +152,24 @@ TEST(c_api, test_write_problem)
   std::filesystem::remove(temp_file);
 }
 
+TEST(c_api, test_maximize_problem_dual_variables)
+{
+  cuopt_int_t termination_status;
+  cuopt_float_t objective, dual_objective;
+  cuopt_float_t dual_variables[3];
+  cuopt_float_t reduced_costs[4];
+  for (cuopt_int_t method = CUOPT_METHOD_CONCURRENT; method <= CUOPT_METHOD_BARRIER; method++) {
+    EXPECT_EQ(
+      test_maximize_problem_dual_variables(
+        method, &termination_status, &objective, dual_variables, reduced_costs, &dual_objective),
+      CUOPT_SUCCESS);
+    EXPECT_EQ(termination_status, CUOPT_TERIMINATION_STATUS_OPTIMAL);
+    EXPECT_NEAR(objective,
+                dual_objective,
+                method == CUOPT_METHOD_CONCURRENT || method == CUOPT_METHOD_PDLP ? 1e-2 : 1e-5);
+  }
+}
+
 static bool test_mps_roundtrip(const std::string& mps_file_path)
 {
   using cuopt::linear_programming::problem_and_stream_view_t;
@@ -178,8 +202,9 @@ static bool test_mps_roundtrip(const std::string& mps_file_path)
     auto* original_problem_wrapper = static_cast<problem_and_stream_view_t*>(original_handle);
     auto* reread_problem_wrapper   = static_cast<problem_and_stream_view_t*>(reread_handle);
 
-    result =
-      original_problem_wrapper->op_problem->is_equivalent(*reread_problem_wrapper->op_problem);
+    // Use the interface method to compare (works for both CPU and GPU backends)
+    result = original_problem_wrapper->get_problem()->is_equivalent(
+      *reread_problem_wrapper->get_problem());
   }
 
 cleanup:
@@ -225,3 +250,154 @@ INSTANTIATE_TEST_SUITE_P(c_api,
                                            "/mip/enlight_hard.mps",
                                            "/mip/enlight11.mps",
                                            "/mip/supportcase22.mps"));
+
+class DeterministicBBTestFixture
+  : public ::testing::TestWithParam<std::tuple<std::string, int, double, double>> {};
+TEST_P(DeterministicBBTestFixture, deterministic_reproducibility)
+{
+  const std::string& rapidsDatasetRootDir = cuopt::test::get_rapids_dataset_root_dir();
+  std::string filename                    = rapidsDatasetRootDir + std::get<0>(GetParam());
+  int num_threads                         = std::get<1>(GetParam());
+  double time_limit                       = std::get<2>(GetParam());
+  double work_limit                       = std::get<3>(GetParam());
+
+  // Run 3 times and verify identical results
+  EXPECT_EQ(test_deterministic_bb(filename.c_str(), 3, num_threads, time_limit, work_limit),
+            CUOPT_SUCCESS);
+}
+INSTANTIATE_TEST_SUITE_P(c_api,
+                         DeterministicBBTestFixture,
+                         ::testing::Values(
+                           // Low thread count
+                           std::make_tuple("/mip/gen-ip054.mps", 4, 60.0, 2),
+                           // High thread count (high contention)
+                           std::make_tuple("/mip/gen-ip054.mps", 128, 60.0, 2),
+                           // Different instance
+                           std::make_tuple("/mip/bb_optimality.mps", 8, 60.0, 2)));
+
+// =============================================================================
+// PDLP Precision Tests
+// =============================================================================
+
+TEST(c_api, pdlp_precision_single)
+{
+  const std::string& rapidsDatasetRootDir = cuopt::test::get_rapids_dataset_root_dir();
+  std::string filename = rapidsDatasetRootDir + "/linear_programming/afiro_original.mps";
+  cuopt_int_t termination_status;
+  cuopt_float_t objective;
+  EXPECT_EQ(test_pdlp_precision_single(filename.c_str(), &termination_status, &objective),
+            CUOPT_SUCCESS);
+  EXPECT_EQ(termination_status, CUOPT_TERIMINATION_STATUS_OPTIMAL);
+  EXPECT_NEAR(objective, -464.7531, 1e-1);
+}
+
+TEST(c_api, pdlp_precision_mixed)
+{
+  using namespace cuopt::linear_programming::detail;
+  const std::string& rapidsDatasetRootDir = cuopt::test::get_rapids_dataset_root_dir();
+  std::string filename           = rapidsDatasetRootDir + "/linear_programming/afiro_original.mps";
+  cuopt_int_t termination_status = -1;
+  cuopt_float_t objective;
+  if (!is_cusparse_runtime_mixed_precision_supported()) {
+    auto status = test_pdlp_precision_mixed(filename.c_str(), &termination_status, &objective);
+    bool solve_returned_error = (status != CUOPT_SUCCESS);
+    bool solve_returned_non_optimal =
+      (status == CUOPT_SUCCESS && termination_status != CUOPT_TERIMINATION_STATUS_OPTIMAL);
+    EXPECT_TRUE(solve_returned_error || solve_returned_non_optimal);
+    return;
+  }
+  EXPECT_EQ(test_pdlp_precision_mixed(filename.c_str(), &termination_status, &objective),
+            CUOPT_SUCCESS);
+  EXPECT_EQ(termination_status, CUOPT_TERIMINATION_STATUS_OPTIMAL);
+  EXPECT_NEAR(objective, -464.7531, 1e-1);
+}
+
+// =============================================================================
+// Solution Interface Polymorphism Tests
+// =============================================================================
+
+TEST(c_api, lp_solution_mip_methods) { EXPECT_EQ(test_lp_solution_mip_methods(), CUOPT_SUCCESS); }
+
+TEST(c_api, mip_solution_lp_methods) { EXPECT_EQ(test_mip_solution_lp_methods(), CUOPT_SUCCESS); }
+
+// =============================================================================
+// CPU-Only Execution Tests
+// These tests verify that cuOpt can run on a CPU-only host with remote execution
+// enabled. The remote solve stubs return dummy results.
+// =============================================================================
+
+// Helper to set environment variables for CPU-only mode
+class CPUOnlyTestEnvironment {
+ public:
+  CPUOnlyTestEnvironment()
+  {
+    // Save original values
+    const char* cuda_visible = getenv("CUDA_VISIBLE_DEVICES");
+    const char* remote_host  = getenv("CUOPT_REMOTE_HOST");
+    const char* remote_port  = getenv("CUOPT_REMOTE_PORT");
+
+    orig_cuda_visible_ = cuda_visible ? cuda_visible : "";
+    orig_remote_host_  = remote_host ? remote_host : "";
+    orig_remote_port_  = remote_port ? remote_port : "";
+    cuda_was_set_      = (cuda_visible != nullptr);
+    host_was_set_      = (remote_host != nullptr);
+    port_was_set_      = (remote_port != nullptr);
+
+    // Set CPU-only environment
+    setenv("CUDA_VISIBLE_DEVICES", "", 1);
+    setenv("CUOPT_REMOTE_HOST", "localhost", 1);
+    setenv("CUOPT_REMOTE_PORT", "12345", 1);
+  }
+
+  ~CPUOnlyTestEnvironment()
+  {
+    // Restore original values
+    if (cuda_was_set_) {
+      setenv("CUDA_VISIBLE_DEVICES", orig_cuda_visible_.c_str(), 1);
+    } else {
+      unsetenv("CUDA_VISIBLE_DEVICES");
+    }
+
+    if (host_was_set_) {
+      setenv("CUOPT_REMOTE_HOST", orig_remote_host_.c_str(), 1);
+    } else {
+      unsetenv("CUOPT_REMOTE_HOST");
+    }
+
+    if (port_was_set_) {
+      setenv("CUOPT_REMOTE_PORT", orig_remote_port_.c_str(), 1);
+    } else {
+      unsetenv("CUOPT_REMOTE_PORT");
+    }
+  }
+
+ private:
+  std::string orig_cuda_visible_;
+  std::string orig_remote_host_;
+  std::string orig_remote_port_;
+  bool cuda_was_set_;
+  bool host_was_set_;
+  bool port_was_set_;
+};
+
+// TODO: Add numerical assertions once gRPC remote solver replaces the stub implementation.
+// Currently validates that the CPU-only C API path completes without errors.
+TEST(c_api_cpu_only, DISABLED_lp_solve)
+{
+  CPUOnlyTestEnvironment env;
+  const std::string& rapidsDatasetRootDir = cuopt::test::get_rapids_dataset_root_dir();
+  std::string lp_file = rapidsDatasetRootDir + "/linear_programming/afiro_original.mps";
+  EXPECT_EQ(test_cpu_only_execution(lp_file.c_str()), CUOPT_SUCCESS);
+}
+
+// TODO: Add numerical assertions once gRPC remote solver replaces the stub implementation.
+TEST(c_api_cpu_only, DISABLED_mip_solve)
+{
+  CPUOnlyTestEnvironment env;
+  const std::string& rapidsDatasetRootDir = cuopt::test::get_rapids_dataset_root_dir();
+  std::string mip_file                    = rapidsDatasetRootDir + "/mip/bb_optimality.mps";
+  EXPECT_EQ(test_cpu_only_mip_execution(mip_file.c_str()), CUOPT_SUCCESS);
+}
+
+// Note: cuopt_cli subprocess tests are in Python (test_cpu_only_execution.py)
+// which provides better cross-platform subprocess handling

@@ -6,6 +6,8 @@
 ConfigureTest(LP_UNIT_TEST
     ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests/optimization_problem_test.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests/solver_settings_test.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests/presolve_test.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests/solution_interface_test.cu
 )# ##################################################################################################
 # - Linear programming PDLP tests ----------------------------------------------------------------------
 ConfigureTest(PDLP_TEST
@@ -27,6 +29,11 @@ if (NOT SKIP_C_PYTHON_ADAPTERS)
     target_include_directories(c_api_tester
         PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/c_api_tests"
+    )
+
+    target_link_libraries(c_api_tester
+        PRIVATE
+        CUDA::cudart
     )
 
     add_executable(C_API_TEST "${CMAKE_CURRENT_SOURCE_DIR}/c_api_tests/c_api_tests.cpp")

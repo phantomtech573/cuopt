@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -8,10 +8,16 @@
 
 #include <dual_simplex/initial_basis.hpp>
 #include <dual_simplex/simplex_solver_settings.hpp>
+#include <dual_simplex/types.hpp>
 
 #include <vector>
 
 namespace cuopt::linear_programming::dual_simplex {
+
+#define RATIO_TEST_NO_ENTERING_VARIABLE -1
+#define RATIO_TEST_CONCURRENT_LIMIT     CONCURRENT_HALT_RETURN  // -2
+#define RATIO_TEST_TIME_LIMIT           -3
+#define RATIO_TEST_NUMERICAL_ISSUES     -4
 
 template <typename i_t, typename f_t>
 class bound_flipping_ratio_test_t {
@@ -48,6 +54,7 @@ class bound_flipping_ratio_test_t {
   }
 
   i_t compute_step_length(f_t& step_length, i_t& nonbasic_entering);
+  f_t work_estimate() const { return work_estimate_; }
 
  private:
   i_t compute_breakpoints(std::vector<i_t>& indices, std::vector<f_t>& ratios);
@@ -92,6 +99,8 @@ class bound_flipping_ratio_test_t {
 
   i_t n_;
   i_t m_;
+
+  f_t work_estimate_;
 };
 
 }  // namespace cuopt::linear_programming::dual_simplex

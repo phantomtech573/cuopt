@@ -1,5 +1,5 @@
 # cmake-format: off
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # cmake-format: on
 
@@ -26,6 +26,9 @@ ConfigureTest(INCUMBENT_CALLBACK_TEST
 ConfigureTest(DOC_EXAMPLE_TEST
     ${CMAKE_CURRENT_SOURCE_DIR}/doc_example_test.cu
 )
+ConfigureTest(CUTS_TEST
+    ${CMAKE_CURRENT_SOURCE_DIR}/cuts_test.cu
+)
 ConfigureTest(UNIT_TEST
     ${CMAKE_CURRENT_SOURCE_DIR}/unit_test.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/integer_with_real_bounds.cu
@@ -42,4 +45,7 @@ ConfigureTest(PRESOLVE_TEST
 # )
 ConfigureTest(MIP_TERMINATION_STATUS_TEST
     ${CMAKE_CURRENT_SOURCE_DIR}/termination_test.cu
+)
+ConfigureTest(DETERMINISM_TEST
+    ${CMAKE_CURRENT_SOURCE_DIR}/determinism_test.cu
 )

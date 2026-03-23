@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -26,9 +26,9 @@ i_t bound_flipping_ratio_test_t<i_t, f_t>::compute_breakpoints(std::vector<i_t>&
 
   i_t idx = 0;
   while (idx == 0 && pivot_tol >= 1e-12) {
-    // for (i_t k = 0; k < n - m; ++k) {
-    //   const i_t j = nonbasic_list_[k];
-    for (i_t h = 0; h < delta_z_indices_.size(); ++h) {
+    // Loop over the nonbasic variables j with non-zero delta_z
+    const i_t nz = delta_z_indices_.size();
+    for (i_t h = 0; h < nz; ++h) {
       const i_t j = delta_z_indices_[h];
       const i_t k = nonbasic_mark_[j];
       if (vstatus_[j] == variable_status_t::NONBASIC_FIXED) { continue; }
@@ -45,6 +45,8 @@ i_t bound_flipping_ratio_test_t<i_t, f_t>::compute_breakpoints(std::vector<i_t>&
         idx++;
       }
     }
+    work_estimate_ += 4 * nz;
+    work_estimate_ += 4 * idx;
     pivot_tol /= 10;
   }
   return idx;
@@ -66,11 +68,15 @@ i_t bound_flipping_ratio_test_t<i_t, f_t>::single_pass(i_t start,
   i_t candidate  = -1;
   f_t zero_tol   = settings_.zero_tol;
   i_t k_idx      = -1;
+
+  i_t min_found    = 0;
+  i_t harris_found = 0;
   for (i_t k = start; k < end; ++k) {
     if (ratios[k] < min_val) {
       min_val   = ratios[k];
       candidate = indicies[k];
       k_idx     = k;
+      min_found++;
     } else if (ratios[k] < min_val + zero_tol) {
       // Use Harris to select variables with larger pivots
       const i_t j = nonbasic_list_[indicies[k]];
@@ -79,15 +85,15 @@ i_t bound_flipping_ratio_test_t<i_t, f_t>::single_pass(i_t start,
         candidate = indicies[k];
         k_idx     = k;
       }
+      harris_found++;
     }
   }
+  work_estimate_ += (end - start) + 2 * min_found + 6 * harris_found;
+
   step_length       = min_val;
   nonbasic_entering = candidate;
   // this should be temporary, find root causes where the candidate is not filled
-  if (nonbasic_entering == -1) {
-    // -1,-2 and -3 are reserved for other things
-    return -4;
-  }
+  if (nonbasic_entering == -1) { return RATIO_TEST_NUMERICAL_ISSUES; }
   const i_t j = entering_index = nonbasic_list_[nonbasic_entering];
 
   constexpr bool verbose = false;
@@ -119,23 +125,24 @@ i_t bound_flipping_ratio_test_t<i_t, f_t>::compute_step_length(f_t& step_length,
   // Compute the initial set of breakpoints
   std::vector<i_t> indicies(nz);
   std::vector<f_t> ratios(nz);
+  work_estimate_ += 2 * nz;
   i_t num_breakpoints = compute_breakpoints(indicies, ratios);
   if constexpr (verbose) { settings_.log.printf("Initial breakpoints %d\n", num_breakpoints); }
   if (num_breakpoints == 0) {
     nonbasic_entering = -1;
-    return -1;
+    return RATIO_TEST_NO_ENTERING_VARIABLE;
   }
 
   f_t slope          = slope_;
   nonbasic_entering  = -1;
-  i_t entering_index = -1;
+  i_t entering_index = RATIO_TEST_NO_ENTERING_VARIABLE;
 
   i_t k_idx = single_pass(
     0, num_breakpoints, indicies, ratios, slope, step_length, nonbasic_entering, entering_index);
-  if (k_idx == -4) { return -4; }
+  if (k_idx == RATIO_TEST_NUMERICAL_ISSUES) { return RATIO_TEST_NUMERICAL_ISSUES; }
   bool continue_search = k_idx >= 0 && num_breakpoints > 1 && slope > 0.0;
   if (!continue_search) {
-    if constexpr (0) {
+    if constexpr (verbose) {
       settings_.log.printf(
         "BFRT stopping. No bound flips. Step length %e Nonbasic entering %d Entering %d pivot %e\n",
         step_length,
@@ -166,6 +173,7 @@ i_t bound_flipping_ratio_test_t<i_t, f_t>::compute_step_length(f_t& step_length,
     for (i_t k = 0; k < num_breakpoints - 1; ++k) {
       if (ratios[k] > max_ratio) { max_ratio = ratios[k]; }
     }
+    work_estimate_ += 2 * num_breakpoints;
     settings_.log.printf(
       "Starting heap passes. %d breakpoints max ratio %e\n", num_breakpoints - 1, max_ratio);
     bucket_pass(
@@ -210,6 +218,7 @@ void bound_flipping_ratio_test_t<i_t, f_t>::heap_passes(const std::vector<i_t>& 
                            std::abs(delta_z[nonbasic_list[current_indicies[k]]]));
     }
   }
+  work_estimate_ += N;
 
   auto compare = [zero_tol, &current_ratios, &current_indicies, &delta_z, &nonbasic_list](
                    const i_t& a, const i_t& b) {
@@ -220,11 +229,13 @@ void bound_flipping_ratio_test_t<i_t, f_t>::heap_passes(const std::vector<i_t>& 
   };
 
   std::make_heap(bare_idx.begin(), bare_idx.end(), compare);
+  work_estimate_ += 3 * bare_idx.size();
 
   while (bare_idx.size() > 0 && slope > 0) {
     // Remove minimum ratio from the heap and rebalance
     i_t heap_index = bare_idx.front();
     std::pop_heap(bare_idx.begin(), bare_idx.end(), compare);
+    work_estimate_ += 2 * std::log2(bare_idx.size());
     bare_idx.pop_back();
 
     nonbasic_entering = current_indicies[heap_index];
@@ -255,11 +266,11 @@ void bound_flipping_ratio_test_t<i_t, f_t>::heap_passes(const std::vector<i_t>& 
     }
 
     if (toc(start_time_) > settings_.time_limit) {
-      entering_index = -2;
+      entering_index = RATIO_TEST_TIME_LIMIT;
       return;
     }
     if (settings_.concurrent_halt != nullptr && *settings_.concurrent_halt == 1) {
-      entering_index = -3;
+      entering_index = CONCURRENT_HALT_RETURN;
       return;
     }
   }

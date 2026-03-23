@@ -346,8 +346,8 @@ dependencies:
     common:
       - output_types: [conda, requirements, pyproject]
         packages:
-          - numba-cuda>=0.22.1,<0.23.0
-          - numba>=0.60.0
+          - numba-cuda>=0.22.1
+          - numba>=0.60.0,<0.65.0
           - &pandas pandas>=2.0
           - &pyyaml pyyaml>=6.0.0
           - scipy>=1.14.1
@@ -373,10 +373,10 @@ dependencies:
           - &requests requests
       - output_types: [requirements, pyproject]
         packages:
-          - &msgpack msgpack==1.1.0
+          - &msgpack msgpack==1.1.2
       - output_types: conda
         packages:
-          - &msgpack_python msgpack-python==1.1.0
+          - &msgpack_python msgpack-python==1.1.2
 
   run_cuopt_server:
     common:
@@ -688,13 +688,13 @@ dependencies:
               cuda: "12.*"
               use_cuda_wheels: "true"
             packages:
-              - cuda-toolkit[cublas,cudart,curand,cusolver,cusparse,nvtx]==12.*
+              - cuda-toolkit[cublas,cudart,curand,cusolver,cusparse,nvjitlink,nvtx]==12.*
               - nvidia-cudss-cu12
           - matrix:
               cuda: "13.*"
               use_cuda_wheels: "true"
             packages:
-              - cuda-toolkit[cublas,cudart,curand,cusolver,cusparse,nvtx]==13.*
+              - cuda-toolkit[cublas,cudart,curand,cusolver,cusparse,nvjitlink,nvtx]==13.*
               - nvidia-cudss-cu13
           # if use_cuda_wheels=false is provided, do not add dependencies on any CUDA wheels
           # (e.g. for DLFW and pip devcontainers)
@@ -710,6 +710,7 @@ dependencies:
               - nvidia-cudss
               - nvidia-curand
               - nvidia-cusparse
+              - nvidia-nvjitlink
               - nvidia-cusolver
               - nvidia-nvtx
   develop:
@@ -783,5 +784,9 @@ dependencies:
             packages:
               - python=3.13
           - matrix:
+              py: "3.14"
             packages:
-              - python>=3.11,<3.14
+              - python=3.14
+          - matrix:
+            packages:
+              - python>=3.11,<3.15

@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <cuopt/linear_programming/mip/solver_settings.hpp>
 #include <cuopt/linear_programming/mip/solver_solution.hpp>
-#include <cuopt/linear_programming/optimization_problem.hpp>
+#include <cuopt/linear_programming/optimization_problem_interface.hpp>
 #include <cuopt/linear_programming/solve.hpp>
 #include <mps_parser/parser.hpp>
 #include <utilities/logger.hpp>
@@ -147,7 +147,10 @@ int run_single_file(std::string file_path,
                     int num_cpu_threads,
                     bool write_log_file,
                     bool log_to_console,
-                    double time_limit)
+                    int reliability_branching,
+                    double time_limit,
+                    double work_limit,
+                    bool deterministic)
 {
   const raft::handle_t handle_{};
   cuopt::linear_programming::mip_solver_settings_t<int, double> settings;
@@ -180,6 +183,10 @@ int run_single_file(std::string file_path,
     CUOPT_LOG_ERROR("Parsing MPS failed exiting!");
     return -1;
   }
+  // Use the benchmark filename for downstream instance-level reporting.
+  // This keeps per-instance metrics aligned with the run list even if the MPS NAME card differs.
+  mps_data_model.set_problem_name(base_filename);
+
   if (initial_solution_dir.has_value()) {
     auto initial_solutions = read_solution_from_dir(
       initial_solution_dir.value(), base_filename, mps_data_model.get_variable_names());
@@ -196,14 +203,18 @@ int run_single_file(std::string file_path,
       }
     }
   }
-
-  settings.time_limit                    = time_limit;
-  settings.heuristics_only               = heuristics_only;
-  settings.num_cpu_threads               = num_cpu_threads;
-  settings.log_to_console                = log_to_console;
+  settings.time_limit       = time_limit;
+  settings.work_limit       = work_limit;
+  settings.heuristics_only  = heuristics_only;
+  settings.num_cpu_threads  = num_cpu_threads;
+  settings.log_to_console   = log_to_console;
+  settings.determinism_mode = deterministic ? CUOPT_MODE_DETERMINISTIC : CUOPT_MODE_OPPORTUNISTIC;
   settings.tolerances.relative_tolerance = 1e-12;
   settings.tolerances.absolute_tolerance = 1e-6;
-  settings.presolve                      = true;
+  settings.presolver                     = cuopt::linear_programming::presolver_t::Default;
+  settings.reliability_branching         = reliability_branching;
+  settings.clique_cuts                   = -1;
+  settings.seed                          = 42;
   cuopt::linear_programming::benchmark_info_t benchmark_info;
   settings.benchmark_info_ptr = &benchmark_info;
   auto start_run_solver       = std::chrono::high_resolution_clock::now();
@@ -256,7 +267,10 @@ void run_single_file_mp(std::string file_path,
                         int num_cpu_threads,
                         bool write_log_file,
                         bool log_to_console,
-                        double time_limit)
+                        int reliability_branching,
+                        double time_limit,
+                        double work_limit,
+                        bool deterministic)
 {
   std::cout << "running file " << file_path << " on gpu : " << device << std::endl;
   auto memory_resource = make_async();
@@ -271,7 +285,10 @@ void run_single_file_mp(std::string file_path,
                                   num_cpu_threads,
                                   write_log_file,
                                   log_to_console,
-                                  time_limit);
+                                  reliability_branching,
+                                  time_limit,
+                                  work_limit,
+                                  deterministic);
   // this is a bad design to communicate the result but better than adding complexity of IPC or
   // pipes
   exit(sol_found);
@@ -341,7 +358,12 @@ int main(int argc, char* argv[])
     .default_value(std::string("t"));
 
   program.add_argument("--time-limit")
-    .help("time limit")
+    .help("time limit in seconds")
+    .scan<'g', double>()
+    .default_value(std::numeric_limits<double>::infinity());
+
+  program.add_argument("--work-limit")
+    .help("work unit limit (for deterministic mode)")
     .scan<'g', double>()
     .default_value(std::numeric_limits<double>::infinity());
 
@@ -353,6 +375,16 @@ int main(int argc, char* argv[])
   program.add_argument("--track-allocations")
     .help("track allocations (t/f)")
     .default_value(std::string("f"));
+
+  program.add_argument("--reliability-branching")
+    .help("reliability branching: -1 (automatic), 0 (disable) or k > 0 (use k)")
+    .scan<'i', int>()
+    .default_value(-1);
+
+  program.add_argument("-d", "--determinism")
+    .help("enable deterministic mode")
+    .default_value(false)
+    .implicit_value(true);
 
   // Parse arguments
   try {
@@ -368,6 +400,7 @@ int main(int argc, char* argv[])
   std::string run_dir_arg = program.get<std::string>("--run-dir");
   bool run_dir            = run_dir_arg[0] == 't';
   double time_limit       = program.get<double>("--time-limit");
+  double work_limit       = program.get<double>("--work-limit");
 
   bool run_selected = program.get<std::string>("--run-selected")[0] == 't';
   int n_gpus        = program.get<int>("--n-gpus");
@@ -376,14 +409,25 @@ int main(int argc, char* argv[])
   std::string result_file;
   int batch_num = -1;
 
-  bool heuristics_only   = program.get<std::string>("--heuristics-only")[0] == 't';
-  int num_cpu_threads    = program.get<int>("--num-cpu-threads");
-  bool write_log_file    = program.get<std::string>("--write-log-file")[0] == 't';
-  bool log_to_console    = program.get<std::string>("--log-to-console")[0] == 't';
-  double memory_limit    = program.get<double>("--memory-limit");
-  bool track_allocations = program.get<std::string>("--track-allocations")[0] == 't';
+  bool heuristics_only      = program.get<std::string>("--heuristics-only")[0] == 't';
+  int num_cpu_threads       = program.get<int>("--num-cpu-threads");
+  bool write_log_file       = program.get<std::string>("--write-log-file")[0] == 't';
+  bool log_to_console       = program.get<std::string>("--log-to-console")[0] == 't';
+  double memory_limit       = program.get<double>("--memory-limit");
+  bool track_allocations    = program.get<std::string>("--track-allocations")[0] == 't';
+  int reliability_branching = program.get<int>("--reliability-branching");
+  bool deterministic        = program.get<bool>("--determinism");
 
-  if (num_cpu_threads < 0) { num_cpu_threads = omp_get_max_threads() / n_gpus; }
+  if (num_cpu_threads < 0) {
+    num_cpu_threads = omp_get_max_threads() / n_gpus;
+    // std::ifstream smt_file("/sys/devices/system/cpu/smt/active");
+    // if (smt_file.is_open()) {
+    //   int smt_active = 0;
+    //   smt_file >> smt_active;
+    //   if (smt_active) { num_cpu_threads /= 2; }
+    // }
+    num_cpu_threads = std::max(num_cpu_threads, 1);
+  }
 
   if (program.is_used("--out-dir")) {
     out_dir     = program.get<std::string>("--out-dir");
@@ -469,7 +513,10 @@ int main(int argc, char* argv[])
                                num_cpu_threads,
                                write_log_file,
                                log_to_console,
-                               time_limit);
+                               reliability_branching,
+                               time_limit,
+                               work_limit,
+                               deterministic);
           } else if (sys_pid < 0) {
             std::cerr << "Fork failed!" << std::endl;
             exit(1);
@@ -509,7 +556,10 @@ int main(int argc, char* argv[])
                     num_cpu_threads,
                     write_log_file,
                     log_to_console,
-                    time_limit);
+                    reliability_branching,
+                    time_limit,
+                    work_limit,
+                    deterministic);
   }
 
   return 0;
