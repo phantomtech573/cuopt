@@ -73,6 +73,7 @@ inline std::string method_to_string(method_t method)
     case method_t::DualSimplex: return "Dual Simplex";
     case method_t::PDLP: return "PDLP";
     case method_t::Barrier: return "Barrier";
+    case method_t::Concurrent: return "Concurrent";
     default: return "Unset";
   }
 }

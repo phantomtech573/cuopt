@@ -202,7 +202,7 @@ class branch_and_bound_t {
   f_t root_objective_;
   lp_solution_t<i_t, f_t> root_relax_soln_;
   lp_solution_t<i_t, f_t> root_crossover_soln_;
-  method_t root_relax_solved_by;
+  method_t root_relax_solved_by{Unset};
   std::vector<f_t> edge_norms_;
   std::atomic<bool> root_crossover_solution_set_{false};
   omp_atomic_t<f_t> root_lp_current_lower_bound_;

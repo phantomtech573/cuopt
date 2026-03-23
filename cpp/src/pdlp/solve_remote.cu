@@ -69,7 +69,7 @@ std::unique_ptr<lp_solution_interface_t<i_t, f_t>> solve_lp_remote(
     0.002,                               // l2_dual_residual
     0.003,                               // gap
     42,                                  // num_iterations
-    true,                                // solved_by_pdlp
+    method_t::PDLP,                      // solved_by
     std::move(warmstart)                 // warmstart data
   );
 

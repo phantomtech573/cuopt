@@ -663,7 +663,7 @@ static optimization_problem_solution_t<i_t, double> run_pdlp_solver_in_fp32(
     di.max_dual_ray_infeasibility      = static_cast<double>(fi.max_dual_ray_infeasibility);
     di.dual_ray_linear_objective       = static_cast<double>(fi.dual_ray_linear_objective);
     di.solve_time                      = fi.solve_time;
-    di.solved_by_pdlp                  = fi.solved_by_pdlp;
+    di.solved_by                       = fi.solved_by;
     term_infos.push_back(di);
   }
 
