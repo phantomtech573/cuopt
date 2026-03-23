@@ -10,7 +10,7 @@
 #include <mps_parser/data_model_view.hpp>
 #include <mps_parser/mps_data_model.hpp>
 #include <utilities/error.hpp>
-#include <utilities/sparse_matrix_utils.hpp>
+#include <utilities/sparse_matrix_helpers.hpp>
 
 #include <cmath>
 #include <fstream>
@@ -391,7 +391,8 @@ void mps_writer_t<i_t, f_t>::write(const std::string& mps_file_path)
       std::vector<f_t> H_values;
       std::vector<i_t> H_indices;
       std::vector<i_t> H_offsets;
-      symmetrize_csr(Q_values, Q_indices, Q_offsets, H_values, H_indices, H_offsets);
+      cuopt::symmetrize_csr<i_t, f_t>(
+        Q_values, Q_indices, Q_offsets, H_values, H_indices, H_offsets);
 
       i_t n_rows = static_cast<i_t>(H_offsets.size()) - 1;
 

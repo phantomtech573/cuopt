@@ -41,8 +41,8 @@ void symmetrize_csr(const f_t* in_values,
                     std::vector<i_t>& out_indices,
                     std::vector<i_t>& out_offsets)
 {
-  // Optimized 2-pass algorithm (no COO intermediate)
-  // Memory: ~3× nnz, ~2x faster than COO-based approach
+  // Optimized 3-pass algorithm (no COO intermediate)
+  // Memory: ~3× nnz temporary storage before deduplication
 
   // Pass 1: Count entries per row in A + A^T
   std::vector<i_t> row_counts(n_rows, 0);

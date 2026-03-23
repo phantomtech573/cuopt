@@ -190,82 +190,11 @@ void optimization_problem_t<i_t, f_t>::set_quadratic_objective_matrix(
     size_offsets >= 1, error_type_t::ValidationError, "Q_offsets must have at least 1 element");
   cuopt_expects(Q_offsets != nullptr, error_type_t::ValidationError, "Q_offsets cannot be null");
 
-  // Build Q + Q^T using optimized 2-pass algorithm (no COO intermediate)
-  // Memory: ~3× nnz, ~2x faster than original COO-based approach
-  i_t qn = size_offsets - 1;  // Number of variables
-
-  // Pass 1: Count entries per row in Q + Q^T
-  std::vector<i_t> row_counts(qn, 0);
-  for (i_t i = 0; i < qn; ++i) {
-    for (i_t p = Q_offsets[i]; p < Q_offsets[i + 1]; ++p) {
-      i_t j = Q_indices[p];
-      row_counts[i]++;
-      if (i != j) { row_counts[j]++; }
-    }
-  }
-
-  // Build temporary offsets via prefix sum
-  std::vector<i_t> temp_offsets(qn + 1);
-  temp_offsets[0] = 0;
-  for (i_t i = 0; i < qn; ++i) {
-    temp_offsets[i + 1] = temp_offsets[i] + row_counts[i];
-  }
-
-  i_t total_entries = temp_offsets[qn];
-  std::vector<i_t> temp_indices(total_entries);
-  std::vector<f_t> temp_values(total_entries);
-
-  // Pass 2: Fill entries directly
-  std::vector<i_t> row_pos = temp_offsets;  // Copy for tracking insertion positions
-
-  for (i_t i = 0; i < qn; ++i) {
-    for (i_t p = Q_offsets[i]; p < Q_offsets[i + 1]; ++p) {
-      i_t j = Q_indices[p];
-      f_t x = Q_values[p];
-
-      // Add entry (i, j) with value 2x for diagonal, x for off-diagonal
-      temp_indices[row_pos[i]] = j;
-      temp_values[row_pos[i]]  = (i == j) ? (2 * x) : x;
-      row_pos[i]++;
-
-      // Add transpose entry (j, i) if off-diagonal
-      if (i != j) {
-        temp_indices[row_pos[j]] = i;
-        temp_values[row_pos[j]]  = x;
-        row_pos[j]++;
-      }
-    }
-  }
-
-  // Pass 3: Deduplicate and build final CSR
-  std::vector<i_t> workspace(qn, -1);
-  Q_offsets_.resize(qn + 1);
-  Q_indices_.resize(total_entries);
-  Q_values_.resize(total_entries);
-
-  i_t nz = 0;
-  for (i_t i = 0; i < qn; ++i) {
-    i_t row_start_out = nz;
-    Q_offsets_[i]     = row_start_out;
-
-    for (i_t p = temp_offsets[i]; p < temp_offsets[i + 1]; ++p) {
-      i_t j = temp_indices[p];
-      f_t x = temp_values[p];
-
-      if (workspace[j] >= row_start_out) {
-        Q_values_[workspace[j]] += x;
-      } else {
-        workspace[j]   = nz;
-        Q_indices_[nz] = j;
-        Q_values_[nz]  = x;
-        nz++;
-      }
-    }
-  }
-
-  Q_offsets_[qn] = nz;
-  Q_indices_.resize(nz);
-  Q_values_.resize(nz);
+  // Symmetrize Q to H = Q + Q^T (same algorithm as cuopt::symmetrize_csr in
+  // sparse_matrix_helpers.hpp)
+  const i_t qn = size_offsets - 1;
+  cuopt::symmetrize_csr<i_t, f_t>(
+    Q_values, Q_indices, Q_offsets, qn, Q_values_, Q_indices_, Q_offsets_);
   // FIX ME:: check for positive semi definite matrix
 }
 

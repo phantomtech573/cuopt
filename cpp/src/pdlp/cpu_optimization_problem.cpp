@@ -123,6 +123,8 @@ void cpu_optimization_problem_t<i_t, f_t>::set_quadratic_objective_matrix(
     cuopt_expects(Q_offsets != nullptr, error_type_t::ValidationError, "Q_offsets cannot be null");
   }
 
+  // Store raw CSR Q; symmetrization (H = Q + Q^T) is applied in optimization_problem_t setter on
+  // GPU.
   Q_values_.resize(size_values);
   Q_indices_.resize(size_indices);
   Q_offsets_.resize(size_offsets);
@@ -610,7 +612,7 @@ cpu_optimization_problem_t<i_t, f_t>::to_optimization_problem(raft::handle_t con
   // Set objective coefficients
   if (!c_.empty()) { gpu_problem->set_objective_coefficients(c_.data(), c_.size()); }
 
-  // Set quadratic objective if present
+  // Set quadratic objective if present (GPU setter symmetrizes once: H = Q + Q^T)
   if (!Q_values_.empty()) {
     gpu_problem->set_quadratic_objective_matrix(Q_values_.data(),
                                                 Q_values_.size(),
