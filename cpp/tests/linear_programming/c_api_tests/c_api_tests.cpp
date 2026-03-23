@@ -163,7 +163,7 @@ TEST(c_api, test_maximize_problem_dual_variables)
       test_maximize_problem_dual_variables(
         method, &termination_status, &objective, dual_variables, reduced_costs, &dual_objective),
       CUOPT_SUCCESS);
-    EXPECT_EQ(termination_status, CUOPT_TERIMINATION_STATUS_OPTIMAL);
+    EXPECT_EQ(termination_status, CUOPT_TERMINATION_STATUS_OPTIMAL);
     EXPECT_NEAR(objective,
                 dual_objective,
                 method == CUOPT_METHOD_CONCURRENT || method == CUOPT_METHOD_PDLP ? 1e-2 : 1e-5);
@@ -287,7 +287,7 @@ TEST(c_api, pdlp_precision_single)
   cuopt_float_t objective;
   EXPECT_EQ(test_pdlp_precision_single(filename.c_str(), &termination_status, &objective),
             CUOPT_SUCCESS);
-  EXPECT_EQ(termination_status, CUOPT_TERIMINATION_STATUS_OPTIMAL);
+  EXPECT_EQ(termination_status, CUOPT_TERMINATION_STATUS_OPTIMAL);
   EXPECT_NEAR(objective, -464.7531, 1e-1);
 }
 
@@ -302,13 +302,13 @@ TEST(c_api, pdlp_precision_mixed)
     auto status = test_pdlp_precision_mixed(filename.c_str(), &termination_status, &objective);
     bool solve_returned_error = (status != CUOPT_SUCCESS);
     bool solve_returned_non_optimal =
-      (status == CUOPT_SUCCESS && termination_status != CUOPT_TERIMINATION_STATUS_OPTIMAL);
+      (status == CUOPT_SUCCESS && termination_status != CUOPT_TERMINATION_STATUS_OPTIMAL);
     EXPECT_TRUE(solve_returned_error || solve_returned_non_optimal);
     return;
   }
   EXPECT_EQ(test_pdlp_precision_mixed(filename.c_str(), &termination_status, &objective),
             CUOPT_SUCCESS);
-  EXPECT_EQ(termination_status, CUOPT_TERIMINATION_STATUS_OPTIMAL);
+  EXPECT_EQ(termination_status, CUOPT_TERMINATION_STATUS_OPTIMAL);
   EXPECT_NEAR(objective, -464.7531, 1e-1);
 }
 

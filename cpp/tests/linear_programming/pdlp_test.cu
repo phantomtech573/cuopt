@@ -106,7 +106,7 @@ TEST(pdlp_class, precision_mixed)
 
   optimization_problem_solution_t<int, double> solution_mixed =
     solve_lp(&handle_, op_problem, settings_mixed);
-  EXPECT_EQ((int)solution_mixed.get_termination_status(), CUOPT_TERIMINATION_STATUS_OPTIMAL);
+  EXPECT_EQ((int)solution_mixed.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
   EXPECT_FALSE(is_incorrect_objective(
     afiro_primal_objective,
     solution_mixed.get_additional_termination_information().primal_objective));
@@ -117,7 +117,7 @@ TEST(pdlp_class, precision_mixed)
 
   optimization_problem_solution_t<int, double> solution_full =
     solve_lp(&handle_, op_problem, settings_full);
-  EXPECT_EQ((int)solution_full.get_termination_status(), CUOPT_TERIMINATION_STATUS_OPTIMAL);
+  EXPECT_EQ((int)solution_full.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
   EXPECT_FALSE(is_incorrect_objective(
     afiro_primal_objective,
     solution_full.get_additional_termination_information().primal_objective));
@@ -1956,7 +1956,7 @@ TEST(pdlp_class, precision_single)
 
   optimization_problem_solution_t<int, double> solution =
     solve_lp(&handle_, op_problem, solver_settings);
-  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERIMINATION_STATUS_OPTIMAL);
+  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
 
   EXPECT_FALSE(is_incorrect_objective(
     afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
@@ -1977,7 +1977,7 @@ TEST(pdlp_class, precision_single_crossover)
 
   optimization_problem_solution_t<int, double> solution =
     solve_lp(&handle_, op_problem, solver_settings);
-  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERIMINATION_STATUS_OPTIMAL);
+  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
 
   EXPECT_FALSE(is_incorrect_objective(
     afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
@@ -1997,7 +1997,7 @@ TEST(pdlp_class, precision_single_concurrent)
 
   optimization_problem_solution_t<int, double> solution =
     solve_lp(&handle_, op_problem, solver_settings);
-  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERIMINATION_STATUS_OPTIMAL);
+  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
 
   EXPECT_FALSE(is_incorrect_objective(
     afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
@@ -2018,7 +2018,7 @@ TEST(pdlp_class, precision_single_papilo_presolve)
 
   optimization_problem_solution_t<int, double> solution =
     solve_lp(&handle_, op_problem, solver_settings);
-  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERIMINATION_STATUS_OPTIMAL);
+  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
   EXPECT_FALSE(is_incorrect_objective(
     afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
 }
@@ -2038,7 +2038,7 @@ TEST(pdlp_class, precision_single_pslp_presolve)
 
   optimization_problem_solution_t<int, double> solution =
     solve_lp(&handle_, op_problem, solver_settings);
-  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERIMINATION_STATUS_OPTIMAL);
+  EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
   EXPECT_FALSE(is_incorrect_objective(
     afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
 }

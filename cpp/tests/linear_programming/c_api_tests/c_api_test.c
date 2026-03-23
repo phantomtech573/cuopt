@@ -140,16 +140,13 @@ static void mip_get_solution_callback(const cuopt_float_t* solution,
   if (context == NULL) { return; }
   context->get_calls += 1;
   if (context->last_solution == NULL) {
-    context->last_solution =
-      (cuopt_float_t*)malloc(context->n_variables * sizeof(cuopt_float_t));
+    context->last_solution = (cuopt_float_t*)malloc(context->n_variables * sizeof(cuopt_float_t));
     if (context->last_solution == NULL) {
       context->error = 1;
       return;
     }
   }
-  memcpy(context->last_solution,
-         solution,
-         context->n_variables * sizeof(cuopt_float_t));
+  memcpy(context->last_solution, solution, context->n_variables * sizeof(cuopt_float_t));
   memcpy(&context->last_objective, objective_value, sizeof(cuopt_float_t));
   memcpy(&context->last_solution_bound, solution_bound, sizeof(cuopt_float_t));
 }
@@ -164,18 +161,16 @@ static void mip_set_solution_callback(cuopt_float_t* solution,
   context->set_calls += 1;
   memcpy(&context->last_solution_bound, solution_bound, sizeof(cuopt_float_t));
   if (context->last_solution == NULL) { return; }
-  memcpy(solution,
-         context->last_solution,
-         context->n_variables * sizeof(cuopt_float_t));
+  memcpy(solution, context->last_solution, context->n_variables * sizeof(cuopt_float_t));
   memcpy(objective_value, &context->last_objective, sizeof(cuopt_float_t));
 }
 
 static cuopt_int_t test_mip_callbacks_internal(int include_set_callback)
 {
   cuOptOptimizationProblem problem = NULL;
-  cuOptSolverSettings settings = NULL;
-  cuOptSolution solution = NULL;
-  mip_callback_context_t context = {0};
+  cuOptSolverSettings settings     = NULL;
+  cuOptSolution solution           = NULL;
+  mip_callback_context_t context   = {0};
 
 #define NUM_ITEMS       8
 #define NUM_CONSTRAINTS 1
@@ -190,7 +185,7 @@ static cuopt_int_t test_mip_callbacks_internal(int include_set_callback)
   cuopt_int_t row_offsets[] = {0, NUM_ITEMS};
   cuopt_int_t column_indices[NUM_ITEMS];
 
-  cuopt_float_t rhs[]         = {max_weight};
+  cuopt_float_t rhs[]     = {max_weight};
   char constraint_sense[] = {CUOPT_LESS_THAN};
   cuopt_float_t lower_bounds[NUM_ITEMS];
   cuopt_float_t upper_bounds[NUM_ITEMS];
@@ -284,15 +279,9 @@ DONE:
   return status;
 }
 
-cuopt_int_t test_mip_get_callbacks_only()
-{
-  return test_mip_callbacks_internal(0);
-}
+cuopt_int_t test_mip_get_callbacks_only() { return test_mip_callbacks_internal(0); }
 
-cuopt_int_t test_mip_get_set_callbacks()
-{
-  return test_mip_callbacks_internal(1);
-}
+cuopt_int_t test_mip_get_set_callbacks() { return test_mip_callbacks_internal(1); }
 
 cuopt_int_t burglar_problem()
 {
@@ -1465,12 +1454,16 @@ DONE:
   return status;
 }
 
-
-cuopt_int_t test_maximize_problem_dual_variables(cuopt_int_t method, cuopt_int_t* termination_status_ptr, cuopt_float_t* objective_ptr, cuopt_float_t* dual_variables, cuopt_float_t* reduced_costs, cuopt_float_t *dual_obj_ptr)
+cuopt_int_t test_maximize_problem_dual_variables(cuopt_int_t method,
+                                                 cuopt_int_t* termination_status_ptr,
+                                                 cuopt_float_t* objective_ptr,
+                                                 cuopt_float_t* dual_variables,
+                                                 cuopt_float_t* reduced_costs,
+                                                 cuopt_float_t* dual_obj_ptr)
 {
   cuOptOptimizationProblem problem = NULL;
-  cuOptSolverSettings settings = NULL;
-  cuOptSolution solution = NULL;
+  cuOptSolverSettings settings     = NULL;
+  cuOptSolution solution           = NULL;
 
   /* Solve the following problem
    maximize 4*x1 + x2 + 5*x3 + 3*x4
@@ -1480,20 +1473,17 @@ cuopt_int_t test_maximize_problem_dual_variables(cuopt_int_t method, cuopt_int_t
              x1, x2, x3, x4 >= 0
   */
 
-  cuopt_int_t num_variables = 4;
-  cuopt_int_t num_constraints = 3;
-  cuopt_int_t nnz = 12;
-  cuopt_int_t row_offsets[] = {0, 4, 8, 12};
-  cuopt_int_t column_indices[] = {0, 1, 2, 3,
-                                  0, 1, 2, 3,
-                                  0, 1, 2, 3};
-  cuopt_float_t values[] = {1.0, -1.0, -1.0,  3.0,
-                            5.0,  1.0,  3.0,  8.0,
-                           -1.0,  2.0,  3.0, -5.0};
-  cuopt_float_t rhs[] = {1.0, 55.0, 3.0};
-  char constraint_sense[] = {CUOPT_LESS_THAN, CUOPT_LESS_THAN, CUOPT_LESS_THAN};
+  cuopt_int_t num_variables    = 4;
+  cuopt_int_t num_constraints  = 3;
+  cuopt_int_t nnz              = 12;
+  cuopt_int_t row_offsets[]    = {0, 4, 8, 12};
+  cuopt_int_t column_indices[] = {0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3};
+  cuopt_float_t values[]       = {1.0, -1.0, -1.0, 3.0, 5.0, 1.0, 3.0, 8.0, -1.0, 2.0, 3.0, -5.0};
+  cuopt_float_t rhs[]          = {1.0, 55.0, 3.0};
+  char constraint_sense[]      = {CUOPT_LESS_THAN, CUOPT_LESS_THAN, CUOPT_LESS_THAN};
   cuopt_float_t var_lower_bounds[] = {0.0, 0.0, 0.0, 0.0};
-  cuopt_float_t var_upper_bounds[] = {CUOPT_INFINITY, CUOPT_INFINITY, CUOPT_INFINITY, CUOPT_INFINITY};
+  cuopt_float_t var_upper_bounds[] = {
+    CUOPT_INFINITY, CUOPT_INFINITY, CUOPT_INFINITY, CUOPT_INFINITY};
   char variable_types[] = {CUOPT_CONTINUOUS, CUOPT_CONTINUOUS, CUOPT_CONTINUOUS, CUOPT_CONTINUOUS};
   cuopt_float_t objective_coefficients[] = {4.0, 1.0, 5.0, 3.0};
 
@@ -1576,10 +1566,9 @@ cuopt_int_t test_maximize_problem_dual_variables(cuopt_int_t method, cuopt_int_t
          time);
   printf("Objective value: %f\n", *objective_ptr);
 
-
   /* Get and print solution variables */
   cuopt_float_t* solution_values = (cuopt_float_t*)malloc(num_variables * sizeof(cuopt_float_t));
-  status = cuOptGetPrimalSolution(solution, solution_values);
+  status                         = cuOptGetPrimalSolution(solution, solution_values);
   if (status != CUOPT_SUCCESS) {
     printf("Error getting solution values: %d\n", status);
     free(solution_values);
@@ -1634,7 +1623,8 @@ cuopt_int_t test_deterministic_bb(const char* filename,
   cuopt_int_t status;
   cuopt_int_t run;
 
-  printf("Testing deterministic B&B: %s with %d threads, %d runs\n", filename, num_threads, num_runs);
+  printf(
+    "Testing deterministic B&B: %s with %d threads, %d runs\n", filename, num_threads, num_runs);
 
   status = cuOptReadProblem(filename, &problem);
   if (status != CUOPT_SUCCESS) {
@@ -1707,9 +1697,9 @@ cuopt_int_t test_deterministic_bb(const char* filename,
       goto DONE;
     }
 
-    if (termination_status != CUOPT_TERIMINATION_STATUS_OPTIMAL &&
-        termination_status != CUOPT_TERIMINATION_STATUS_TIME_LIMIT &&
-        termination_status != CUOPT_TERIMINATION_STATUS_FEASIBLE_FOUND) {
+    if (termination_status != CUOPT_TERMINATION_STATUS_OPTIMAL &&
+        termination_status != CUOPT_TERMINATION_STATUS_TIME_LIMIT &&
+        termination_status != CUOPT_TERMINATION_STATUS_FEASIBLE_FOUND) {
       printf("Run %d: status=%s (%d), unexpected termination status\n",
              run,
              termination_status_to_string(termination_status),
@@ -1773,21 +1763,20 @@ cuopt_int_t test_lp_solution_mip_methods()
   cuopt_float_t mip_gap;
   cuopt_float_t solution_bound;
 
-  cuopt_float_t obj[]    = {1.0, 2.0};
-  cuopt_int_t offsets[]  = {0, 2};
-  cuopt_int_t indices[]  = {0, 1};
-  cuopt_float_t vals[]   = {1.0, 1.0};
-  char sense[]           = {CUOPT_LESS_THAN};
-  cuopt_float_t rhs[]    = {10.0};
-  cuopt_float_t lb[]     = {0.0, 0.0};
-  cuopt_float_t ub[]     = {100.0, 100.0};
-  char vtypes[]          = {CUOPT_CONTINUOUS, CUOPT_CONTINUOUS};
+  cuopt_float_t obj[]   = {1.0, 2.0};
+  cuopt_int_t offsets[] = {0, 2};
+  cuopt_int_t indices[] = {0, 1};
+  cuopt_float_t vals[]  = {1.0, 1.0};
+  char sense[]          = {CUOPT_LESS_THAN};
+  cuopt_float_t rhs[]   = {10.0};
+  cuopt_float_t lb[]    = {0.0, 0.0};
+  cuopt_float_t ub[]    = {100.0, 100.0};
+  char vtypes[]         = {CUOPT_CONTINUOUS, CUOPT_CONTINUOUS};
 
   printf("Testing LP solution with MIP-only methods...\n");
 
-  status = cuOptCreateProblem(1, 2, CUOPT_MINIMIZE, 0.0,
-                              obj, offsets, indices, vals,
-                              sense, rhs, lb, ub, vtypes, &problem);
+  status = cuOptCreateProblem(
+    1, 2, CUOPT_MINIMIZE, 0.0, obj, offsets, indices, vals, sense, rhs, lb, ub, vtypes, &problem);
   if (status != CUOPT_SUCCESS) {
     printf("Error creating LP problem: %d\n", status);
     goto DONE;
@@ -1847,21 +1836,20 @@ cuopt_int_t test_mip_solution_lp_methods()
   cuopt_float_t dual_solution[1];
   cuopt_float_t reduced_costs[2];
 
-  cuopt_float_t obj[]    = {3.0, 5.0};
-  cuopt_int_t offsets[]  = {0, 2};
-  cuopt_int_t indices[]  = {0, 1};
-  cuopt_float_t vals[]   = {1.0, 2.0};
-  char sense[]           = {CUOPT_LESS_THAN};
-  cuopt_float_t rhs[]    = {4.0};
-  cuopt_float_t lb[]     = {0.0, 0.0};
-  cuopt_float_t ub[]     = {1.0, 1.0};
-  char vtypes[]          = {CUOPT_INTEGER, CUOPT_INTEGER};
+  cuopt_float_t obj[]   = {3.0, 5.0};
+  cuopt_int_t offsets[] = {0, 2};
+  cuopt_int_t indices[] = {0, 1};
+  cuopt_float_t vals[]  = {1.0, 2.0};
+  char sense[]          = {CUOPT_LESS_THAN};
+  cuopt_float_t rhs[]   = {4.0};
+  cuopt_float_t lb[]    = {0.0, 0.0};
+  cuopt_float_t ub[]    = {1.0, 1.0};
+  char vtypes[]         = {CUOPT_INTEGER, CUOPT_INTEGER};
 
   printf("Testing MIP solution with LP-only methods...\n");
 
-  status = cuOptCreateProblem(1, 2, CUOPT_MAXIMIZE, 0.0,
-                              obj, offsets, indices, vals,
-                              sense, rhs, lb, ub, vtypes, &problem);
+  status = cuOptCreateProblem(
+    1, 2, CUOPT_MAXIMIZE, 0.0, obj, offsets, indices, vals, sense, rhs, lb, ub, vtypes, &problem);
   if (status != CUOPT_SUCCESS) {
     printf("Error creating MIP problem: %d\n", status);
     goto DONE;
@@ -1936,8 +1924,10 @@ cuopt_int_t test_cpu_only_execution(const char* filename)
   cuopt_float_t* primal_solution = NULL;
 
   printf("Testing CPU-only execution (simulated remote mode)...\n");
-  printf("  CUDA_VISIBLE_DEVICES=%s\n", getenv("CUDA_VISIBLE_DEVICES") ? getenv("CUDA_VISIBLE_DEVICES") : "(not set)");
-  printf("  CUOPT_REMOTE_HOST=%s\n", getenv("CUOPT_REMOTE_HOST") ? getenv("CUOPT_REMOTE_HOST") : "(not set)");
+  printf("  CUDA_VISIBLE_DEVICES=%s\n",
+         getenv("CUDA_VISIBLE_DEVICES") ? getenv("CUDA_VISIBLE_DEVICES") : "(not set)");
+  printf("  CUOPT_REMOTE_HOST=%s\n",
+         getenv("CUOPT_REMOTE_HOST") ? getenv("CUOPT_REMOTE_HOST") : "(not set)");
 
   status = cuOptReadProblem(filename, &problem);
   if (status != CUOPT_SUCCESS) {
@@ -2015,9 +2005,7 @@ cuopt_int_t test_cpu_only_execution(const char* filename)
   printf("  Termination status: %s\n", termination_status_to_string(termination_status));
   printf("  Objective value: %f\n", objective_value);
   printf("  Solve time: %f\n", solve_time);
-  if (num_variables > 0) {
-    printf("  Primal solution[0]: %f\n", primal_solution[0]);
-  }
+  if (num_variables > 0) { printf("  Primal solution[0]: %f\n", primal_solution[0]); }
 
   status = CUOPT_SUCCESS;
 
@@ -2197,8 +2185,8 @@ DONE:
 }
 
 cuopt_int_t test_pdlp_precision_single(const char* filename,
-                                      cuopt_int_t* termination_status_ptr,
-                                      cuopt_float_t* objective_ptr)
+                                       cuopt_int_t* termination_status_ptr,
+                                       cuopt_float_t* objective_ptr)
 {
   cuOptOptimizationProblem problem = NULL;
   cuOptSolverSettings settings     = NULL;
