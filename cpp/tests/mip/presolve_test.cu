@@ -124,10 +124,8 @@ uint32_t test_probing_cache_determinism(std::string path,
 
   work_limit_context_t work_limit_context("ProbingCache");
   // rely on the iteration limit
-  compute_probing_cache(
-    bnd_prb,
-    problem,
-    work_limit_timer_t(work_limit_context, std::numeric_limits<double>::max(), timer));
+  work_limit_timer_t probing_timer(work_limit_context, std::numeric_limits<double>::max(), timer);
+  compute_probing_cache(bnd_prb, problem, probing_timer);
   std::vector<std::pair<int, std::array<detail::cache_entry_t<int, double>, 2>>> cached_values(
     bnd_prb.probing_cache.probing_cache.begin(), bnd_prb.probing_cache.probing_cache.end());
   std::sort(cached_values.begin(), cached_values.end(), [](const auto& a, const auto& b) {

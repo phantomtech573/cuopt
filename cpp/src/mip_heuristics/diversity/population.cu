@@ -707,7 +707,7 @@ void population_t<i_t, f_t>::start_threshold_adjustment()
 }
 
 template <typename i_t, typename f_t>
-void population_t<i_t, f_t>::adjust_threshold(cuopt::work_limit_timer_t timer)
+void population_t<i_t, f_t>::adjust_threshold(cuopt::work_limit_timer_t& timer)
 {
   double time_ratio = (timer.elapsed_time() - population_start_time) /
                       (timer.get_time_limit() - population_start_time);

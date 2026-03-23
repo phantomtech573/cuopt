@@ -846,7 +846,7 @@ std::vector<i_t> compute_priority_indices_by_implied_integers(problem_t<i_t, f_t
 template <typename i_t, typename f_t>
 bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
                            problem_t<i_t, f_t>& problem,
-                           work_limit_timer_t timer)
+                           work_limit_timer_t& timer)
 {
   raft::common::nvtx::range fun_scope("compute_probing_cache");
   // we dont want to compute the probing cache for all variables for time and computation resources
@@ -953,7 +953,7 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
 #define INSTANTIATE(F_TYPE)                                                                        \
   template bool compute_probing_cache<int, F_TYPE>(bound_presolve_t<int, F_TYPE> & bound_presolve, \
                                                    problem_t<int, F_TYPE> & problem,               \
-                                                   work_limit_timer_t timer);                      \
+                                                   work_limit_timer_t & timer);                    \
   template class probing_cache_t<int, F_TYPE>;
 
 #if MIP_INSTANTIATE_FLOAT

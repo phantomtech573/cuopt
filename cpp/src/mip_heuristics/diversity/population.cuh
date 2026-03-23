@@ -124,7 +124,7 @@ class population_t {
   // updates qualities of each solution
   void update_qualities();
   // adjusts the threshold of the population
-  void adjust_threshold(cuopt::work_limit_timer_t timer);
+  void adjust_threshold(cuopt::work_limit_timer_t& timer);
   /*! \param sol { Input solution }
    *  \return { Index of the best solution similar to sol. If no similar is found we return
    * max_solutions. }*/

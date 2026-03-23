@@ -169,14 +169,14 @@ static uint32_t run_fp(std::string test_instance, local_search_mode_t mode, doub
       iterations++;
     }
   } else if (mode == local_search_mode_t::FJ_LINE_SEGMENT) {
-    local_search.run_fj_line_segment(
-      solution, work_limit_timer_t(work_limit_context, work_limit, timer), ls_config);
+    work_limit_timer_t wlt(work_limit_context, work_limit, timer);
+    local_search.run_fj_line_segment(solution, wlt, ls_config);
   } else if (mode == local_search_mode_t::FJ_ON_ZERO) {
-    local_search.run_fj_on_zero(solution,
-                                work_limit_timer_t(work_limit_context, work_limit, timer));
+    work_limit_timer_t wlt(work_limit_context, work_limit, timer);
+    local_search.run_fj_on_zero(solution, wlt);
   } else if (mode == local_search_mode_t::FJ_ANNEALING) {
-    local_search.run_fj_annealing(
-      solution, work_limit_timer_t(work_limit_context, work_limit, timer), ls_config);
+    work_limit_timer_t wlt(work_limit_context, work_limit, timer);
+    local_search.run_fj_annealing(solution, wlt, ls_config);
   }
 
   std::vector<uint32_t> hashes;

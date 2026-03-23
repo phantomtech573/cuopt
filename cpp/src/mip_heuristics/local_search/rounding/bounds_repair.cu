@@ -493,7 +493,7 @@ void bounds_repair_t<i_t, f_t>::apply_move(problem_t<i_t, f_t>& problem,
 template <typename i_t, typename f_t>
 bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
                                                problem_t<i_t, f_t>& original_problem,
-                                               work_limit_timer_t timer_,
+                                               work_limit_timer_t& timer_,
                                                const raft::handle_t* handle_ptr_)
 {
   CUOPT_LOG_DEBUG("Running bounds repair");

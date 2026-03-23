@@ -52,33 +52,33 @@ class local_search_t {
   void start_cpufj_scratch_threads(population_t<i_t, f_t>& population);
   void start_cpufj_lptopt_scratch_threads(population_t<i_t, f_t>& population);
   void stop_cpufj_scratch_threads();
-  void generate_fast_solution(solution_t<i_t, f_t>& solution, work_limit_timer_t timer);
+  void generate_fast_solution(solution_t<i_t, f_t>& solution, work_limit_timer_t& timer);
   bool generate_solution(solution_t<i_t, f_t>& solution,
                          bool perturb,
                          population_t<i_t, f_t>* population_ptr,
                          f_t time_limit = 300.);
   bool run_fj_until_timer(solution_t<i_t, f_t>& solution,
                           const weight_t<i_t, f_t>& weights,
-                          work_limit_timer_t timer);
+                          work_limit_timer_t& timer);
   bool run_local_search(solution_t<i_t, f_t>& solution,
                         const weight_t<i_t, f_t>& weights,
-                        work_limit_timer_t timer,
+                        work_limit_timer_t& timer,
                         const ls_config_t<i_t, f_t>& ls_config);
   bool run_fj_annealing(solution_t<i_t, f_t>& solution,
-                        work_limit_timer_t timer,
+                        work_limit_timer_t& timer,
                         const ls_config_t<i_t, f_t>& ls_config);
   bool run_fj_line_segment(solution_t<i_t, f_t>& solution,
-                           work_limit_timer_t timer,
+                           work_limit_timer_t& timer,
                            const ls_config_t<i_t, f_t>& ls_config);
-  bool run_fj_on_zero(solution_t<i_t, f_t>& solution, work_limit_timer_t timer);
+  bool run_fj_on_zero(solution_t<i_t, f_t>& solution, work_limit_timer_t& timer);
   bool check_fj_on_lp_optimal(solution_t<i_t, f_t>& solution,
                               bool perturb,
-                              work_limit_timer_t timer);
+                              work_limit_timer_t& timer);
   bool run_staged_fp(solution_t<i_t, f_t>& solution,
-                     work_limit_timer_t timer,
+                     work_limit_timer_t& timer,
                      population_t<i_t, f_t>* population_ptr);
   bool run_fp(solution_t<i_t, f_t>& solution,
-              work_limit_timer_t timer,
+              work_limit_timer_t& timer,
               population_t<i_t, f_t>* population_ptr = nullptr,
               i_t n_fp_iterations                    = std::numeric_limits<i_t>::max());
   void resize_vectors(problem_t<i_t, f_t>& problem, const raft::handle_t* handle_ptr);

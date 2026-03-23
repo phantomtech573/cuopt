@@ -314,7 +314,7 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
 
 template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::generate_fast_solution(solution_t<i_t, f_t>& solution,
-                                                      work_limit_timer_t timer)
+                                                      work_limit_timer_t& timer)
 {
   CUOPT_LOG_DEBUG("Running FJ fast sol");
   thrust::fill(solution.handle_ptr->get_thrust_policy(),
@@ -348,7 +348,7 @@ void local_search_t<i_t, f_t>::generate_fast_solution(solution_t<i_t, f_t>& solu
 template <typename i_t, typename f_t>
 bool local_search_t<i_t, f_t>::run_local_search(solution_t<i_t, f_t>& solution,
                                                 const weight_t<i_t, f_t>& weights,
-                                                work_limit_timer_t timer,
+                                                work_limit_timer_t& timer,
                                                 const ls_config_t<i_t, f_t>& ls_config)
 {
   raft::common::nvtx::range fun_scope("local search");
@@ -391,7 +391,7 @@ bool local_search_t<i_t, f_t>::run_local_search(solution_t<i_t, f_t>& solution,
 template <typename i_t, typename f_t>
 bool local_search_t<i_t, f_t>::run_fj_until_timer(solution_t<i_t, f_t>& solution,
                                                   const weight_t<i_t, f_t>& weights,
-                                                  work_limit_timer_t timer)
+                                                  work_limit_timer_t& timer)
 {
   CUOPT_LOG_DEBUG("Running FJ until timer");
   bool is_feasible;
@@ -410,7 +410,7 @@ bool local_search_t<i_t, f_t>::run_fj_until_timer(solution_t<i_t, f_t>& solution
 
 template <typename i_t, typename f_t>
 bool local_search_t<i_t, f_t>::run_fj_annealing(solution_t<i_t, f_t>& solution,
-                                                work_limit_timer_t timer,
+                                                work_limit_timer_t& timer,
                                                 const ls_config_t<i_t, f_t>& ls_config)
 {
   raft::common::nvtx::range fun_scope("run_fj_annealing");
@@ -440,7 +440,7 @@ bool local_search_t<i_t, f_t>::run_fj_annealing(solution_t<i_t, f_t>& solution,
 
 template <typename i_t, typename f_t>
 bool local_search_t<i_t, f_t>::run_fj_line_segment(solution_t<i_t, f_t>& solution,
-                                                   work_limit_timer_t timer,
+                                                   work_limit_timer_t& timer,
                                                    const ls_config_t<i_t, f_t>& ls_config)
 {
   raft::common::nvtx::range fun_scope("run_fj_line_segment");
@@ -463,7 +463,7 @@ bool local_search_t<i_t, f_t>::run_fj_line_segment(solution_t<i_t, f_t>& solutio
 template <typename i_t, typename f_t>
 bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solution,
                                                       bool perturb,
-                                                      work_limit_timer_t timer)
+                                                      work_limit_timer_t& timer)
 {
   raft::common::nvtx::range fun_scope("check_fj_on_lp_optimal");
   if (lp_optimal_exists) {
@@ -511,7 +511,7 @@ bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solu
 
 template <typename i_t, typename f_t>
 bool local_search_t<i_t, f_t>::run_fj_on_zero(solution_t<i_t, f_t>& solution,
-                                              work_limit_timer_t timer)
+                                              work_limit_timer_t& timer)
 {
   raft::common::nvtx::range fun_scope("run_fj_on_zero");
   thrust::fill(solution.handle_ptr->get_thrust_policy(),
@@ -530,7 +530,7 @@ bool local_search_t<i_t, f_t>::run_fj_on_zero(solution_t<i_t, f_t>& solution,
 
 template <typename i_t, typename f_t>
 bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
-                                             work_limit_timer_t timer,
+                                             work_limit_timer_t& timer,
                                              population_t<i_t, f_t>* population_ptr)
 {
   raft::common::nvtx::range fun_scope("run_staged_fp");
@@ -731,7 +731,7 @@ void local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
 
 template <typename i_t, typename f_t>
 bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
-                                      work_limit_timer_t timer,
+                                      work_limit_timer_t& timer,
                                       population_t<i_t, f_t>* population_ptr,
                                       i_t n_fp_iterations)
 {
