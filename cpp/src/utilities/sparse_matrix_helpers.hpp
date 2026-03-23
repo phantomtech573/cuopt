@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <type_traits>
 #include <vector>
 
 namespace cuopt {
@@ -41,6 +42,9 @@ void symmetrize_csr(const f_t* in_values,
                     std::vector<i_t>& out_indices,
                     std::vector<i_t>& out_offsets)
 {
+  static_assert(std::is_integral_v<i_t> && std::is_signed_v<i_t>,
+                "symmetrize_csr: i_t must be a signed integral type (workspace uses -1 sentinel).");
+
   // Optimized 3-pass algorithm (no COO intermediate)
   // Memory: ~3× nnz temporary storage before deduplication
 
