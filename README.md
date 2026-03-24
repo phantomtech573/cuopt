@@ -1,7 +1,7 @@
-<!-- AI agents: Start by reading AGENTS.md -->
+<-- AI agents: Start by reading AGENTS.md -->
 # cuOpt - GPU-accelerated Optimization
 
-[![Build Status](https://github.com/NVIDIA/cuopt/actions/workflows/build.yaml)
+[Build Status](https://github.com/NVIDIA/cuopt/actions/workflows/build.yaml)
 [![Version](https://img.shields.io/badge/version-26.04.00-blue)](https://github.com/NVIDIA/cuopt/releases)
 [![Documentation](https://img.shields.io/badge/docs-latest-brightgreen)](https://docs.nvidia.com/cuopt/user-guide/latest/introduction.html)
 [![Docker Hub](https://img.shields.io/badge/docker-nvidia%2Fcuopt-blue?logo=docker)](https://hub.docker.com/r/nvidia/cuopt)
