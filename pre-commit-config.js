@@ -1,3 +1,5 @@
+```
+---
 # SPDX-FileCopyrightText: Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -12,9 +14,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+---
+```
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
+  ```repo: https://github.com/pre-commit/pre-commit-hooks```
     rev: 'v6.0.0'
     hooks:
       - id: end-of-file-fixer
@@ -27,7 +30,7 @@ repos:
       - id: check-yaml
         files: \.(yaml)$
         exclude: ^(helmchart)/.*\.(yaml)$
-  - repo: https://github.com/PyCQA/isort
+  ```repo: https://github.com/PyCQA/isort```
     rev: 5.12.0
     hooks:
       - id: isort
