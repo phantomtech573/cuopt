@@ -14,7 +14,10 @@
 
 #include <omp.h>
 #include <thrust/binary_search.h>
+#include <thrust/iterator/transform_iterator.h>
+#include <thrust/iterator/zip_iterator.h>
 #include <thrust/sort.h>
+#include <thrust/tuple.h>
 #include <utilities/copy_helpers.hpp>
 #include <utilities/timer.hpp>
 
@@ -881,6 +884,11 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
   size_t last_it_implied_singletons = 0;
   bool early_exit                   = false;
   const size_t step_size            = min((size_t)2048, priority_indices.size());
+
+  // The pool buffers above were allocated on the main stream.
+  // Each OMP thread below uses its own stream, so we must ensure all allocations
+  // are visible before any per-thread kernel can reference that memory.
+  problem.handle_ptr->sync_stream();
 
 // Main parallel loop
 #pragma omp parallel num_threads(num_threads)

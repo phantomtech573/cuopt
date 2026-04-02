@@ -106,6 +106,8 @@ cdef extern from "cuopt/linear_programming/mip/solver_solution.hpp" namespace "c
         Infeasible "cuopt::linear_programming::mip_termination_status_t::Infeasible" # noqa
         Unbounded "cuopt::linear_programming::mip_termination_status_t::Unbounded" # noqa
         TimeLimit "cuopt::linear_programming::mip_termination_status_t::TimeLimit" # noqa
+        WorkLimit "cuopt::linear_programming::mip_termination_status_t::WorkLimit" # noqa
+        UnboundedOrInfeasible "cuopt::linear_programming::mip_termination_status_t::UnboundedOrInfeasible" # noqa
 
 
 cdef extern from "cuopt/linear_programming/pdlp/solver_solution.hpp" namespace "cuopt::linear_programming": # noqa
@@ -119,6 +121,7 @@ cdef extern from "cuopt/linear_programming/pdlp/solver_solution.hpp" namespace "
         TimeLimit "cuopt::linear_programming::pdlp_termination_status_t::TimeLimit" # noqa
         ConcurrentLimit "cuopt::linear_programming::pdlp_termination_status_t::ConcurrentLimit" # noqa
         PrimalFeasible "cuopt::linear_programming::pdlp_termination_status_t::PrimalFeasible" # noqa
+        UnboundedOrInfeasible "cuopt::linear_programming::pdlp_termination_status_t::UnboundedOrInfeasible" # noqa
 
 
 cdef extern from "cuopt/linear_programming/utilities/cython_types.hpp" namespace "cuopt::cython": # noqa
@@ -203,12 +206,12 @@ cdef extern from "cuopt/linear_programming/utilities/cython_solve.hpp" namespace
     cdef unique_ptr[solver_ret_t] call_solve(
         data_model_view_t[int, double]* data_model,
         solver_settings_t[int, double]* solver_settings,
-    ) except +
+    ) except + nogil
 
     cdef pair[vector[unique_ptr[solver_ret_t]], double] call_batch_solve( # noqa
         vector[data_model_view_t[int, double] *] data_models,
         solver_settings_t[int, double]* solver_settings,
-    ) except +
+    ) except + nogil
 
 # Variant helper functions — Cython can't call std::get directly, so we use
 # inline C++ helpers to extract the GPU/CPU alternatives from inner variants.

@@ -94,6 +94,7 @@ class mip_solver_settings_t {
   i_t mixed_integer_gomory_cuts = -1;
   i_t knapsack_cuts             = -1;
   i_t clique_cuts               = -1;
+  i_t implied_bound_cuts        = -1;
   i_t strong_chvatal_gomory_cuts      = -1;
   i_t reduced_cost_strengthening      = -1;
   f_t cut_change_threshold            = -1.0;
@@ -105,6 +106,7 @@ class mip_solver_settings_t {
   std::string log_file;
   std::string sol_file;
   std::string user_problem_file;
+  std::string presolve_file;
 
   /** Initial primal solutions */
   std::vector<std::shared_ptr<rmm::device_uvector<f_t>>> initial_solutions;
